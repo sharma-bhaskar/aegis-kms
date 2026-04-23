@@ -3,10 +3,7 @@
 An open-source, KMIP-compliant Key Management Service — usable as an embeddable
 library or as a standalone server, with first-class support for AI agents.
 
-**Status:** pre-alpha. Scaffold only; no functionality yet. See
-[`ENHANCEMENT_PLAN.md`](../ENHANCEMENT_PLAN.md) (in the parent directory) for
-the full roadmap.
-
+**Status:** pre-alpha. Scaffold only; no functionality yet.
 ## Why
 
 Existing OSS key managers are either tied to one cloud vendor, built around
