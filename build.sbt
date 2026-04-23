@@ -5,11 +5,11 @@ ThisBuild / organization     := "dev.aegiskms"
 ThisBuild / organizationName := "Aegis-KMS"
 ThisBuild / homepage         := Some(url("https://aegiskms.dev"))
 ThisBuild / licenses         := Seq("Apache-2.0" -> url("https://www.apache.org/licenses/LICENSE-2.0"))
-ThisBuild / developers       := List(
+ThisBuild / developers := List(
   Developer("bhaskar", "Bhaskar Sharma", "sharma.b6@gmail.com", url("https://github.com/bhaskar"))
 )
-ThisBuild / version          := "0.1.0-SNAPSHOT"
-ThisBuild / scalacOptions   ++= Seq(
+ThisBuild / version := "0.1.0-SNAPSHOT"
+ThisBuild / scalacOptions ++= Seq(
   "-deprecation",
   "-feature",
   "-Xfatal-warnings",
@@ -71,7 +71,7 @@ lazy val server = (project in file("modules/aegis-server"))
   .enablePlugins(JavaAppPackaging, DockerPlugin)
   .settings(
     commonSettings,
-    name                 := "aegis-server",
+    name := "aegis-server",
     libraryDependencies ++= pekkoHttp,
     Docker / packageName := "aegis-server",
     dockerBaseImage      := "eclipse-temurin:21-jre"
@@ -84,9 +84,19 @@ lazy val cli = (project in file("modules/aegis-cli"))
 
 lazy val root = (project in file("."))
   .aggregate(
-    core, persistence, crypto, iam, audit,
-    sdkScala, sdkJava,
-    kmip, http, agentAi, mcpServer, server, cli
+    core,
+    persistence,
+    crypto,
+    iam,
+    audit,
+    sdkScala,
+    sdkJava,
+    kmip,
+    http,
+    agentAi,
+    mcpServer,
+    server,
+    cli
   )
   .settings(
     publish / skip := true,
