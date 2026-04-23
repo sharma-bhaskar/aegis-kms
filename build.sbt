@@ -18,7 +18,7 @@ ThisBuild / scalacOptions ++= Seq(
 
 inThisBuild(
   List(
-    scalaVersion := "3.3.4",
+    scalaVersion      := "3.3.4",
     semanticdbEnabled := true,
     semanticdbVersion := scalafixSemanticdb.revision
   )
