@@ -1,0 +1,8 @@
+Aegis-KMS is licensed under the Apache License, Version 2.0.
+
+The canonical, unmodified license text must be placed in this file before first
+public release. Fetch it with:
+
+    curl -o LICENSE https://www.apache.org/licenses/LICENSE-2.0.txt
+
+Copyright 2026 Aegis-KMS contributors.

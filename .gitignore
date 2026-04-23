@@ -1,0 +1,34 @@
+# sbt
+target/
+project/target/
+project/project/
+.bsp/
+.bloop/
+.metals/
+.idea/
+.vscode/
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build output
+*.class
+*.log
+*.jar
+*.war
+
+# Local env
+.env
+.envrc
+local.conf
+*.local.conf
+
+# Secrets — never commit
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+secrets/

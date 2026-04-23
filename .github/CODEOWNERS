@@ -1,0 +1,34 @@
+# Aegis-KMS code owners
+#
+# Each line is a file pattern followed by one or more owners. The first
+# pattern that matches a file determines review ownership.
+
+# Default — any maintainer
+*                                  @bhaskar-sharma
+
+# Build and release plumbing
+/build.sbt                         @bhaskar-sharma
+/project/                          @bhaskar-sharma
+/.github/                          @bhaskar-sharma
+
+# Library-safe tier
+/modules/aegis-core/               @bhaskar-sharma
+/modules/aegis-crypto/             @bhaskar-sharma
+/modules/aegis-iam/                @bhaskar-sharma
+/modules/aegis-audit/              @bhaskar-sharma
+/modules/aegis-persistence/        @bhaskar-sharma
+
+# Server tier
+/modules/aegis-kmip/               @bhaskar-sharma
+/modules/aegis-http/               @bhaskar-sharma
+/modules/aegis-agent-ai/           @bhaskar-sharma
+/modules/aegis-mcp-server/         @bhaskar-sharma
+/modules/aegis-server/             @bhaskar-sharma
+
+# SDKs and CLI
+/modules/aegis-sdk-scala/          @bhaskar-sharma
+/modules/aegis-sdk-java/           @bhaskar-sharma
+/modules/aegis-cli/                @bhaskar-sharma
+
+# Docs
+/docs/                             @bhaskar-sharma

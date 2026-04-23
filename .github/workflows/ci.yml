@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build & test (JDK ${{ matrix.jdk }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        jdk: [17, 21]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK ${{ matrix.jdk }}
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ matrix.jdk }}
+          cache: sbt
+
+      - name: Set up sbt
+        uses: sbt/setup-sbt@v1
+
+      - name: Compile
+        run: sbt +compile
+
+      - name: Formatting check
+        run: sbt scalafmtCheckAll scalafmtSbtCheck
+
+      - name: Lint (scalafix)
+        run: sbt "scalafixAll --check"
+
+      - name: Test
+        run: sbt +test
+
+      - name: Coverage
+        run: sbt coverage test coverageAggregate
+        if: matrix.jdk == 21
