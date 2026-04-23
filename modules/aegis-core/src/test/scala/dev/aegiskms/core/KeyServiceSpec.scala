@@ -1,6 +1,5 @@
 package dev.aegiskms.core
 
-import cats.effect.IO
 import cats.effect.unsafe.implicits.global
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatest.matchers.should.Matchers
