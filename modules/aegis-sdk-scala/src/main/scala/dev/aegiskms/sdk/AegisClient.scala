@@ -1,6 +1,6 @@
 package dev.aegiskms.sdk
 
-import dev.aegiskms.core.{KeyId, KeySpec, KmsError, ManagedKey, Principal}
+import dev.aegiskms.core.{KeyId, KeySpec, KmsError, ManagedKey}
 
 /** Thin client over the Aegis-KMS REST surface.
   *
