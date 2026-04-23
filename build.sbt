@@ -6,7 +6,7 @@ ThisBuild / organizationName := "Aegis-KMS"
 ThisBuild / homepage         := Some(url("https://aegiskms.dev"))
 ThisBuild / licenses         := Seq("Apache-2.0" -> url("https://www.apache.org/licenses/LICENSE-2.0"))
 ThisBuild / developers := List(
-  Developer("bhaskar", "Bhaskar Sharma", "sharma.b6@gmail.com", url("https://github.com/bhaskar"))
+  Developer("bhaskar", "Bhaskar Sharma", "sharma.b6@gmail.com", url("https://github.com/sharma-bhaskar"))
 )
 ThisBuild / version := "0.1.0-SNAPSHOT"
 ThisBuild / scalacOptions ++= Seq(
@@ -14,6 +14,14 @@ ThisBuild / scalacOptions ++= Seq(
   "-feature",
   "-Xfatal-warnings",
   "-Wunused:all"
+)
+
+inThisBuild(
+  List(
+    scalaVersion := "3.3.4",
+    semanticdbEnabled := true,
+    semanticdbVersion := scalafixSemanticdb.revision
+  )
 )
 
 lazy val commonSettings = Seq(
