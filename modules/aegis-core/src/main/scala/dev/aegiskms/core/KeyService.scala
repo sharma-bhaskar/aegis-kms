@@ -17,13 +17,11 @@ final case class ManagedKey(
 enum KeyState:
   case PreActive, Active, Deactivated, Compromised, Destroyed
 
-/** The primary algebra for interacting with Aegis-KMS from a library
-  * consumer's point of view.
+/** The primary algebra for interacting with Aegis-KMS from a library consumer's point of view.
   *
-  * Parameterized on an effect `F[_]` so callers can plug in `cats.effect.IO`,
-  * `ZIO`, or any other compatible effect type. The server modules wrap this
-  * trait with Pekko Typed actors; library users can use it directly without
-  * ever touching an actor system.
+  * Parameterized on an effect `F[_]` so callers can plug in `cats.effect.IO`, `ZIO`, or any other compatible
+  * effect type. The server modules wrap this trait with Pekko Typed actors; library users can use it directly
+  * without ever touching an actor system.
   */
 trait KeyService[F[_]]:
   def create(spec: KeySpec, by: Principal): F[Either[KmsError, ManagedKey]]
@@ -35,9 +33,8 @@ trait KeyService[F[_]]:
 
 object KeyService:
 
-  /** An in-memory reference implementation. Not durable, not safe for
-    * production — useful for tests, smoke examples, and as a shape reference
-    * for real backends under `aegis-persistence` and `aegis-crypto`.
+  /** An in-memory reference implementation. Not durable, not safe for production — useful for tests, smoke
+    * examples, and as a shape reference for real backends under `aegis-persistence` and `aegis-crypto`.
     */
   def inMemory: IO[KeyService[IO]] =
     Ref.of[IO, Map[KeyId, ManagedKey]](Map.empty).map { ref =>
@@ -46,9 +43,9 @@ object KeyService:
         def create(spec: KeySpec, by: Principal): IO[Either[KmsError, ManagedKey]] =
           for
             now <- IO.realTimeInstant
-            id   = KeyId.generate()
-            key  = ManagedKey(id, spec, by, now, KeyState.PreActive)
-            _   <- ref.update(_ + (id -> key))
+            id  = KeyId.generate()
+            key = ManagedKey(id, spec, by, now, KeyState.PreActive)
+            _ <- ref.update(_ + (id -> key))
           yield Right(key)
 
         def get(id: KeyId, by: Principal): IO[Either[KmsError, ManagedKey]] =

@@ -26,9 +26,9 @@ final class KeyServiceSpec extends AnyFunSuite with Matchers:
     val state = (for
       svc     <- KeyService.inMemory
       created <- svc.create(KeySpec.aes256("rotate-me"), alice)
-      id       = created.toOption.get.id
-      _       <- svc.activate(id, alice)
-      got     <- svc.get(id, alice)
+      id = created.toOption.get.id
+      _   <- svc.activate(id, alice)
+      got <- svc.get(id, alice)
     yield got.toOption.get.state).unsafeRunSync()
 
     state shouldBe KeyState.Active
@@ -48,9 +48,9 @@ final class KeyServiceSpec extends AnyFunSuite with Matchers:
     val after = (for
       svc     <- KeyService.inMemory
       created <- svc.create(KeySpec.aes256("ephemeral"), alice)
-      id       = created.toOption.get.id
-      _       <- svc.destroy(id, alice)
-      got     <- svc.get(id, alice)
+      id = created.toOption.get.id
+      _   <- svc.destroy(id, alice)
+      got <- svc.get(id, alice)
     yield got).unsafeRunSync()
 
     after.isLeft shouldBe true

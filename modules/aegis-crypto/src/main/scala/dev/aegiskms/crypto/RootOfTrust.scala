@@ -2,14 +2,12 @@ package dev.aegiskms.crypto
 
 import dev.aegiskms.core.{KeyId, KeySpec, KmsError}
 
-/** SPI for a root-of-trust provider. Implementations live in
-  * `dev.aegiskms.crypto.aws`, `dev.aegiskms.crypto.gcp`,
-  * `dev.aegiskms.crypto.pkcs11`, etc., and are selected at server startup
-  * based on configuration.
+/** SPI for a root-of-trust provider. Implementations live in `dev.aegiskms.crypto.aws`,
+  * `dev.aegiskms.crypto.gcp`, `dev.aegiskms.crypto.pkcs11`, etc., and are selected at server startup based on
+  * configuration.
   *
-  * Contract: no implementation holds raw key material outside its secure
-  * boundary. Operations either return wrapped key material or perform the
-  * cryptographic op inline and return just the result.
+  * Contract: no implementation holds raw key material outside its secure boundary. Operations either return
+  * wrapped key material or perform the cryptographic op inline and return just the result.
   */
 trait RootOfTrust[F[_]]:
 

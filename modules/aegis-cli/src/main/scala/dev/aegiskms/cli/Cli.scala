@@ -2,12 +2,8 @@ package dev.aegiskms.cli
 
 /** The `aegis` admin CLI. Planned commands:
   *
-  *   aegis keys create --alg AES-256 --name invoice-signing
-  *   aegis keys list
-  *   aegis keys rotate <id>
-  *   aegis keys revoke <id>
-  *   aegis policy show
-  *   aegis audit tail
+  * aegis keys create --alg AES-256 --name invoice-signing aegis keys list aegis keys rotate <id> aegis keys
+  * revoke <id> aegis policy show aegis audit tail
   *
   * Placeholder during scaffolding.
   */

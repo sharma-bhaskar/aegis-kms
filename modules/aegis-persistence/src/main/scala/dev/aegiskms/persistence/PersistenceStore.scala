@@ -4,9 +4,8 @@ import dev.aegiskms.core.{KeyId, KmsError, ManagedKey}
 
 /** SPI for a durable key-metadata store.
   *
-  * Default Aegis-KMS ships a Doobie-based Postgres implementation; MySQL is
-  * supported as a secondary driver. Community backends (CockroachDB, SQLite,
-  * ...) should implement this trait.
+  * Default Aegis-KMS ships a Doobie-based Postgres implementation; MySQL is supported as a secondary driver.
+  * Community backends (CockroachDB, SQLite, ...) should implement this trait.
   */
 trait PersistenceStore[F[_]]:
   def insert(key: ManagedKey): F[Either[KmsError, Unit]]

@@ -1,11 +1,10 @@
 package dev.aegiskms.kmip
 
-/** SPI for KMIP codec implementations. Aegis-KMS will ship a reference codec
-  * for KMIP 1.4 and 2.x; this trait is the integration seam for alternate
-  * implementations or for versions we haven't yet added.
+/** SPI for KMIP codec implementations. Aegis-KMS will ship a reference codec for KMIP 1.4 and 2.x; this trait
+  * is the integration seam for alternate implementations or for versions we haven't yet added.
   *
-  * Placeholder during scaffolding. The real codec replaces the `Kmip.jar`
-  * local jar from the legacy uKM project.
+  * Placeholder during scaffolding. The real codec replaces the `Kmip.jar` local jar from the legacy uKM
+  * project.
   */
 trait KmipCodec:
   def decodeRequest(bytes: Array[Byte]): Either[String, KmipRequest]

@@ -2,8 +2,8 @@ package dev.aegiskms.core
 
 import java.util.UUID
 
-/** Stable identifier for a managed key. Opaque so callers cannot construct
-  * arbitrary IDs by coercing a `String`.
+/** Stable identifier for a managed key. Opaque so callers cannot construct arbitrary IDs by coercing a
+  * `String`.
   */
 opaque type KeyId = String
 

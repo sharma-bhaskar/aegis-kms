@@ -4,8 +4,8 @@ import dev.aegiskms.core.{KeyId, KeySpec, KmsError, ManagedKey}
 
 /** Thin client over the Aegis-KMS REST surface.
   *
-  * This is a placeholder during scaffolding; the real implementation will use
-  * sttp + circe and will be generated from the Tapir-authored OpenAPI spec.
+  * This is a placeholder during scaffolding; the real implementation will use sttp + circe and will be
+  * generated from the Tapir-authored OpenAPI spec.
   */
 trait AegisClient[F[_]]:
   def keys: AegisKeysApi[F]
