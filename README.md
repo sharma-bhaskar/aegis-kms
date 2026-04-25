@@ -4,6 +4,9 @@ An open-source, KMIP-compliant Key Management Service — usable as an embeddabl
 library or as a standalone server, with first-class support for AI agents.
 
 **Status:** pre-alpha. Scaffold only; no functionality yet.
+
+**Architecture:** [written overview](docs/ARCHITECTURE.md) · [animated request walkthrough](https://sharma-bhaskar.github.io/aegis-kms/architecture.html)
+
 ## Why
 
 Existing OSS key managers are either tied to one cloud vendor, built around

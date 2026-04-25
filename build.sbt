@@ -24,6 +24,19 @@ inThisBuild(
   )
 )
 
+// Force every Pekko artifact to the same version. Pekko's ManifestInfo runtime check refuses to start an
+// ActorSystem if mixed versions are detected — Tapir's transitive deps pull a newer pekko-stream than our
+// pinned pekko-actor-typed otherwise.
+ThisBuild / dependencyOverrides ++= Seq(
+  "org.apache.pekko" %% "pekko-actor"               % Dependencies.V.pekko,
+  "org.apache.pekko" %% "pekko-actor-typed"         % Dependencies.V.pekko,
+  "org.apache.pekko" %% "pekko-actor-testkit-typed" % Dependencies.V.pekko,
+  "org.apache.pekko" %% "pekko-stream"              % Dependencies.V.pekko,
+  "org.apache.pekko" %% "pekko-stream-testkit"      % Dependencies.V.pekko,
+  "org.apache.pekko" %% "pekko-protobuf-v3"         % Dependencies.V.pekko,
+  "org.apache.pekko" %% "pekko-slf4j"               % Dependencies.V.pekko
+)
+
 lazy val commonSettings = Seq(
   libraryDependencies ++= logging ++ Dependencies.testing,
   Test / fork := true
@@ -64,7 +77,11 @@ lazy val kmip = (project in file("modules/aegis-kmip"))
 
 lazy val http = (project in file("modules/aegis-http"))
   .dependsOn(core, crypto, iam, audit)
-  .settings(commonSettings, name := "aegis-http", libraryDependencies ++= pekkoHttp)
+  .settings(
+    commonSettings,
+    name := "aegis-http",
+    libraryDependencies ++= pekkoHttp ++ Dependencies.tapir
+  )
 
 lazy val agentAi = (project in file("modules/aegis-agent-ai"))
   .dependsOn(core, iam, audit)
@@ -80,7 +97,7 @@ lazy val server = (project in file("modules/aegis-server"))
   .settings(
     commonSettings,
     name := "aegis-server",
-    libraryDependencies ++= pekkoHttp,
+    libraryDependencies ++= pekkoHttp ++ Dependencies.tapir,
     Docker / packageName := "aegis-server",
     dockerBaseImage      := "eclipse-temurin:21-jre"
   )

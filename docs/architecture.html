@@ -1,0 +1,451 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Aegis-KMS — Animated Architecture</title>
+  <style>
+    :root {
+      --bg: #0b1020;
+      --bg-card: #121a33;
+      --bg-card-2: #182245;
+      --fg: #e7ecff;
+      --muted: #8a96b8;
+      --accent: #6ea8fe;
+      --accent-2: #9b87f5;
+      --good: #4ade80;
+      --warn: #fbbf24;
+      --bad: #f87171;
+      --line: #2a3563;
+      --shadow: 0 6px 24px rgba(0,0,0,0.35);
+      --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; background: var(--bg); color: var(--fg);
+      font-family: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto, sans-serif; }
+    header {
+      padding: 28px 32px 12px; max-width: 1200px; margin: 0 auto;
+    }
+    header h1 { margin: 0 0 4px; font-size: 26px; letter-spacing: -0.01em; }
+    header p { margin: 0; color: var(--muted); font-size: 14px; }
+    .controls {
+      max-width: 1200px; margin: 0 auto; padding: 12px 32px 0;
+      display: flex; gap: 10px; flex-wrap: wrap; align-items: center;
+    }
+    .controls button {
+      background: var(--bg-card); color: var(--fg);
+      border: 1px solid var(--line); border-radius: 8px;
+      padding: 8px 14px; font-size: 14px; cursor: pointer;
+      transition: background 120ms, border-color 120ms;
+    }
+    .controls button:hover { background: var(--bg-card-2); border-color: var(--accent); }
+    .controls button.primary { background: var(--accent); color: #0b1020; border-color: var(--accent); font-weight: 600; }
+    .controls button.primary:hover { background: var(--accent-2); border-color: var(--accent-2); }
+    .controls .step-label {
+      color: var(--muted); font-size: 13px; font-family: var(--mono);
+      margin-left: auto;
+    }
+    main {
+      max-width: 1200px; margin: 0 auto; padding: 16px 32px 40px;
+      display: grid; grid-template-columns: 1.4fr 1fr; gap: 20px;
+    }
+    @media (max-width: 980px) { main { grid-template-columns: 1fr; } }
+    .stage {
+      background: var(--bg-card); border: 1px solid var(--line); border-radius: 14px;
+      padding: 14px; box-shadow: var(--shadow); position: relative;
+      min-height: 540px;
+    }
+    .narration {
+      background: var(--bg-card); border: 1px solid var(--line); border-radius: 14px;
+      padding: 18px; box-shadow: var(--shadow); display: flex; flex-direction: column;
+    }
+    .narration h2 { margin: 0 0 6px; font-size: 16px; }
+    .narration .step-pill {
+      display: inline-block; align-self: flex-start;
+      background: var(--bg-card-2); border: 1px solid var(--line);
+      color: var(--accent); padding: 3px 10px; border-radius: 999px;
+      font-family: var(--mono); font-size: 12px; margin-bottom: 10px;
+    }
+    .narration p { margin: 0 0 10px; line-height: 1.55; color: var(--fg); }
+    .narration .detail { color: var(--muted); font-size: 13.5px; line-height: 1.55; }
+    .narration .codeline {
+      font-family: var(--mono); font-size: 12.5px; color: var(--accent);
+      background: #0a0f25; border: 1px solid var(--line); border-radius: 8px;
+      padding: 8px 10px; margin-top: 10px; overflow-x: auto; white-space: pre;
+    }
+    .legend {
+      display: flex; gap: 14px; flex-wrap: wrap; margin-top: 14px;
+      font-size: 12px; color: var(--muted);
+    }
+    .legend .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; vertical-align: middle; margin-right: 6px; }
+    svg { width: 100%; height: auto; display: block; }
+
+    /* Animations */
+    .node rect, .node .pill { transition: filter 250ms, stroke 250ms, fill 250ms; }
+    .node.active rect, .node.active .pill {
+      stroke: var(--accent);
+      filter: drop-shadow(0 0 6px rgba(110, 168, 254, 0.55));
+    }
+    .node.success rect, .node.success .pill {
+      stroke: var(--good);
+      filter: drop-shadow(0 0 6px rgba(74, 222, 128, 0.45));
+    }
+    .node.audit rect, .node.audit .pill {
+      stroke: var(--accent-2);
+      filter: drop-shadow(0 0 6px rgba(155, 135, 245, 0.55));
+    }
+    .edge { stroke: var(--line); stroke-width: 1.5; fill: none; }
+    .edge.active { stroke: var(--accent); stroke-width: 2.4; }
+    .packet { opacity: 0; }
+    .packet.flying { opacity: 1; }
+    .label { fill: var(--fg); font-family: -apple-system, sans-serif; font-size: 12.5px; }
+    .sublabel { fill: var(--muted); font-family: var(--mono); font-size: 10.5px; }
+    .lifeline { stroke: var(--line); stroke-dasharray: 3 4; }
+
+    /* Audit log panel */
+    .audit-strip {
+      position: absolute; right: 14px; bottom: 14px; left: 14px;
+      background: #0a0f25; border: 1px solid var(--line); border-radius: 10px;
+      padding: 10px 12px; height: 96px; overflow: hidden;
+      font-family: var(--mono); font-size: 11.5px; color: var(--muted);
+    }
+    .audit-strip .audit-title {
+      color: var(--accent-2); font-size: 11px; letter-spacing: 0.06em;
+      text-transform: uppercase; margin-bottom: 6px;
+    }
+    .audit-strip .row {
+      opacity: 0; transform: translateY(6px);
+      transition: opacity 350ms, transform 350ms;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .audit-strip .row.shown { opacity: 1; transform: translateY(0); }
+    .audit-strip .row .ts { color: var(--muted); }
+    .audit-strip .row .act { color: var(--good); }
+    .audit-strip .row .who { color: var(--accent); }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Aegis-KMS — request flow</h1>
+    <p>A single <code>POST /v1/keys</code> traveling from client → HTTP edge → KeyService → audit log. Click play, or step through.</p>
+  </header>
+
+  <div class="controls">
+    <button id="btn-play" class="primary">▶ Play</button>
+    <button id="btn-prev">◀ Step back</button>
+    <button id="btn-next">Step forward ▶</button>
+    <button id="btn-reset">Reset</button>
+    <span class="step-label" id="step-counter">step 0 / 9</span>
+  </div>
+
+  <main>
+    <div class="stage">
+      <svg viewBox="0 0 720 460" xmlns="http://www.w3.org/2000/svg" aria-label="Aegis-KMS request flow diagram">
+        <!-- Edges -->
+        <g id="edges" stroke-linecap="round">
+          <path id="edge-1" class="edge" d="M 95 90 L 215 90" />
+          <path id="edge-2" class="edge" d="M 335 90 L 455 90" />
+          <path id="edge-3" class="edge" d="M 515 110 L 515 175" />
+          <path id="edge-4" class="edge" d="M 455 200 L 335 200" />
+          <path id="edge-5" class="edge" d="M 275 220 L 275 295" />
+          <path id="edge-6" class="edge" d="M 335 320 L 455 320" />
+          <path id="edge-7" class="edge" d="M 515 345 L 515 405" />
+          <path id="edge-8" class="edge" d="M 455 200 L 215 90" stroke-dasharray="4 4" />
+        </g>
+
+        <!-- Nodes -->
+        <g class="node" id="node-client">
+          <rect x="25" y="60" width="140" height="60" rx="10" fill="#182245" stroke="#2a3563" stroke-width="1.5" />
+          <text x="95" y="86" class="label" text-anchor="middle">Client</text>
+          <text x="95" y="104" class="sublabel" text-anchor="middle">curl / SDK</text>
+        </g>
+
+        <g class="node" id="node-http">
+          <rect x="215" y="60" width="120" height="60" rx="10" fill="#182245" stroke="#2a3563" stroke-width="1.5" />
+          <text x="275" y="86" class="label" text-anchor="middle">aegis-http</text>
+          <text x="275" y="104" class="sublabel" text-anchor="middle">Tapir + pekko</text>
+        </g>
+
+        <g class="node" id="node-decode">
+          <rect x="455" y="60" width="120" height="60" rx="10" fill="#182245" stroke="#2a3563" stroke-width="1.5" />
+          <text x="515" y="84" class="label" text-anchor="middle">JsonCodecs</text>
+          <text x="515" y="102" class="sublabel" text-anchor="middle">DTO → KeySpec</text>
+        </g>
+
+        <g class="node" id="node-svc">
+          <rect x="455" y="170" width="120" height="60" rx="10" fill="#182245" stroke="#2a3563" stroke-width="1.5" />
+          <text x="515" y="194" class="label" text-anchor="middle">KeyService[IO]</text>
+          <text x="515" y="212" class="sublabel" text-anchor="middle">aegis-core</text>
+        </g>
+
+        <g class="node" id="node-store">
+          <rect x="215" y="170" width="120" height="60" rx="10" fill="#182245" stroke="#2a3563" stroke-width="1.5" />
+          <text x="275" y="194" class="label" text-anchor="middle">in-memory store</text>
+          <text x="275" y="212" class="sublabel" text-anchor="middle">→ Doobie/PG (PR #3)</text>
+        </g>
+
+        <g class="node" id="node-actor">
+          <rect x="215" y="295" width="120" height="50" rx="10" fill="#182245" stroke="#2a3563" stroke-width="1.5" stroke-dasharray="4 4" />
+          <text x="275" y="318" class="label" text-anchor="middle">KeyOpsActor</text>
+          <text x="275" y="335" class="sublabel" text-anchor="middle">PR #2 — planned</text>
+        </g>
+
+        <g class="node" id="node-audit">
+          <rect x="455" y="295" width="120" height="50" rx="10" fill="#182245" stroke="#2a3563" stroke-width="1.5" />
+          <text x="515" y="318" class="label" text-anchor="middle">aegis-audit</text>
+          <text x="515" y="335" class="sublabel" text-anchor="middle">append-only sink</text>
+        </g>
+
+        <g class="node" id="node-log">
+          <rect x="455" y="395" width="120" height="50" rx="10" fill="#182245" stroke="#2a3563" stroke-width="1.5" />
+          <text x="515" y="418" class="label" text-anchor="middle">stdout (JSON)</text>
+          <text x="515" y="435" class="sublabel" text-anchor="middle">pekko-slf4j</text>
+        </g>
+
+        <!-- Edge labels -->
+        <text x="155" y="80" class="sublabel" text-anchor="middle">POST /v1/keys</text>
+        <text x="395" y="80" class="sublabel" text-anchor="middle">decode</text>
+        <text x="395" y="218" class="sublabel" text-anchor="middle">create(spec, principal)</text>
+        <text x="395" y="338" class="sublabel" text-anchor="middle">emit AuditEvent</text>
+        <text x="540" y="375" class="sublabel" text-anchor="start">log line</text>
+        <text x="155" y="200" class="sublabel" text-anchor="middle">put(KeyId)</text>
+        <text x="295" y="270" class="sublabel" text-anchor="middle" fill="#8a96b8" opacity="0.7">command</text>
+
+        <!-- Packet (animated) -->
+        <g id="packet" class="packet">
+          <circle r="7" fill="#6ea8fe" />
+          <circle r="14" fill="#6ea8fe" opacity="0.25" />
+        </g>
+
+        <!-- Audit packet -->
+        <g id="packet-audit" class="packet">
+          <rect x="-10" y="-7" width="20" height="14" rx="3" fill="#9b87f5" />
+        </g>
+      </svg>
+
+      <div class="audit-strip">
+        <div class="audit-title">audit log (append-only)</div>
+        <div class="row" id="audit-row-1"><span class="ts">2026-04-25T09:14:02.114Z</span> &nbsp; <span class="act">KeyCreated</span> &nbsp; key=<span class="who">k_8f31…</span> &nbsp; actor=<span class="who">alice</span> &nbsp; req=r-7c2a</div>
+        <div class="row" id="audit-row-2"><span class="ts">2026-04-25T09:14:02.118Z</span> &nbsp; outcome=<span class="act">Success</span> &nbsp; latency=4ms &nbsp; plane=REST</div>
+      </div>
+    </div>
+
+    <aside class="narration">
+      <span class="step-pill" id="np-pill">step 0</span>
+      <h2 id="np-title">Press play to walk through one request.</h2>
+      <p id="np-body">Each step shows what code path runs, what data is transformed, and where logs and audit events are emitted. The dashed module is planned (PR #2). The dotted return arrow is the response path.</p>
+      <div class="detail" id="np-detail">Tip: use Step forward / Step back to inspect any frame on its own. The audit strip at the bottom of the diagram fills in once we reach the audit step.</div>
+      <pre class="codeline" id="np-code" style="display:none"></pre>
+
+      <div class="legend">
+        <span><span class="swatch" style="background:#6ea8fe"></span>active path</span>
+        <span><span class="swatch" style="background:#4ade80"></span>success</span>
+        <span><span class="swatch" style="background:#9b87f5"></span>audit</span>
+        <span><span class="swatch" style="background:#2a3563"></span>idle</span>
+      </div>
+    </aside>
+  </main>
+
+  <script>
+    // ── Step definitions ──────────────────────────────────────────────────────
+    // Each step:
+    //   nodes:    array of { id, cls } to highlight
+    //   edges:    array of edge ids to highlight
+    //   packet:   { from: edgeId, kind?: 'audit' }   (animates a dot along the edge)
+    //   audit:    array of audit row ids to reveal
+    //   title, body, detail, code (optional)
+    const steps = [
+      {
+        title: "Idle — system is ready",
+        body: "Pekko ActorSystem is up, KeyService.inMemory is wired, and the route is mounted. Nothing has happened yet.",
+        detail: "Nodes are dim. The dashed KeyOpsActor box represents PR #2 — it isn't on the path today; KeyService.inMemory replies directly.",
+      },
+      {
+        title: "Client sends POST /v1/keys",
+        body: "A client (curl, the Scala SDK, or a CLI) sends a JSON body describing the key spec along with an X-Aegis-User header.",
+        detail: "Today this header is the placeholder principal. PR #5 replaces it with a verified OIDC bearer token.",
+        code: 'POST /v1/keys\nX-Aegis-User: alice\n{"spec":{"name":"invoice-signing","algorithm":"AES","sizeBits":256,"objectType":"SymmetricKey"}}',
+        nodes: [{id:"node-client", cls:"active"}],
+        edges: ["edge-1"],
+        packet: { from: "edge-1" },
+      },
+      {
+        title: "pekko-http matches the route",
+        body: "Pekko-HTTP routes the request to the Tapir-derived server endpoint. The request-id is allocated here and lands in the MDC.",
+        detail: "All four planes (REST, KMIP, MCP, agent-AI) generate request-ids at this boundary so log lines can be joined to audit events.",
+        nodes: [{id:"node-http", cls:"active"}],
+      },
+      {
+        title: "Decode JSON → core types",
+        body: "JsonCodecs decodes the request into CreateKeyRequest, then calls .toCore which validates Algorithm and KeyObjectType.",
+        detail: "If validation fails the route short-circuits to a 400 InvalidField; KeyService is never called.",
+        code: 'CreateKeyRequest(spec).spec.toCore\n  : Either[String, KeySpec]',
+        nodes: [{id:"node-http", cls:"active"}, {id:"node-decode", cls:"active"}],
+        edges: ["edge-2"],
+        packet: { from: "edge-2" },
+      },
+      {
+        title: "KeyService.create runs",
+        body: "The validated KeySpec and the resolved Principal are handed to KeyService[IO].create. Today this is the in-memory ref impl; once PR #2 lands, it forwards a CreateKey command to the actor.",
+        detail: "The algebra is in aegis-core (library-safe, no Pekko). The same call works from tests, the SDK, and the server.",
+        code: 'svc.create(spec, principal)\n  : IO[Either[KmsError, ManagedKey]]',
+        nodes: [{id:"node-decode", cls:"active"}, {id:"node-svc", cls:"active"}],
+        edges: ["edge-3"],
+        packet: { from: "edge-3" },
+      },
+      {
+        title: "Persist the new ManagedKey",
+        body: "The store inserts the new ManagedKey in PreActive state. Replacing this with a Doobie/Postgres journal is PR #3 — the algebra above doesn't change.",
+        detail: "The new id is a versioned UUID-v7 (timestamp-prefixed) so audit queries are naturally time-ordered.",
+        nodes: [{id:"node-svc", cls:"active"}, {id:"node-store", cls:"success"}],
+        edges: ["edge-4"],
+        packet: { from: "edge-4" },
+      },
+      {
+        title: "Emit audit event",
+        body: "Once the state-changing event is committed, an AuditEvent(KeyCreated, actor=alice, …) is written to the audit sink. The journal write happens before the audit emission, so the audit log can never describe a key the journal doesn't have.",
+        detail: "If the audit sink is unavailable, the actor records a PendingAuditDelivery event for a sweeper. The op still commits; the audit row is delivered late, never lost.",
+        code: 'AuditEvent(\n  action  = KeyCreated,\n  actor   = Principal.Human("alice"),\n  outcome = Success,\n  context = Map("request_id" -> "r-7c2a"))',
+        nodes: [{id:"node-svc", cls:"active"}, {id:"node-audit", cls:"audit"}],
+        edges: ["edge-6"],
+        packet: { from: "edge-6", kind: "audit" },
+        audit: ["audit-row-1"],
+      },
+      {
+        title: "Operational log line",
+        body: "In parallel, a JSON log line is written to stdout via pekko-slf4j → Logback. Loki / CloudWatch / Datadog ingests it; the request-id ties it back to the audit row.",
+        detail: "Operational logs are noisy and short-retention; audit events are sparse and long-retention. Two pipelines, one correlation key.",
+        code: '{"ts":"2026-04-25T09:14:02.118Z","level":"INFO","msg":"created key","key":"k_8f31…","req":"r-7c2a","ms":4}',
+        nodes: [{id:"node-audit", cls:"audit"}, {id:"node-log", cls:"success"}],
+        edges: ["edge-7"],
+        packet: { from: "edge-7" },
+        audit: ["audit-row-1", "audit-row-2"],
+      },
+      {
+        title: "Response: 201 Created",
+        body: "ManagedKey is mapped back to ManagedKeyDto and returned. Tapir handles the status-code branch; the response body is the canonical wire shape.",
+        detail: "Errors take the same shape with KmsErrorDto: { code, message }. The HTTP status is chosen by KmsError.code, not by the codec.",
+        code: '201 Created\n{"id":"k_8f31…","spec":{…},"createdAt":"…","state":"PreActive"}',
+        nodes: [{id:"node-svc", cls:"success"}, {id:"node-http", cls:"success"}, {id:"node-client", cls:"success"}],
+        edges: ["edge-8"],
+        packet: { from: "edge-8" },
+        audit: ["audit-row-1", "audit-row-2"],
+      },
+      {
+        title: "Done — back to idle",
+        body: "The audit row and the log line outlive the request. A different plane (KMIP, MCP, agent-AI) would replace the entry node but converge on the same KeyService → audit pipeline.",
+        detail: "Click Reset to play it again, or read docs/ARCHITECTURE.md for the full module map and security model.",
+        audit: ["audit-row-1", "audit-row-2"],
+      },
+    ];
+
+    // Edge endpoints (for animating a packet)
+    const edgePoints = {
+      "edge-1": [[95,90],[215,90]],
+      "edge-2": [[335,90],[455,90]],
+      "edge-3": [[515,110],[515,175]],
+      "edge-4": [[455,200],[335,200]],
+      "edge-5": [[275,220],[275,295]],
+      "edge-6": [[335,320],[455,320]],
+      "edge-7": [[515,345],[515,405]],
+      "edge-8": [[455,200],[215,90]],
+    };
+
+    // ── State ────────────────────────────────────────────────────────────────
+    let cur = 0;
+    let playing = false;
+    let playTimer = null;
+
+    const $ = (id) => document.getElementById(id);
+    const allNodes = ["node-client","node-http","node-decode","node-svc","node-store","node-actor","node-audit","node-log"];
+    const allEdges = Object.keys(edgePoints);
+    const allAuditRows = ["audit-row-1","audit-row-2"];
+
+    function clearAll() {
+      allNodes.forEach(n => { const el = $(n); if (el) el.classList.remove("active","success","audit"); });
+      allEdges.forEach(e => { const el = $(e); if (el) el.classList.remove("active"); });
+    }
+
+    function applyStep(i) {
+      cur = Math.max(0, Math.min(steps.length - 1, i));
+      const s = steps[cur];
+      clearAll();
+
+      (s.nodes || []).forEach(({id, cls}) => { const el = $(id); if (el) el.classList.add(cls); });
+      (s.edges || []).forEach(eid => { const el = $(eid); if (el) el.classList.add("active"); });
+
+      // Audit rows: show the union of all rows up to and including this step (idempotent)
+      allAuditRows.forEach(r => $(r).classList.remove("shown"));
+      (s.audit || []).forEach(rid => $(rid).classList.add("shown"));
+
+      // Narration
+      $("np-pill").textContent = `step ${cur} / ${steps.length - 1}`;
+      $("np-title").textContent = s.title;
+      $("np-body").textContent = s.body;
+      $("np-detail").textContent = s.detail || "";
+      const code = $("np-code");
+      if (s.code) { code.style.display = "block"; code.textContent = s.code; }
+      else        { code.style.display = "none"; code.textContent = ""; }
+
+      $("step-counter").textContent = `step ${cur} / ${steps.length - 1}`;
+
+      // Packet animation
+      if (s.packet) animatePacket(s.packet.from, s.packet.kind);
+    }
+
+    function animatePacket(edgeId, kind) {
+      const pts = edgePoints[edgeId];
+      if (!pts) return;
+      const pkt = $(kind === "audit" ? "packet-audit" : "packet");
+      // Hide the other packet
+      const other = $(kind === "audit" ? "packet" : "packet-audit");
+      other.classList.remove("flying");
+      other.setAttribute("transform", "translate(-50,-50)");
+
+      const [x0,y0] = pts[0]; const [x1,y1] = pts[1];
+      pkt.classList.add("flying");
+      const start = performance.now();
+      const dur = 700;
+      function frame(now) {
+        const t = Math.min(1, (now - start) / dur);
+        const e = t < 0.5 ? 2*t*t : 1 - Math.pow(-2*t + 2, 2) / 2; // easeInOutQuad
+        const x = x0 + (x1 - x0) * e;
+        const y = y0 + (y1 - y0) * e;
+        pkt.setAttribute("transform", `translate(${x},${y})`);
+        if (t < 1) requestAnimationFrame(frame);
+        else setTimeout(() => pkt.classList.remove("flying"), 200);
+      }
+      requestAnimationFrame(frame);
+    }
+
+    function next() { if (cur < steps.length - 1) applyStep(cur + 1); else stopPlay(); }
+    function prev() { applyStep(cur - 1); }
+    function reset() { stopPlay(); applyStep(0); }
+    function startPlay() {
+      if (cur >= steps.length - 1) applyStep(0);
+      playing = true; $("btn-play").textContent = "❚❚ Pause";
+      playTimer = setInterval(() => {
+        if (cur >= steps.length - 1) { stopPlay(); return; }
+        next();
+      }, 1900);
+    }
+    function stopPlay() {
+      playing = false; $("btn-play").textContent = "▶ Play";
+      if (playTimer) { clearInterval(playTimer); playTimer = null; }
+    }
+
+    document.addEventListener("DOMContentLoaded", () => {
+      $("btn-play").addEventListener("click", () => playing ? stopPlay() : startPlay());
+      $("btn-prev").addEventListener("click", () => { stopPlay(); prev(); });
+      $("btn-next").addEventListener("click", () => { stopPlay(); next(); });
+      $("btn-reset").addEventListener("click", reset);
+      document.addEventListener("keydown", (e) => {
+        if (e.key === "ArrowRight") { stopPlay(); next(); }
+        else if (e.key === "ArrowLeft") { stopPlay(); prev(); }
+        else if (e.key === " ") { e.preventDefault(); playing ? stopPlay() : startPlay(); }
+      });
+      applyStep(0);
+    });
+  </script>
+</body>
+</html>
