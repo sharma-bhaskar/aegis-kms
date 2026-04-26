@@ -5,7 +5,11 @@ library or as a standalone server, with first-class support for AI agents.
 
 **Status:** pre-alpha. Scaffold only; no functionality yet.
 
-**Architecture:** [written overview](docs/ARCHITECTURE.md) · [animated request walkthrough](https://sharma-bhaskar.github.io/aegis-kms/architecture.html)
+## Architecture at a glance
+
+![Aegis-KMS request flow — animated](docs/architecture-flow.svg)
+
+A `POST /v1/keys` travels client → `aegis-http` (Tapir + pekko) → JSON decode → `KeyService[IO]` → in-memory store, then emits an `AuditEvent` to `aegis-audit` and a JSON log line via slf4j. The dashed module is `KeyOpsActor` (PR #2 — planned). For deeper reading: [written overview](docs/ARCHITECTURE.md) · [interactive step-through with narration](https://sharma-bhaskar.github.io/aegis-kms/architecture.html).
 
 ## Why
 

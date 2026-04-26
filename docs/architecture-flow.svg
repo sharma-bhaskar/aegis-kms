@@ -1,0 +1,266 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 540" role="img"
+     aria-label="Aegis-KMS request flow: a POST /v1/keys travels from client through pekko-http, JSON decode, KeyService, the in-memory store, and emits an audit event plus a log line.">
+  <!-- ============================================================
+       Animated request-flow diagram for Aegis-KMS.
+       Pure SMIL animations; no JavaScript. Renders inline in
+       GitHub README via <img>, in any browser, in editors, etc.
+       Cycle length: 12 seconds, looping forever.
+       ============================================================ -->
+  <defs>
+    <style>
+      .bg     { fill: #0b1020; }
+      .card   { fill: #182245; stroke: #2a3563; stroke-width: 1.5; }
+      .planned{ fill: #182245; stroke: #2a3563; stroke-width: 1.5; stroke-dasharray: 5 4; }
+      .label  { fill: #e7ecff; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; font-size: 14px; text-anchor: middle; }
+      .sub    { fill: #8a96b8; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 11px; text-anchor: middle; }
+      .edge   { fill: none; stroke: #2a3563; stroke-width: 1.6; stroke-linecap: round; }
+      .edgeR  { fill: none; stroke: #2a3563; stroke-width: 1.6; stroke-linecap: round; stroke-dasharray: 4 4; }
+      .title  { fill: #e7ecff; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; font-size: 18px; font-weight: 600; }
+      .stamp  { fill: #8a96b8; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 11px; }
+      .audit-title { fill: #9b87f5; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 10.5px; letter-spacing: 0.08em; }
+      .audit-row   { fill: #8a96b8; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 11.5px; }
+      .audit-good  { fill: #4ade80; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 11.5px; }
+      .audit-acc   { fill: #6ea8fe; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 11.5px; }
+    </style>
+  </defs>
+
+  <!-- Background -->
+  <rect class="bg" x="0" y="0" width="1000" height="540" />
+
+  <!-- Title -->
+  <text class="title" x="32" y="38">Aegis-KMS · POST /v1/keys</text>
+  <text class="stamp" x="32" y="58">request → decode → KeyService → store → audit + log → response &nbsp;·&nbsp; loops every 12s</text>
+
+  <!-- =================== EDGES (drawn first so nodes overlay) =================== -->
+  <!-- 1: client → http  -->
+  <path id="p1" class="edge" d="M 170 130 L 320 130" />
+  <!-- 2: http → decode  -->
+  <path id="p2" class="edge" d="M 470 130 L 620 130" />
+  <!-- 3: decode → svc   -->
+  <path id="p3" class="edge" d="M 690 160 L 690 235" />
+  <!-- 4: svc → store    -->
+  <path id="p4" class="edge" d="M 620 270 L 470 270" />
+  <!-- 5: svc → audit    -->
+  <path id="p5" class="edge" d="M 690 310 L 690 380" />
+  <!-- 6: audit → log    -->
+  <path id="p6" class="edge" d="M 760 405 L 870 405" />
+  <!-- 7: response (back to client, dashed) -->
+  <path id="p7" class="edgeR" d="M 620 270 L 320 130 L 170 130" />
+
+  <!-- Edge captions -->
+  <text class="sub" x="245" y="120">POST /v1/keys</text>
+  <text class="sub" x="545" y="120">decode DTO</text>
+  <text class="sub" x="725" y="200">create(spec, principal)</text>
+  <text class="sub" x="545" y="260">put(KeyId)</text>
+  <text class="sub" x="725" y="350">emit AuditEvent</text>
+  <text class="sub" x="815" y="395">log line</text>
+
+  <!-- =================== NODES =================== -->
+  <!-- Client -->
+  <g>
+    <rect id="n-client" class="card" x="40" y="100" width="130" height="60" rx="10" />
+    <text class="label" x="105" y="128">Client</text>
+    <text class="sub"   x="105" y="146">curl / SDK</text>
+  </g>
+
+  <!-- HTTP edge -->
+  <g>
+    <rect id="n-http" class="card" x="320" y="100" width="150" height="60" rx="10" />
+    <text class="label" x="395" y="126">aegis-http</text>
+    <text class="sub"   x="395" y="144">Tapir + pekko</text>
+  </g>
+
+  <!-- JSON decode -->
+  <g>
+    <rect id="n-decode" class="card" x="620" y="100" width="140" height="60" rx="10" />
+    <text class="label" x="690" y="126">JsonCodecs</text>
+    <text class="sub"   x="690" y="144">DTO → KeySpec</text>
+  </g>
+
+  <!-- KeyService -->
+  <g>
+    <rect id="n-svc" class="card" x="620" y="240" width="140" height="60" rx="10" />
+    <text class="label" x="690" y="266">KeyService[IO]</text>
+    <text class="sub"   x="690" y="284">aegis-core</text>
+  </g>
+
+  <!-- in-memory store -->
+  <g>
+    <rect id="n-store" class="card" x="320" y="240" width="150" height="60" rx="10" />
+    <text class="label" x="395" y="266">in-memory store</text>
+    <text class="sub"   x="395" y="284">→ Doobie (PR #3)</text>
+  </g>
+
+  <!-- KeyOpsActor (planned) -->
+  <g>
+    <rect id="n-actor" class="planned" x="40" y="240" width="220" height="60" rx="10" />
+    <text class="label" x="150" y="266">KeyOpsActor</text>
+    <text class="sub"   x="150" y="284">PR #2 — planned</text>
+  </g>
+
+  <!-- Audit -->
+  <g>
+    <rect id="n-audit" class="card" x="620" y="380" width="140" height="50" rx="10" />
+    <text class="label" x="690" y="402">aegis-audit</text>
+    <text class="sub"   x="690" y="418">append-only sink</text>
+  </g>
+
+  <!-- Operational log -->
+  <g>
+    <rect id="n-log" class="card" x="870" y="380" width="100" height="50" rx="10" />
+    <text class="label" x="920" y="402">stdout</text>
+    <text class="sub"   x="920" y="418">JSON / slf4j</text>
+  </g>
+
+  <!-- =================== NODE HIGHLIGHT ANIMATIONS =================== -->
+  <!-- All highlights use the same 12s repeating cycle, with begin offsets. -->
+
+  <!-- Client highlight: 0.0s on, fade off at 1.5s; lights again on response 9.0–11.0s -->
+  <animate xlink:href="#n-client" attributeName="stroke" values="#2a3563;#6ea8fe;#6ea8fe;#2a3563;#2a3563;#4ade80;#4ade80;#2a3563"
+           keyTimes="0;0.02;0.12;0.18;0.74;0.78;0.92;1" dur="12s" repeatCount="indefinite" />
+
+  <!-- HTTP node highlight: ~1.0–3.0s and ~9.0–10.5s -->
+  <animate xlink:href="#n-http" attributeName="stroke" values="#2a3563;#6ea8fe;#6ea8fe;#2a3563;#2a3563;#4ade80;#4ade80;#2a3563"
+           keyTimes="0;0.08;0.25;0.30;0.74;0.78;0.88;1" dur="12s" repeatCount="indefinite" />
+
+  <!-- Decode node highlight: ~2.0–3.0s -->
+  <animate xlink:href="#n-decode" attributeName="stroke" values="#2a3563;#6ea8fe;#6ea8fe;#2a3563"
+           keyTimes="0;0.18;0.28;0.34" dur="12s" repeatCount="indefinite" />
+
+  <!-- Service node highlight: ~3.5–7.5s -->
+  <animate xlink:href="#n-svc" attributeName="stroke" values="#2a3563;#6ea8fe;#6ea8fe;#4ade80;#4ade80;#2a3563"
+           keyTimes="0;0.27;0.35;0.45;0.62;0.70" dur="12s" repeatCount="indefinite" />
+
+  <!-- Store node highlight: ~4.5–5.5s -->
+  <animate xlink:href="#n-store" attributeName="stroke" values="#2a3563;#4ade80;#4ade80;#2a3563"
+           keyTimes="0;0.35;0.50;0.58" dur="12s" repeatCount="indefinite" />
+
+  <!-- Audit node highlight: ~6.0–7.5s -->
+  <animate xlink:href="#n-audit" attributeName="stroke" values="#2a3563;#9b87f5;#9b87f5;#2a3563"
+           keyTimes="0;0.48;0.62;0.70" dur="12s" repeatCount="indefinite" />
+
+  <!-- Log node highlight: ~6.5–7.5s -->
+  <animate xlink:href="#n-log" attributeName="stroke" values="#2a3563;#4ade80;#4ade80;#2a3563"
+           keyTimes="0;0.54;0.62;0.70" dur="12s" repeatCount="indefinite" />
+
+  <!-- =================== EDGE HIGHLIGHTS =================== -->
+  <animate xlink:href="#p1" attributeName="stroke" values="#2a3563;#6ea8fe;#6ea8fe;#2a3563"
+           keyTimes="0;0.08;0.18;0.24" dur="12s" repeatCount="indefinite" />
+  <animate xlink:href="#p2" attributeName="stroke" values="#2a3563;#6ea8fe;#6ea8fe;#2a3563"
+           keyTimes="0;0.18;0.28;0.34" dur="12s" repeatCount="indefinite" />
+  <animate xlink:href="#p3" attributeName="stroke" values="#2a3563;#6ea8fe;#6ea8fe;#2a3563"
+           keyTimes="0;0.28;0.38;0.44" dur="12s" repeatCount="indefinite" />
+  <animate xlink:href="#p4" attributeName="stroke" values="#2a3563;#4ade80;#4ade80;#2a3563"
+           keyTimes="0;0.38;0.50;0.58" dur="12s" repeatCount="indefinite" />
+  <animate xlink:href="#p5" attributeName="stroke" values="#2a3563;#9b87f5;#9b87f5;#2a3563"
+           keyTimes="0;0.48;0.60;0.68" dur="12s" repeatCount="indefinite" />
+  <animate xlink:href="#p6" attributeName="stroke" values="#2a3563;#4ade80;#4ade80;#2a3563"
+           keyTimes="0;0.54;0.65;0.72" dur="12s" repeatCount="indefinite" />
+  <animate xlink:href="#p7" attributeName="stroke" values="#2a3563;#4ade80;#4ade80;#2a3563"
+           keyTimes="0;0.74;0.86;0.92" dur="12s" repeatCount="indefinite" />
+
+  <!-- =================== PACKETS =================== -->
+  <!-- Each packet rides a path with animateMotion, then disappears via opacity animation. -->
+
+  <!-- Packet 1: client → http  (1.0s start, 0.9s flight) -->
+  <g opacity="0">
+    <circle r="7" fill="#6ea8fe" />
+    <circle r="14" fill="#6ea8fe" opacity="0.25" />
+    <animate attributeName="opacity" values="0;1;1;0;0" keyTimes="0;0.085;0.16;0.18;1" dur="12s" repeatCount="indefinite" />
+    <animateMotion dur="12s" repeatCount="indefinite"
+                   keyPoints="0;0;1;1;1" keyTimes="0;0.085;0.16;0.18;1" calcMode="linear">
+      <mpath xlink:href="#p1" />
+    </animateMotion>
+  </g>
+
+  <!-- Packet 2: http → decode -->
+  <g opacity="0">
+    <circle r="7" fill="#6ea8fe" />
+    <circle r="14" fill="#6ea8fe" opacity="0.25" />
+    <animate attributeName="opacity" values="0;1;1;0;0" keyTimes="0;0.20;0.27;0.29;1" dur="12s" repeatCount="indefinite" />
+    <animateMotion dur="12s" repeatCount="indefinite"
+                   keyPoints="0;0;1;1;1" keyTimes="0;0.20;0.27;0.29;1" calcMode="linear">
+      <mpath xlink:href="#p2" />
+    </animateMotion>
+  </g>
+
+  <!-- Packet 3: decode → service -->
+  <g opacity="0">
+    <circle r="7" fill="#6ea8fe" />
+    <circle r="14" fill="#6ea8fe" opacity="0.25" />
+    <animate attributeName="opacity" values="0;1;1;0;0" keyTimes="0;0.30;0.37;0.39;1" dur="12s" repeatCount="indefinite" />
+    <animateMotion dur="12s" repeatCount="indefinite"
+                   keyPoints="0;0;1;1;1" keyTimes="0;0.30;0.37;0.39;1" calcMode="linear">
+      <mpath xlink:href="#p3" />
+    </animateMotion>
+  </g>
+
+  <!-- Packet 4: service → store (green = success/persist) -->
+  <g opacity="0">
+    <circle r="7" fill="#4ade80" />
+    <circle r="14" fill="#4ade80" opacity="0.25" />
+    <animate attributeName="opacity" values="0;1;1;0;0" keyTimes="0;0.40;0.49;0.51;1" dur="12s" repeatCount="indefinite" />
+    <animateMotion dur="12s" repeatCount="indefinite"
+                   keyPoints="0;0;1;1;1" keyTimes="0;0.40;0.49;0.51;1" calcMode="linear">
+      <mpath xlink:href="#p4" />
+    </animateMotion>
+  </g>
+
+  <!-- Packet 5: service → audit (purple = audit) -->
+  <g opacity="0">
+    <rect x="-9" y="-7" width="18" height="14" rx="3" fill="#9b87f5" />
+    <animate attributeName="opacity" values="0;1;1;0;0" keyTimes="0;0.50;0.59;0.61;1" dur="12s" repeatCount="indefinite" />
+    <animateMotion dur="12s" repeatCount="indefinite"
+                   keyPoints="0;0;1;1;1" keyTimes="0;0.50;0.59;0.61;1" calcMode="linear">
+      <mpath xlink:href="#p5" />
+    </animateMotion>
+  </g>
+
+  <!-- Packet 6: audit → log -->
+  <g opacity="0">
+    <rect x="-9" y="-7" width="18" height="14" rx="3" fill="#4ade80" />
+    <animate attributeName="opacity" values="0;1;1;0;0" keyTimes="0;0.56;0.64;0.66;1" dur="12s" repeatCount="indefinite" />
+    <animateMotion dur="12s" repeatCount="indefinite"
+                   keyPoints="0;0;1;1;1" keyTimes="0;0.56;0.64;0.66;1" calcMode="linear">
+      <mpath xlink:href="#p6" />
+    </animateMotion>
+  </g>
+
+  <!-- Packet 7: response (green dot back along dashed path) -->
+  <g opacity="0">
+    <circle r="6" fill="#4ade80" />
+    <circle r="12" fill="#4ade80" opacity="0.25" />
+    <animate attributeName="opacity" values="0;1;1;0;0" keyTimes="0;0.74;0.91;0.93;1" dur="12s" repeatCount="indefinite" />
+    <animateMotion dur="12s" repeatCount="indefinite"
+                   keyPoints="0;0;1;1;1" keyTimes="0;0.74;0.91;0.93;1" calcMode="linear">
+      <mpath xlink:href="#p7" />
+    </animateMotion>
+  </g>
+
+  <!-- =================== AUDIT LOG STRIP =================== -->
+  <rect x="40" y="455" width="920" height="70" rx="10" fill="#0a0f25" stroke="#2a3563" stroke-width="1.5" />
+  <text class="audit-title" x="56" y="476">AUDIT LOG (append-only)</text>
+
+  <!-- Row 1 — appears at audit emission (~6.5s) -->
+  <g opacity="0">
+    <text x="56" y="497" class="audit-row">
+      <tspan class="audit-row">2026-04-25T09:14:02.114Z</tspan>
+      <tspan class="audit-good" dx="14">KeyCreated</tspan>
+      <tspan class="audit-row" dx="14">key=</tspan><tspan class="audit-acc">k_8f31…</tspan>
+      <tspan class="audit-row" dx="14">actor=</tspan><tspan class="audit-acc">alice</tspan>
+      <tspan class="audit-row" dx="14">req=r-7c2a</tspan>
+    </text>
+    <animate attributeName="opacity" values="0;0;1;1" keyTimes="0;0.55;0.60;1" dur="12s" repeatCount="indefinite" />
+  </g>
+
+  <!-- Row 2 — appears at log emission (~7.5s) -->
+  <g opacity="0">
+    <text x="56" y="516" class="audit-row">
+      <tspan class="audit-row">2026-04-25T09:14:02.118Z</tspan>
+      <tspan class="audit-row" dx="14">outcome=</tspan><tspan class="audit-good">Success</tspan>
+      <tspan class="audit-row" dx="14">latency=4ms</tspan>
+      <tspan class="audit-row" dx="14">plane=REST</tspan>
+    </text>
+    <animate attributeName="opacity" values="0;0;1;1" keyTimes="0;0.62;0.67;1" dur="12s" repeatCount="indefinite" />
+  </g>
+</svg>
