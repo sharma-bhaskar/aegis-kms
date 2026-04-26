@@ -27,6 +27,19 @@ behalf. Aegis-KMS aims to be:
 - **LLM-friendly** — built-in MCP server surface so Claude and other MCP
   clients can use the KMS as a tool.
 
+## How it works end-to-end
+
+![Aegis-KMS — key lifecycle, end to end](docs/usage-flow.svg)
+
+A key in Aegis-KMS moves through four phases, and every transition is gated by IAM and recorded in the audit log:
+
+1. **Create.** An operator (human or via `aegis-cli`) requests a new key. IAM checks role and policy; `KeyService` generates the DEK; the Root of Trust wraps it; Postgres stores the wrapped DEK; audit records `KeyCreated`. The key starts in `PreActive` and transitions to `Active`.
+2. **Use.** An app (REST), a storage/database vendor (KMIP), or an AI agent (MCP) calls `encrypt` / `decrypt` / `sign` / `verify`. IAM checks the principal's scopes and key allowlist; the wrapped DEK is loaded and unwrapped by the Root of Trust; the operation runs; audit records `KeyUsed` with both the immediate actor and, for agents, the parent human operator.
+3. **Rotate.** Triggered manually or by rotation policy. `KeyService.rotate` mints a new version under the same key id; the previous version stays available for decrypt-only so existing ciphertexts keep working; audit records `KeyRotated`.
+4. **Retire.** The operator deactivates the key (no new ops accepted), a configurable grace window passes, then `destroy` purges the wrapped DEK; audit records `KeyDestroyed`. The key terminal state is `Destroyed`.
+
+The same `KeyService` algebra is reached from all four wire planes, which is why an AI agent calling over MCP is subject to exactly the same IAM checks and audit trail as a human operator calling over REST.
+
 ## How it compares
 
 A short comparison against the alternatives an OSS-leaning team would already be evaluating. Deeper writeup in [docs/ARCHITECTURE.md §10](docs/ARCHITECTURE.md#10-how-aegis-kms-compares).
@@ -65,7 +78,7 @@ A short comparison against the alternatives an OSS-leaning team would already be
 Prerequisites: JDK 21, sbt 1.10+, Postgres 14+.
 
 ```bash
-git clone https://github.com/aegis-kms/aegis-kms.git
+git clone https://github.com/sharma-bhaskar/aegis-kms.git
 cd aegis-kms
 sbt "server/run"
 ```

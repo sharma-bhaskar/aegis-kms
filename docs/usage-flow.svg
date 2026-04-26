@@ -1,0 +1,247 @@
+<svg xmlns="http://www.w3.org/2000/svg"
+     xmlns:xlink="http://www.w3.org/1999/xlink"
+     viewBox="0 0 1240 760" role="img"
+     aria-label="Aegis-KMS end-to-end key lifecycle: create, use, rotate, retire">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#0b1020"/>
+      <stop offset="1" stop-color="#0a0f1c"/>
+    </linearGradient>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5"
+            markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#94a3b8"/>
+    </marker>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="2.2" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+
+    <!-- One vertical path used by every animated packet (phase column shifts via translate) -->
+    <path id="lane" d="M 0 130 L 0 660" fill="none"/>
+  </defs>
+
+  <rect width="1240" height="760" fill="url(#bg)"/>
+
+  <!-- Title -->
+  <g font-family="-apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans-serif" fill="#e7ecff">
+    <text x="40" y="46" font-size="22" font-weight="700">Aegis-KMS &#8212; key lifecycle, end to end</text>
+    <text x="40" y="72" font-size="13" fill="#94a3b8">
+      Every phase: actor &#8594; IAM check &#8594; KeyService action &#8594; Root of Trust / storage &#8594; Audit. State chip on the right shows the key's lifecycle state after the phase.
+    </text>
+  </g>
+
+  <!-- Phase column backgrounds -->
+  <g>
+    <rect x="40"   y="100" width="280" height="600" rx="14" fill="#0f172a" stroke="#1e293b"/>
+    <rect x="340"  y="100" width="280" height="600" rx="14" fill="#0f172a" stroke="#1e293b"/>
+    <rect x="640"  y="100" width="280" height="600" rx="14" fill="#0f172a" stroke="#1e293b"/>
+    <rect x="940"  y="100" width="260" height="600" rx="14" fill="#0f172a" stroke="#1e293b"/>
+  </g>
+
+  <!-- Phase headers -->
+  <g font-family="-apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans-serif" text-anchor="middle">
+    <text x="180"  y="128" font-size="14" font-weight="700" fill="#6ea8fe">1 &#183; CREATE</text>
+    <text x="480"  y="128" font-size="14" font-weight="700" fill="#22d3ee">2 &#183; USE</text>
+    <text x="780"  y="128" font-size="14" font-weight="700" fill="#a78bfa">3 &#183; ROTATE</text>
+    <text x="1070" y="128" font-size="14" font-weight="700" fill="#fb923c">4 &#183; RETIRE</text>
+  </g>
+
+  <!-- ===================== PHASE 1: CREATE ===================== -->
+  <g font-family="-apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans-serif" fill="#e7ecff">
+    <!-- Actor -->
+    <rect x="80" y="150" width="200" height="48" rx="10" fill="#1e293b" stroke="#6ea8fe"/>
+    <text x="180" y="172" font-size="12" font-weight="700" text-anchor="middle">Operator (human)</text>
+    <text x="180" y="190" font-size="11" fill="#94a3b8" text-anchor="middle">aegis-cli / REST</text>
+
+    <!-- IAM -->
+    <rect x="80" y="230" width="200" height="40" rx="10" fill="#0b1228" stroke="#334155"/>
+    <text x="180" y="255" font-size="11" text-anchor="middle">IAM &#183; policy + role check</text>
+
+    <!-- KeyService action -->
+    <rect x="80" y="300" width="200" height="48" rx="10" fill="#1e293b" stroke="#6ea8fe"/>
+    <text x="180" y="320" font-size="12" font-weight="700" text-anchor="middle">KeyService.create</text>
+    <text x="180" y="338" font-size="11" fill="#94a3b8" text-anchor="middle">spec: AES-256 / RSA-3072 / EC-P256</text>
+
+    <!-- RoT -->
+    <rect x="80" y="380" width="200" height="40" rx="10" fill="#0b1228" stroke="#334155"/>
+    <text x="180" y="405" font-size="11" text-anchor="middle">Root of Trust wraps DEK</text>
+
+    <!-- Persistence -->
+    <rect x="80" y="450" width="200" height="40" rx="10" fill="#0b1228" stroke="#334155"/>
+    <text x="180" y="475" font-size="11" text-anchor="middle">Postgres stores wrapped DEK</text>
+
+    <!-- Audit -->
+    <rect x="80" y="520" width="200" height="40" rx="10" fill="#0b1228" stroke="#334155"/>
+    <text x="180" y="545" font-size="11" text-anchor="middle">Audit: KeyCreated</text>
+
+    <!-- State chip -->
+    <rect x="80" y="600" width="200" height="64" rx="12" fill="#082f49" stroke="#22d3ee"/>
+    <text x="180" y="624" font-size="11" fill="#94a3b8" text-anchor="middle">key state</text>
+    <text x="180" y="648" font-size="14" font-weight="700" fill="#22d3ee" text-anchor="middle">PreActive &#8594; Active</text>
+
+    <!-- connectors -->
+    <g stroke="#475569" stroke-width="1.2" fill="none" marker-end="url(#arr)">
+      <line x1="180" y1="198" x2="180" y2="226"/>
+      <line x1="180" y1="270" x2="180" y2="296"/>
+      <line x1="180" y1="348" x2="180" y2="376"/>
+      <line x1="180" y1="420" x2="180" y2="446"/>
+      <line x1="180" y1="490" x2="180" y2="516"/>
+      <line x1="180" y1="560" x2="180" y2="596"/>
+    </g>
+  </g>
+
+  <!-- ===================== PHASE 2: USE ===================== -->
+  <g font-family="-apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans-serif" fill="#e7ecff">
+    <rect x="380" y="150" width="200" height="48" rx="10" fill="#1e293b" stroke="#22d3ee"/>
+    <text x="480" y="172" font-size="12" font-weight="700" text-anchor="middle">App / DB / AI agent</text>
+    <text x="480" y="190" font-size="11" fill="#94a3b8" text-anchor="middle">REST &#183; KMIP &#183; MCP</text>
+
+    <rect x="380" y="230" width="200" height="40" rx="10" fill="#0b1228" stroke="#334155"/>
+    <text x="480" y="255" font-size="11" text-anchor="middle">IAM &#183; scopes + key allowlist</text>
+
+    <rect x="380" y="300" width="200" height="48" rx="10" fill="#1e293b" stroke="#22d3ee"/>
+    <text x="480" y="320" font-size="12" font-weight="700" text-anchor="middle">KeyService op</text>
+    <text x="480" y="338" font-size="11" fill="#94a3b8" text-anchor="middle">encrypt &#183; decrypt &#183; sign &#183; verify</text>
+
+    <rect x="380" y="380" width="200" height="40" rx="10" fill="#0b1228" stroke="#334155"/>
+    <text x="480" y="405" font-size="11" text-anchor="middle">DEK loaded &#183; RoT unwraps</text>
+
+    <rect x="380" y="450" width="200" height="40" rx="10" fill="#0b1228" stroke="#334155"/>
+    <text x="480" y="475" font-size="11" text-anchor="middle">Op runs &#183; result returned</text>
+
+    <rect x="380" y="520" width="200" height="40" rx="10" fill="#0b1228" stroke="#334155"/>
+    <text x="480" y="545" font-size="11" text-anchor="middle">Audit: KeyUsed (actor + parent)</text>
+
+    <rect x="380" y="600" width="200" height="64" rx="12" fill="#082f49" stroke="#22d3ee"/>
+    <text x="480" y="624" font-size="11" fill="#94a3b8" text-anchor="middle">key state</text>
+    <text x="480" y="648" font-size="14" font-weight="700" fill="#22d3ee" text-anchor="middle">Active</text>
+
+    <g stroke="#475569" stroke-width="1.2" fill="none" marker-end="url(#arr)">
+      <line x1="480" y1="198" x2="480" y2="226"/>
+      <line x1="480" y1="270" x2="480" y2="296"/>
+      <line x1="480" y1="348" x2="480" y2="376"/>
+      <line x1="480" y1="420" x2="480" y2="446"/>
+      <line x1="480" y1="490" x2="480" y2="516"/>
+      <line x1="480" y1="560" x2="480" y2="596"/>
+    </g>
+  </g>
+
+  <!-- ===================== PHASE 3: ROTATE ===================== -->
+  <g font-family="-apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans-serif" fill="#e7ecff">
+    <rect x="680" y="150" width="200" height="48" rx="10" fill="#1e293b" stroke="#a78bfa"/>
+    <text x="780" y="172" font-size="12" font-weight="700" text-anchor="middle">Operator or schedule</text>
+    <text x="780" y="190" font-size="11" fill="#94a3b8" text-anchor="middle">manual or rotation policy</text>
+
+    <rect x="680" y="230" width="200" height="40" rx="10" fill="#0b1228" stroke="#334155"/>
+    <text x="780" y="255" font-size="11" text-anchor="middle">IAM &#183; rotate permission</text>
+
+    <rect x="680" y="300" width="200" height="48" rx="10" fill="#1e293b" stroke="#a78bfa"/>
+    <text x="780" y="320" font-size="12" font-weight="700" text-anchor="middle">KeyService.rotate</text>
+    <text x="780" y="338" font-size="11" fill="#94a3b8" text-anchor="middle">new version, same key id</text>
+
+    <rect x="680" y="380" width="200" height="40" rx="10" fill="#0b1228" stroke="#334155"/>
+    <text x="780" y="405" font-size="11" text-anchor="middle">RoT wraps new DEK</text>
+
+    <rect x="680" y="450" width="200" height="40" rx="10" fill="#0b1228" stroke="#334155"/>
+    <text x="780" y="475" font-size="11" text-anchor="middle">old version: decrypt-only</text>
+
+    <rect x="680" y="520" width="200" height="40" rx="10" fill="#0b1228" stroke="#334155"/>
+    <text x="780" y="545" font-size="11" text-anchor="middle">Audit: KeyRotated</text>
+
+    <rect x="680" y="600" width="200" height="64" rx="12" fill="#082f49" stroke="#22d3ee"/>
+    <text x="780" y="624" font-size="11" fill="#94a3b8" text-anchor="middle">key state</text>
+    <text x="780" y="648" font-size="14" font-weight="700" fill="#22d3ee" text-anchor="middle">Active (vN+1)</text>
+
+    <g stroke="#475569" stroke-width="1.2" fill="none" marker-end="url(#arr)">
+      <line x1="780" y1="198" x2="780" y2="226"/>
+      <line x1="780" y1="270" x2="780" y2="296"/>
+      <line x1="780" y1="348" x2="780" y2="376"/>
+      <line x1="780" y1="420" x2="780" y2="446"/>
+      <line x1="780" y1="490" x2="780" y2="516"/>
+      <line x1="780" y1="560" x2="780" y2="596"/>
+    </g>
+  </g>
+
+  <!-- ===================== PHASE 4: RETIRE ===================== -->
+  <g font-family="-apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans-serif" fill="#e7ecff">
+    <rect x="980" y="150" width="180" height="48" rx="10" fill="#1e293b" stroke="#fb923c"/>
+    <text x="1070" y="172" font-size="12" font-weight="700" text-anchor="middle">Operator</text>
+    <text x="1070" y="190" font-size="11" fill="#94a3b8" text-anchor="middle">deactivate &#8594; destroy</text>
+
+    <rect x="980" y="230" width="180" height="40" rx="10" fill="#0b1228" stroke="#334155"/>
+    <text x="1070" y="255" font-size="11" text-anchor="middle">IAM &#183; destroy permission</text>
+
+    <rect x="980" y="300" width="180" height="48" rx="10" fill="#1e293b" stroke="#fb923c"/>
+    <text x="1070" y="320" font-size="12" font-weight="700" text-anchor="middle">KeyService.deactivate</text>
+    <text x="1070" y="338" font-size="11" fill="#94a3b8" text-anchor="middle">no new ops accepted</text>
+
+    <rect x="980" y="380" width="180" height="40" rx="10" fill="#0b1228" stroke="#334155"/>
+    <text x="1070" y="405" font-size="11" text-anchor="middle">Grace window passes</text>
+
+    <rect x="980" y="450" width="180" height="40" rx="10" fill="#0b1228" stroke="#334155"/>
+    <text x="1070" y="475" font-size="11" text-anchor="middle">KeyService.destroy</text>
+
+    <rect x="980" y="520" width="180" height="40" rx="10" fill="#0b1228" stroke="#334155"/>
+    <text x="1070" y="545" font-size="11" text-anchor="middle">Audit: KeyDestroyed</text>
+
+    <rect x="980" y="600" width="180" height="64" rx="12" fill="#3f1d1d" stroke="#fb923c"/>
+    <text x="1070" y="624" font-size="11" fill="#94a3b8" text-anchor="middle">key state</text>
+    <text x="1070" y="648" font-size="14" font-weight="700" fill="#fb923c" text-anchor="middle">Destroyed</text>
+
+    <g stroke="#475569" stroke-width="1.2" fill="none" marker-end="url(#arr)">
+      <line x1="1070" y1="198" x2="1070" y2="226"/>
+      <line x1="1070" y1="270" x2="1070" y2="296"/>
+      <line x1="1070" y1="348" x2="1070" y2="376"/>
+      <line x1="1070" y1="420" x2="1070" y2="446"/>
+      <line x1="1070" y1="490" x2="1070" y2="516"/>
+      <line x1="1070" y1="560" x2="1070" y2="596"/>
+    </g>
+  </g>
+
+  <!-- Animated packets traveling down each phase column -->
+  <g filter="url(#glow)">
+    <!-- Phase 1 packet (blue) -->
+    <g transform="translate(180,0)">
+      <circle r="6" fill="#6ea8fe">
+        <animateMotion dur="9s" repeatCount="indefinite" rotate="auto">
+          <mpath xlink:href="#lane"/>
+        </animateMotion>
+        <animate attributeName="opacity" values="0;1;1;1;1;1;0" keyTimes="0;0.05;0.2;0.5;0.8;0.95;1" dur="9s" repeatCount="indefinite"/>
+      </circle>
+    </g>
+    <!-- Phase 2 packet (cyan) -->
+    <g transform="translate(480,0)">
+      <circle r="6" fill="#22d3ee">
+        <animateMotion dur="9s" begin="1.5s" repeatCount="indefinite" rotate="auto">
+          <mpath xlink:href="#lane"/>
+        </animateMotion>
+        <animate attributeName="opacity" values="0;1;1;1;1;1;0" keyTimes="0;0.05;0.2;0.5;0.8;0.95;1" dur="9s" begin="1.5s" repeatCount="indefinite"/>
+      </circle>
+    </g>
+    <!-- Phase 3 packet (purple) -->
+    <g transform="translate(780,0)">
+      <circle r="6" fill="#a78bfa">
+        <animateMotion dur="9s" begin="3s" repeatCount="indefinite" rotate="auto">
+          <mpath xlink:href="#lane"/>
+        </animateMotion>
+        <animate attributeName="opacity" values="0;1;1;1;1;1;0" keyTimes="0;0.05;0.2;0.5;0.8;0.95;1" dur="9s" begin="3s" repeatCount="indefinite"/>
+      </circle>
+    </g>
+    <!-- Phase 4 packet (orange) -->
+    <g transform="translate(1070,0)">
+      <circle r="6" fill="#fb923c">
+        <animateMotion dur="9s" begin="4.5s" repeatCount="indefinite" rotate="auto">
+          <mpath xlink:href="#lane"/>
+        </animateMotion>
+        <animate attributeName="opacity" values="0;1;1;1;1;1;0" keyTimes="0;0.05;0.2;0.5;0.8;0.95;1" dur="9s" begin="4.5s" repeatCount="indefinite"/>
+      </circle>
+    </g>
+  </g>
+
+  <!-- Footer legend -->
+  <g font-family="-apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', sans-serif" font-size="11" fill="#94a3b8">
+    <text x="40" y="730">
+      Every step is authorized by IAM and recorded in the append-only audit log. Agent identities carry a back-pointer to the human who issued them, so every key use is traceable to a real person.
+    </text>
+  </g>
+</svg>
