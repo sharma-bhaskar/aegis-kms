@@ -72,6 +72,98 @@ Only the *wrapped* DEK (encrypted under the RoT's master key) is persisted to Po
 
 **BYOK** — if you already have key material (compliance escrow, legacy migration, customer-managed keys), import it via REST `POST /v1/keys/import`, KMIP `Register`, or `aegis key import`. The imported key is wrapped by the configured RoT before being persisted, so escrow material never sits in Postgres in plaintext.
 
+## Using Aegis-KMS
+
+Four ways to use it, depending on who you are. End-to-end walkthrough with auth setup, full options, and common patterns is in [docs/USAGE.md](docs/USAGE.md).
+
+### As an app developer — REST + SDK
+
+Create a key, activate it, sign with it. Tokens are standard OIDC bearer tokens issued by your existing IdP (Okta, Auth0, Google Workspace, Azure AD, AWS IAM Identity Center).
+
+```bash
+export AEGIS_URL=https://aegis.your-org.internal
+export AEGIS_TOKEN=$(your-oidc-flow)
+
+# create
+curl -X POST $AEGIS_URL/v1/keys \
+  -H "Authorization: Bearer $AEGIS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"alias":"invoice-signing","spec":{"algorithm":"EC","curve":"P-256","usage":["Sign","Verify"]}}'
+
+# activate
+curl -X POST $AEGIS_URL/v1/keys/<id>/activate -H "Authorization: Bearer $AEGIS_TOKEN"
+
+# sign
+curl -X POST $AEGIS_URL/v1/keys/<id>/sign \
+  -H "Authorization: Bearer $AEGIS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"message":"<base64>","algorithm":"ECDSA-SHA256"}'
+```
+
+Or from Scala / Java via the SDK:
+
+```scala
+import cats.effect.IO
+import dev.aegiskms.sdk.{AegisClient, AegisConfig}
+import dev.aegiskms.core.KeySpec
+
+val client = AegisClient[IO](AegisConfig(url, token))
+for
+  k   <- client.keys.create(KeySpec.ec256("invoice-signing"))
+  _   <- client.keys.activate(k.id)
+  sig <- client.keys.sign(k.id, message = bytes)
+yield sig
+```
+
+Rotation runs in the background per the key's policy; old versions stay verify-only, new versions sign. Your application code never changes.
+
+### As an operator — `aegis-cli`
+
+Day-to-day key management without writing code.
+
+```bash
+aegis login                                                      # OIDC device-code flow
+aegis key create invoice-signing --spec ec-p256 --usage sign,verify
+aegis key activate <id>
+aegis key list --state Active
+aegis key rotate <id>                                            # new version; old becomes verify-only
+aegis key deactivate <id>
+aegis key destroy <id>                                           # terminal; audit row preserved forever
+aegis audit --actor alice@org --since 24h
+aegis agent issue --parent alice@org --scopes "key:<id>:sign" --ttl 1h
+```
+
+### As an AI agent — MCP
+
+The operator issues a scoped, short-lived agent credential. The MCP client (Claude Desktop, Cursor, any MCP host) is configured to point at Aegis-KMS and uses that credential.
+
+```jsonc
+// claude_desktop_config.json
+{
+  "mcpServers": {
+    "aegis-kms": {
+      "command": "aegis-mcp-bridge",
+      "args": ["--url", "https://aegis.your-org.internal", "--token-env", "AEGIS_AGENT_JWT"]
+    }
+  }
+}
+```
+
+The agent sees tools like `create_key`, `sign`, `verify`, `rotate`, `list_keys`. Every call is gated by IAM against the agent's allowlist, audited under the agent's identity, and joined back to the parent human in the audit log. Scopes the agent doesn't have produce a hard `403 AccessDenied` — the LLM sees a clear error and the audit log records the denial.
+
+### As a storage / database / backup vendor — KMIP
+
+Point your existing KMIP client at Aegis-KMS — no code changes.
+
+```
+Host:      aegis.your-org.internal
+Port:      5696
+TLS:       1.3, mTLS (client cert via `aegis cert issue --cn <name>`)
+Versions:  KMIP 1.4 / 2.0 / 2.1 / 2.2 / 3.0 (auto-negotiated)
+```
+
+Standard `Create`, `Get`, `Activate`, `Encrypt`, `Decrypt`, `Register`, `Destroy` all work. Your storage array, database TDE deployment, or backup product talks to Aegis-KMS the same way it talks to any KMIP-conformant KMS.
+
 ## How it compares
 
 A short comparison against the alternatives an OSS-leaning team would already be evaluating. Deeper writeup in [docs/ARCHITECTURE.md §10](docs/ARCHITECTURE.md#10-how-aegis-kms-compares).
