@@ -66,7 +66,43 @@ All four planes terminate at the same `KeyService[F[_]]` algebra. They differ in
 
 Two AI surfaces is intentional. **MCP** is the standard contract Claude and other MCP-aware clients already speak, and exposing it means any MCP host can use Aegis-KMS without writing custom integration code. The **Agent-AI** plane serves agents that aren't MCP-native and benefits from richer KMS-specific affordances — envelope-encryption helpers, structured rationales, batch operations — that don't fit neatly into MCP's tool-call shape.
 
-## 3. AI agents and MCP
+## 3. Key lifecycle — how a key actually behaves
+
+A managed key in Aegis-KMS is a state machine, not a bag of bytes. Every operation either reads the current state or transitions it, and every transition produces an audit event.
+
+```
+       create                 activate              schedule rotation
+   ┌──────────►  PreActive  ───────────►  Active  ──────────────┐
+   │                                       │  ▲                 │
+   │                                       │  │                 ▼
+   │                                       │  │             Active'  (new version)
+   │                                       │  │                 │
+   │                                       ▼  │                 │
+   │                                  Deactivated  ◄────────────┘ old version, verify-only
+   │                                       │
+   │                                       ▼  retention period
+   │                                   Compromised? ──► Compromised  (manual)
+   │                                       │
+   │                                       ▼
+   └────────────────────────────────►  Destroyed     audit row preserved forever
+```
+
+Each transition has a single owner and a clear semantic:
+
+- **Create** — a `KeyService.create(spec, principal)` call allocates a `KeyId`, asks the Root of Trust to materialize key bytes (or generate them inside an HSM), wraps the material under the master key, and stores the wrapped blob in the journal. The key starts in `PreActive` — it exists but cannot yet be used for cryptographic operations. This is deliberate: it lets policy engines, auditors, or human operators approve a key before it goes live.
+- **Activate** — a separate operation transitions `PreActive → Active`. From here, `sign`, `verify`, `encrypt`, `decrypt`, `wrap`, `unwrap` are all legal. The wrapped material never leaves the Root of Trust; cryptographic operations happen server-side and only the result crosses the wire.
+- **Rotate** — rotation creates a *new version* of the same logical key. The old version moves to `Deactivated` (still legal for `verify` and `decrypt` so existing ciphertexts and signatures stay readable). The new version becomes `Active` for new `sign` and `encrypt` calls. Rotation is configurable per-key: time-based, operation-count-based, or manual.
+- **Deactivate / Compromise** — `Deactivated` keys can still verify and decrypt; useful during a controlled rotation. `Compromised` is a manual override that locks the key down — it can no longer perform *any* cryptographic operation. A compromise is itself an audit event of the highest severity, with `outcome=Compromised` and the operator who declared it as `actor`.
+- **Destroy** — destruction is the only state from which there is no return. The wrapped material is deleted from the journal; the Root of Trust is asked to destroy the source material. The audit row marking the destruction is kept forever — compliance requires you can prove a key existed and was destroyed cleanly, even decades later.
+
+### What a user actually does
+
+- **An app developer** asks for a key by name and uses it: `kms.create("invoice-signing")`, `kms.activate(id)`, then any number of `kms.sign(id, message)` calls. Rotation, key material lifecycle, and audit are handled entirely by the KMS.
+- **A storage / database vendor** speaks KMIP. Their existing integration code that already talks to Vault Enterprise or Thales CipherTrust works against Aegis-KMS without modification — same TTLV operations, same TLS profile, same key handles.
+- **An operator** uses the CLI or a dashboard built on the Scala/Java SDK. They schedule rotations, approve key creations, revoke compromised keys, and audit who-did-what.
+- **An AI agent** uses MCP tool calls (covered next), with credentials scoped to specific keys, operations, and time windows.
+
+## 4. AI agents and MCP
 
 AI agents are first-class citizens, not bolted on. Three properties make this work:
 
@@ -78,7 +114,7 @@ AI agents are first-class citizens, not bolted on. Three properties make this wo
 
 The result: a Claude or GPT agent can use Aegis-KMS as if it were any other MCP-connected tool, while every action remains attributable, scope-limited, and audited.
 
-## 4. Request lifecycle
+## 5. Request lifecycle
 
 Every request, regardless of plane, follows the same shape:
 
@@ -99,7 +135,7 @@ For a `POST /v1/keys` over REST, the concrete steps are:
 
 KMIP, MCP, and Agent-AI flows differ only in steps 1, 2, and 6 — the framing layer. Steps 3–5 are identical for every plane.
 
-## 5. Audit and logging
+## 6. Audit and logging
 
 Aegis-KMS distinguishes **operational logs** (for engineers) from **audit events** (for compliance and forensics). They have different retention, different consumers, and different write paths.
 
@@ -158,7 +194,7 @@ Every inbound request gets a `request-id` allocated at the plane boundary. It pr
 
 A single `request-id` joins log lines, audit events, and the client-side trace into one timeline.
 
-## 6. Security model
+## 7. Security model
 
 **No raw key material on the wire.** REST and KMIP both return key *handles* (`KeyId`); the actual material lives behind the Root of Trust (AWS KMS, Vault, PKCS#11, etc.). All cryptographic operations are server-side; clients never see plaintext key bytes.
 
@@ -168,7 +204,7 @@ A single `request-id` joins log lines, audit events, and the client-side trace i
 
 **Library-safe tier has no I/O.** `aegis-core` is pure Scala — no Pekko, no JDBC, no HTTP. This makes property tests against `KeyService` cheap, keeps the SDKs slim, and lets embedders decide their own effect type.
 
-## 7. Operational topology
+## 8. Operational topology
 
 ```
                        ┌──────────────────────────────┐
@@ -193,14 +229,62 @@ A single `request-id` joins log lines, audit events, and the client-side trace i
 
 The `ActorSystem` is local to each pod; cross-pod consistency is achieved through the journal — two pods racing on the same `KeyId` conflict at the persistence layer, not via cluster sharding. This is deliberate: a single-pod-first deployment lets KMIP, MCP, and the SDKs ride alongside without waiting on cluster-mode work, and most production deployments run a small fixed pool of pods rather than autoscaling the KMS itself.
 
-## 8. Where to read next
+## 9. Where to read next
 
 - `modules/aegis-core/src/main/scala/dev/aegiskms/core/KeyService.scala` — the algebra everything wires through.
 - `modules/aegis-http/src/main/scala/dev/aegiskms/http/HttpRoutes.scala` — Tapir → pekko-http wiring.
 - `modules/aegis-http/src/test/scala/dev/aegiskms/http/HttpRoutesSpec.scala` — what "done" looks like for each capability's tests.
 - [`architecture.html`](https://sharma-bhaskar.github.io/aegis-kms/architecture.html) — interactive walk-through of one REST request from edge to audit log.
 
-## 9. Status
+## 10. How Aegis-KMS compares
+
+Most teams evaluating Aegis-KMS are also looking at one of: a cloud provider's KMS, HashiCorp Vault, OpenBao, or a focused KMIP server. Here is the honest comparison.
+
+### vs AWS KMS / GCP KMS / Azure Key Vault
+
+These are excellent products if your entire infrastructure lives in a single cloud. Aegis-KMS is for teams that don't have that luxury, or don't want to inherit it.
+
+- **Vendor lock-in.** The proprietary cloud KMSes only work inside their own cloud. Aegis-KMS deploys anywhere a JVM and Postgres can run — your VPC, your colo, an air-gapped sovereign cloud, even a developer laptop.
+- **Cost model.** AWS KMS is $1 per key per month plus $0.03 per 10,000 calls. At sustained API rates this becomes a meaningful line item — and it's a line item that grows with usage instead of with capacity. Aegis-KMS has no per-call cost; you pay for the compute and storage you actually run.
+- **Wire protocol.** None of the cloud KMSes speak KMIP, the OASIS standard storage vendors and database engines have built integrations for. To use AWS KMS with a KMIP-only client (a NetApp filer, an Oracle TDE deployment, a Veeam backup target) you need a proxy or a wrapper service. Aegis-KMS speaks KMIP natively.
+- **AI agent identity.** Cloud KMSes have IAM users and roles. They do not model "an agent acting on behalf of a human" — there's no equivalent of `Principal.Agent` with a mandatory `parentHuman`. If your AI agents need keys, you have to invent the identity model yourself, and audit trails won't naturally answer "what did Alice's agents do today."
+
+### vs HashiCorp Vault / Vault Enterprise
+
+Vault is a general secrets manager that happens to include a transit secrets engine for crypto operations. Aegis-KMS is a purpose-built KMS.
+
+- **Surface area.** Vault does secrets, PKI, SSH CA, database credentials, AppRole, identity federation, and many more things. That breadth is a strength when you need a one-stop shop, and a liability when you don't — every Vault upgrade has surface area you're not using. Aegis-KMS does keys.
+- **License.** Vault moved to BSL in 2023. Vault Enterprise is closed-source and required for the KMIP secrets engine. Aegis-KMS is Apache-2.0 with KMIP in the OSS distribution.
+- **Multiple wire planes share an algebra.** REST, KMIP, MCP, and Agent-AI in Aegis-KMS terminate at the same `KeyService` algebra — they share validation, audit, and identity by construction. Vault's KMIP engine and KV/transit engines are separate code paths with separate semantics.
+- **AI surface.** Vault has no MCP server. To let an LLM agent use Vault you write a custom adapter and design the auth scoping yourself. Aegis-KMS publishes a curated MCP tool set out of the box, with the agent-identity model wired in.
+
+### vs OpenBao
+
+OpenBao is the Linux Foundation's MPL-2.0 fork of Vault, created in response to the BSL relicense. Most of what is true of Vault applies, with two differences:
+
+- OpenBao is fully open-source (MPL-2.0). License-wise it's a peer to Aegis-KMS.
+- OpenBao does not include the KMIP secrets engine — that was Vault Enterprise only and didn't make it into the fork. If you want OSS KMIP, Aegis-KMS is the path.
+
+### vs PyKMIP / Cosmian / EJBCA
+
+These are KMIP-focused servers, similar in scope to Aegis-KMS's KMIP plane.
+
+- They are KMIP-only. Aegis-KMS adds REST, MCP, and Agent-AI on the same core — one deployment serves storage vendors, application developers, and AI agents simultaneously, with one audit trail.
+- They are written in Python (PyKMIP), Rust (Cosmian), or Java (EJBCA). Aegis-KMS is Scala 3 with a JVM library tier — embeddable in any JVM application as a dependency, not just as a server.
+
+### vs Tink / BouncyCastle
+
+Different category, mentioned because the question comes up. Tink and BouncyCastle are cryptographic libraries — algorithms, modes, and primitives. They have no notion of key lifecycle, identity, audit, or centralized policy. Aegis-KMS uses libraries like these underneath; it provides the surrounding infrastructure that turns "I can call AES-GCM" into "I can manage 50 keys across 12 services with policy and audit."
+
+### When *not* to use Aegis-KMS
+
+Honest counter-positioning:
+
+- **You are 100% on one cloud and don't anticipate moving.** AWS KMS is well-integrated with AWS services. Don't fight gravity.
+- **You already run Vault Enterprise and use a small fraction of it.** The cost of operating two systems may exceed the cost of staying on Vault.
+- **You need a general secrets manager (database creds, dynamic secrets, SSH CA).** Aegis-KMS is intentionally narrow. Pair it with a secrets manager rather than expecting one tool to do both.
+
+## 11. Status
 
 What's implemented today vs. what the design above describes. This is the only place in the document that talks about implementation phasing.
 

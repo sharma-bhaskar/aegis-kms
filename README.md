@@ -27,6 +27,21 @@ behalf. Aegis-KMS aims to be:
 - **LLM-friendly** — built-in MCP server surface so Claude and other MCP
   clients can use the KMS as a tool.
 
+## How it compares
+
+A short comparison against the alternatives an OSS-leaning team would already be evaluating. Deeper writeup in [docs/ARCHITECTURE.md §10](docs/ARCHITECTURE.md#10-how-aegis-kms-compares).
+
+| Capability | Cloud KMS<br/>(AWS / GCP / Azure) | Vault Enterprise | OpenBao | **Aegis-KMS** |
+| --- | --- | --- | --- | --- |
+| License | Proprietary | BSL | MPL-2.0 | **Apache-2.0** |
+| Self-hostable / air-gapped | No | Yes | Yes | **Yes** |
+| KMIP 1.4 / 2.x wire protocol | No | Enterprise only | No | **Yes** |
+| MCP server for AI agents | No | No | No | **Yes** |
+| Agent identity tied to a human operator | No | No | No | **Yes** |
+| Embeddable as a JVM library | No | No | No | **Yes** |
+| Pluggable root of trust (AWS / GCP / Azure / Vault / PKCS#11) | Single only | Enterprise | Limited | **Yes** |
+| Per-operation cost | $$ per API call | License + ops | Ops only | **Ops only** |
+
 ## Modules
 
 | Module | Purpose | Depends on Pekko? |
