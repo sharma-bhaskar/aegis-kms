@@ -40,6 +40,38 @@ A key in Aegis-KMS moves through four phases, and every transition is gated by I
 
 The same `KeyService` algebra is reached from all four wire planes, which is why an AI agent calling over MCP is subject to exactly the same IAM checks and audit trail as a human operator calling over REST.
 
+## Which wire do I use?
+
+Most users only need one. KMIP is infrastructure plumbing; if you're writing application code, use REST or the SDK.
+
+| You are... | Use | Why |
+| --- | --- | --- |
+| App developer (any language with HTTP / a JVM SDK) | **REST + SDK** | JSON over HTTPS, OpenAPI generated, easy to adopt |
+| AI agent or LLM tool | **MCP** | Native tool-use surface; scoped agent identity with mandatory parent-human linkage |
+| Storage array · database TDE · backup product · tape library · HSM proxy | **KMIP** | Your product already speaks KMIP — Aegis-KMS is a drop-in replacement for Vault Enterprise or Thales CipherTrust |
+| Custom tool-use / agent framework that isn't MCP-native | **Agent-AI** | Function-call shape with richer KMS-specific affordances |
+
+KMIP is an OASIS binary protocol from 2010 (TTLV framing over mTLS). It exists because **storage vendors** (NetApp, Dell EMC, Pure Storage), **databases** (Oracle TDE, MSSQL EKM, MongoDB Enterprise), **backup systems** (Veeam, Commvault, Veritas), and **tape libraries** needed a standard way to talk to a KMS without each one inventing its own protocol. If you are not one of those things, you almost certainly want REST or the SDK, not KMIP.
+
+KMIP is **optional** in any deployment — disable the listener in config and the rest of Aegis-KMS works exactly the same.
+
+## Where do keys come from?
+
+Aegis-KMS itself does **not** generate key material. It delegates to a pluggable **Root of Trust** (RoT). The same `KeyService` API runs against any of these — you swap the RoT, not the KMS.
+
+| RoT provider | How a key is generated | Plaintext exposure |
+| --- | --- | --- |
+| `software` (dev / test) | JCE `SecureRandom` (CSPRNG, `/dev/urandom` on Linux) | In JVM memory briefly during the op |
+| `aws-kms` | `GenerateDataKey` against an AWS KMS CMK; AWS HSMs generate the DEK | Plaintext used in-process, then discarded |
+| `gcp-kms` | Cloud KMS `Encrypt`/`Decrypt` against a CryptoKey | Same |
+| `azure-keyvault` | HSM-backed key operations | Same |
+| `vault-transit` | HashiCorp Vault generates and wraps | Same |
+| `pkcs11` | `C_GenerateKey` inside a real HSM (Thales, Entrust, YubiHSM, AWS CloudHSM, SoftHSM for dev) | **Never leaves the HSM** |
+
+Only the *wrapped* DEK (encrypted under the RoT's master key) is persisted to Postgres. On every operation the wrapped DEK is loaded, unwrapped by the RoT (often inside HSM memory), used, then forgotten.
+
+**BYOK** — if you already have key material (compliance escrow, legacy migration, customer-managed keys), import it via REST `POST /v1/keys/import`, KMIP `Register`, or `aegis key import`. The imported key is wrapped by the configured RoT before being persisted, so escrow material never sits in Postgres in plaintext.
+
 ## How it compares
 
 A short comparison against the alternatives an OSS-leaning team would already be evaluating. Deeper writeup in [docs/ARCHITECTURE.md §10](docs/ARCHITECTURE.md#10-how-aegis-kms-compares).

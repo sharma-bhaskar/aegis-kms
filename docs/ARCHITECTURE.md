@@ -66,6 +66,20 @@ All four planes terminate at the same `KeyService[F[_]]` algebra. They differ in
 
 Two AI surfaces is intentional. **MCP** is the standard contract Claude and other MCP-aware clients already speak, and exposing it means any MCP host can use Aegis-KMS without writing custom integration code. The **Agent-AI** plane serves agents that aren't MCP-native and benefits from richer KMS-specific affordances — envelope-encryption helpers, structured rationales, batch operations — that don't fit neatly into MCP's tool-call shape.
 
+### When KMIP matters (and when it doesn't)
+
+KMIP is **infrastructure plumbing**, not an application API. It exists for a specific class of consumer:
+
+- **Storage arrays.** NetApp, Dell EMC, HPE, Pure Storage all encrypt data at rest and need somewhere to store the wrapping keys. Their firmware is built around KMIP because it's the OASIS standard.
+- **Database TDE.** Oracle TDE, Microsoft SQL Server EKM, MongoDB Enterprise, Percona pgcrypto integrations, and IBM Db2 all support KMIP for the master encryption key.
+- **Backup systems.** Veeam, Commvault, Veritas, Rubrik all keep encrypted backups and consult a KMIP server for the keys.
+- **Tape libraries.** LTO encryption (LTO-4 onward) was built around the assumption of a KMIP key manager.
+- **HSM proxies and gateways.** Products that need to surface an HSM as a KMS to other tools.
+
+If you are *not* one of those things — if you are an app developer, a microservice author, a CLI tool, an AI agent, or a script — KMIP is the wrong wire for you. You want REST/SDK or MCP. KMIP exists in Aegis-KMS so that the storage and database products in your environment can keep working without a proprietary KMS, not because it's the recommended interface for new application code.
+
+In a deployment that has no storage / DB / backup / tape consumers, the KMIP listener can be disabled in configuration and the rest of the system runs unchanged.
+
 ## 3. Key lifecycle — how a key actually behaves
 
 A managed key in Aegis-KMS is a state machine, not a bag of bytes. Every operation either reads the current state or transitions it, and every transition produces an audit event.
@@ -101,6 +115,33 @@ Each transition has a single owner and a clear semantic:
 - **A storage / database vendor** speaks KMIP. Their existing integration code that already talks to Vault Enterprise or Thales CipherTrust works against Aegis-KMS without modification — same TTLV operations, same TLS profile, same key handles.
 - **An operator** uses the CLI or a dashboard built on the Scala/Java SDK. They schedule rotations, approve key creations, revoke compromised keys, and audit who-did-what.
 - **An AI agent** uses MCP tool calls (covered next), with credentials scoped to specific keys, operations, and time windows.
+
+### Where keys come from
+
+Aegis-KMS does **not** generate key material itself. It delegates to a pluggable **Root of Trust** (RoT), exposed by `aegis-crypto` as an SPI. The same `KeyService.create` call produces very different security properties depending on which RoT is configured:
+
+| RoT provider | How a fresh DEK is generated | Where plaintext lives |
+| --- | --- | --- |
+| `software` (dev / test) | JCE `SecureRandom` (CSPRNG, `/dev/urandom` on Linux) | In JVM heap during the operation, then zeroed |
+| `aws-kms` | `GenerateDataKey` against an AWS KMS CMK; AWS HSMs (CloudHSM-backed) generate it | Returned plaintext used in-process, immediately discarded |
+| `gcp-kms` | Cloud KMS `Encrypt`/`Decrypt` against a CryptoKey | Same |
+| `azure-keyvault` | HSM-backed key operations | Same |
+| `vault-transit` | HashiCorp Vault generates and wraps | Same |
+| `pkcs11` | `C_GenerateKey` inside a real HSM (Thales Luna, Entrust nShield, YubiHSM, AWS CloudHSM, SoftHSM for dev) | **Never leaves the HSM** — every crypto op runs inside the device |
+
+Only the *wrapped* DEK (encrypted under the RoT's master key) is persisted in the journal. On every subsequent operation, the wrapped DEK is fetched, unwrapped by the RoT (often inside HSM memory), used for the requested op, then forgotten. This is the property that makes the same `KeyService` algebra appropriate for a developer laptop and for a FIPS 140-2 Level 3 deployment — the algebra doesn't change, the RoT does.
+
+**RoT choice is the single biggest security knob.** A software RoT offers no FIPS attestation, no hardware tamper resistance, and no protection against a compromised host extracting key bytes. A PKCS#11 RoT against a FIPS Level 3 HSM gives you all three. Aegis-KMS treats this as a deployment decision, not a code change.
+
+### Bring Your Own Key (BYOK)
+
+Some keys aren't generated — they're imported. Use cases include compliance/legal escrow, customer-managed keys ("HYOK"), and migrations from a previous KMS. Aegis-KMS supports import on every plane:
+
+- **REST** — `POST /v1/keys/import` with the wrapped key material.
+- **KMIP** — standard `Register` operation.
+- **CLI** — `aegis key import --from <file>`.
+
+Imported material is rewrapped by the configured RoT before being persisted, so escrow material never sits in Postgres in plaintext.
 
 ## 4. AI agents and MCP
 
