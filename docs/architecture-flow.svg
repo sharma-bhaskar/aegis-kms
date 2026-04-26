@@ -31,7 +31,7 @@
 
   <!-- Title -->
   <text class="title" x="32" y="38">Aegis-KMS · POST /v1/keys</text>
-  <text class="stamp" x="32" y="58">request → decode → KeyService → store → audit + log → response &nbsp;·&nbsp; loops every 12s</text>
+  <text class="stamp" x="32" y="58">request → decode → KeyService → store → audit + log → response &#160;·&#160; loops every 12s</text>
 
   <!-- =================== EDGES (drawn first so nodes overlay) =================== -->
   <!-- 1: client → http  -->
