@@ -7,9 +7,9 @@ library or as a standalone server, with first-class support for AI agents.
 
 ## Architecture at a glance
 
-![Aegis-KMS request flow — animated](docs/architecture-flow.svg)
+![Aegis-KMS — system surfaces, animated](docs/architecture-flow.svg)
 
-A `POST /v1/keys` travels client → `aegis-http` (Tapir + pekko) → JSON decode → `KeyService[IO]` → in-memory store, then emits an `AuditEvent` to `aegis-audit` and a JSON log line via slf4j. The dashed module is `KeyOpsActor` (PR #2 — planned). For deeper reading: [written overview](docs/ARCHITECTURE.md) · [interactive step-through with narration](https://sharma-bhaskar.github.io/aegis-kms/architecture.html).
+Apps and operators reach Aegis-KMS over **REST**, storage and database vendors over **KMIP**, AI agents over **MCP**, and custom tool-use frameworks over the **Agent-AI** plane. All four converge through IAM into a single audited `KeyService`, which writes through to a Postgres event journal and a pluggable Root of Trust (AWS KMS, GCP, Azure, Vault, PKCS#11). Every state change emits an `AuditEvent` with the actor identity preserved end to end — agent identities always carry a back-pointer to the human who issued them. Deeper reading: [architecture overview](docs/ARCHITECTURE.md) · [interactive walk-through](https://sharma-bhaskar.github.io/aegis-kms/architecture.html).
 
 ## Why
 

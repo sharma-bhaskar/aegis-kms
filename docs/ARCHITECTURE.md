@@ -1,12 +1,12 @@
 # Aegis-KMS — Architecture
 
-> Status: **PR #1 (HTTP vertical slice) merged.** This document describes the target architecture; sections marked **(planned)** are not yet implemented but the module skeletons exist and the boundaries are already enforced by the build.
+Aegis-KMS is a key management service designed for a world where humans, services, storage vendors, and AI agents all need to use the same keys safely. Four protocol planes (REST, KMIP, MCP, Agent-AI) terminate at a single audited core. The core is split into a library-safe tier (algebras, codecs, SDKs) that any JVM application can embed, and a server tier that adds wire protocols, persistence, and a pluggable root-of-trust.
 
-Aegis-KMS is a Scala 3 / Pekko Typed key management service with four wire-protocol planes — REST, KMIP TTLV, MCP (for AI agents), and a low-level agent-AI plane — sharing a single audited key-operations core. It is a clean-room successor to the legacy uKM project and is laid out so that the library-safe tier (algebras, codecs, SDKs) can be consumed without dragging in Pekko.
+This document describes the system the project is building toward. For current implementation state, see [§9 Status](#9-status).
 
 ## 1. Module layout
 
-The build is split into two tiers. The split is enforced at build time: anything in the library-safe tier that accidentally pulls in Pekko will fail to compile because Pekko isn't on its classpath.
+The build is split into two tiers. The split is enforced at build time: anything in the library-safe tier that imports Pekko fails to compile because Pekko isn't on its classpath. This guarantees `aegis-core` and the SDKs stay slim enough to embed in any JVM app.
 
 ```
                      ┌────────────────────────────────────────────────────────┐
@@ -16,8 +16,8 @@ The build is split into two tiers. The split is enforced at build time: anything
                              │           │           │           │
                 ┌────────────▼─┐  ┌──────▼─────┐  ┌──▼───────┐  ┌▼──────────┐
    server tier  │  aegis-http  │  │ aegis-kmip │  │ aegis-   │  │ aegis-    │
-  (Pekko-aware) │  (Tapir +    │  │ (TTLV +    │  │ mcp-     │  │ agent-ai  │
-                │   pekko-http)│  │  TLS)      │  │ server   │  │           │
+  (Pekko-aware) │  Tapir +     │  │ TTLV + TLS │  │ mcp-     │  │ agent-ai  │
+                │  pekko-http  │  │            │  │ server   │  │           │
                 └──────┬───────┘  └─────┬──────┘  └────┬─────┘  └─────┬─────┘
                        │                │              │              │
                        └────────┬───────┴──────────────┴──────────────┘
@@ -30,107 +30,101 @@ The build is split into two tiers. The split is enforced at build time: anything
    ┌────────▼─────┐  ┌─────▼─────┐  ┌─────▼──────┐  ┌──────────┐  ┌──────────┐
    │ aegis-       │  │ aegis-    │  │ aegis-     │  │ aegis-   │  │ aegis-   │
    │ persistence  │  │ crypto    │  │ iam        │  │ audit    │  │ sdk-*    │
-   │ (Doobie/PG)  │  │ (AWS KMS, │  │ (OIDC,JWT) │  │ (event   │  │ (Scala + │
-   │              │  │  jjwt)    │  │            │  │  log)    │  │   Java)  │
+   │ Doobie / PG  │  │ Root of   │  │ OIDC, JWT, │  │ event    │  │ Scala +  │
+   │              │  │  Trust    │  │ agent ID   │  │ log      │  │ Java     │
    └──────────────┘  └───────────┘  └────────────┘  └──────────┘  └──────────┘
             ────────────  library-safe tier (no Pekko)  ────────────
 ```
 
-| Module | Tier | Today | Target |
+| Module | Tier | Purpose |
+| --- | --- | --- |
+| `aegis-core` | library | `KeyService[F[_]]` algebra, `ManagedKey`, `KmsError`, `Principal`. The contract every plane terminates at. |
+| `aegis-persistence` | library | Doobie + Postgres event journal and read model. |
+| `aegis-crypto` | library | Pluggable Root-of-Trust: AWS KMS, GCP KMS, Azure Key Vault, HashiCorp Vault, PKCS#11, local file (dev). |
+| `aegis-iam` | library | OIDC verifier, JWT signer, agent-identity issuer, policy evaluator. |
+| `aegis-audit` | library | Append-only audit event sink, decoupled from the journal. |
+| `aegis-sdk-scala` / `aegis-sdk-java` | library | Thin clients over the REST surface, no Pekko. |
+| `aegis-http` | server | Tapir endpoint definitions + pekko-http interpreter, OpenAPI advertised. |
+| `aegis-kmip` | server | KMIP 1.4 / 2.0 / 2.1 / 3.0 with version negotiation, TTLV codec, TLS server. |
+| `aegis-mcp-server` | server | Model Context Protocol surface exposing KMS tools to LLM clients. |
+| `aegis-agent-ai` | server | Lower-level agent-AI plane: function-call shape, richer KMS-specific affordances. |
+| `aegis-server` | server | Boot wiring; sbt-native-packager produces a Docker image. |
+| `aegis-cli` | tool | Operator CLI built on `aegis-sdk-scala`. |
+
+Pekko alignment is enforced by `dependencyOverrides` in `build.sbt` so a transitive bump in any single artifact can't desynchronize the actor system at runtime.
+
+## 2. Wire-protocol planes
+
+All four planes terminate at the same `KeyService[F[_]]` algebra. They differ in framing, auth flow, and which subset of operations they expose.
+
+| Plane | Framing | Auth | Audience |
 | --- | --- | --- | --- |
-| `aegis-core` | library | `KeyService[F[_]]`, `ManagedKey`, `KmsError`, `Principal`, in-memory ref impl | Stable algebra, no behaviour change |
-| `aegis-persistence` | library | empty | Doobie + Postgres event journal & read model (PR #3) |
-| `aegis-crypto` | library | empty | AWS KMS RoT + local-file RoT, JWT signer (PR #4) |
-| `aegis-iam` | library | empty | OIDC verifier, agent-identity issuer (PR #5) |
-| `aegis-audit` | library | empty | Append-only audit event sink |
-| `aegis-sdk-scala` / `aegis-sdk-java` | library | empty | Thin clients for the REST surface |
-| `aegis-http` | server | Tapir endpoints + pekko-http interpreter, 7 route tests | + auth, + rate limits |
-| `aegis-kmip` | server | empty | KMIP 1.4 / 2.0 / 2.1 / 3.0 with version negotiation (PR-K1…K5) |
-| `aegis-mcp-server` | server | empty | Model Context Protocol server exposing KMS tools to LLMs |
-| `aegis-agent-ai` | server | empty | Lower-level agent-AI plane (function-call style) |
-| `aegis-server` | server | Boot wiring + smoke spec | sbt-native-packager Docker image |
-| `aegis-cli` | tool | empty | Operator CLI built on `aegis-sdk-scala` |
+| REST (`aegis-http`) | JSON over HTTP/1.1, OpenAPI advertised | OIDC bearer or agent-issued JWT | App developers, dashboards, CLI |
+| KMIP (`aegis-kmip`) | TTLV over TLS 1.3, mTLS | Client certificate | Storage vendors, databases, backup |
+| MCP (`aegis-mcp-server`) | JSON-RPC 2.0 over stdio or SSE | Agent JWT scoped to a session | LLM agents (Claude, GPT, etc.) |
+| Agent-AI (`aegis-agent-ai`) | JSON over HTTP, function-call shape | Agent JWT | Custom tool-use frameworks |
 
-Pekko alignment is enforced via `ThisBuild / dependencyOverrides` in `build.sbt` so a transitive bump in any single artifact can't desynchronize the actor system at runtime.
+Two AI surfaces is intentional. **MCP** is the standard contract Claude and other MCP-aware clients already speak, and exposing it means any MCP host can use Aegis-KMS without writing custom integration code. The **Agent-AI** plane serves agents that aren't MCP-native and benefits from richer KMS-specific affordances — envelope-encryption helpers, structured rationales, batch operations — that don't fit neatly into MCP's tool-call shape.
 
-## 2. Request lifecycle (REST plane, today)
+## 3. AI agents and MCP
 
-```
- client                pekko-http              Tapir server                 KeyService          in-memory
-                                              endpoint                       [IO]                store
-   │                       │                       │                           │                   │
-   │── POST /v1/keys ─────►│                       │                           │                   │
-   │   {spec…}             │── route match ───────►│                           │                   │
-   │                       │                       │── decode CreateKeyRequest │                   │
-   │                       │                       │   .toCore : KeySpec       │                   │
-   │                       │                       │── principalOf(X-Aegis-User) ─┐                │
-   │                       │                       │                           │  │                │
-   │                       │                       │── svc.create(spec, princ) ────►│              │
-   │                       │                       │                           │  │── put ─────────►│
-   │                       │                       │                           │◄─┤                │
-   │                       │                       │◄── Right(ManagedKey) ──────  │                │
-   │                       │                       │                           │  │                │
-   │                       │                       │── ManagedKeyDto.fromCore ──                   │
-   │                       │◄── 201 + JSON ────────│                                                │
-   │◄── 201 + JSON ────────│                                                                       │
-                                                          (audit emission planned — see §4)
-```
+AI agents are first-class citizens, not bolted on. Three properties make this work:
 
-Key points:
+**Identity.** Every agent action carries a `Principal.Agent(sub, parentHuman, scopes)`. The `parentHuman` is the operator who issued the agent its credential, and that link is mandatory — every audit query "everything done on behalf of alice" trivially includes everything her agents did. There is no anonymous agent identity.
 
-- **Wire DTOs are decoupled from core** (`JsonCodecs.scala`). The REST contract can evolve without touching `aegis-core`. Every DTO has explicit `fromCore` / `toCore` so the boundary is testable.
-- **Errors are mapped, not leaked.** `KmsError` (a closed ADT in `aegis-core`) maps to HTTP status codes inside `HttpRoutes.errorOut`. `ItemNotFound → 404`, `PermissionDenied → 403`, `AuthenticationNotSuccessful → 401`, validation → 400, default → 500.
-- **Effects.** `KeyService[IO]` runs on the Cats Effect runtime. Tapir's pekko-http interpreter wants `Future`, so server logic does `io.unsafeToFuture()` at the boundary. The actor tier (PR #2) will route commands through `EventSourcedBehavior` and the IO adapter will `ask` the actor.
+**Scoped credentials.** Agents are issued short-lived JWTs with explicit allowlists: which keys, which operations, which time window. An agent that should only sign with one key for the next hour gets a credential that does *exactly* that. The IAM module enforces this on every call before `KeyService` runs.
 
-Once PR #2 lands, the third column above splits into:
+**Tool surface.** The MCP server publishes a curated set of tools — `create_key`, `sign`, `unwrap`, `rotate`, `list_keys` — each one annotated with the permissions it requires and the side effects it produces. An LLM client sees them in the same shape as any other MCP tool, and the host-side approval UI (e.g. Claude's tool-use confirmation) gives the human operator a chance to approve sensitive operations before they run.
+
+The result: a Claude or GPT agent can use Aegis-KMS as if it were any other MCP-connected tool, while every action remains attributable, scope-limited, and audited.
+
+## 4. Request lifecycle
+
+Every request, regardless of plane, follows the same shape:
 
 ```
-KeyService[IO] ── ask ──► KeyOpsActor (EventSourcedBehavior)
-                              │
-                              ├─ command handler  (decides Reply or Persist)
-                              ├─ event handler    (folds events into KeyOpsState)
-                              └─ journal          (in-memory now, Doobie/PG via PR #3)
+client ─► plane terminator ─► IAM (authn + authz) ─► KeyService ─► [persistence + root-of-trust]
+                                                          │
+                                                          └─► AuditEvent ─► audit sink
 ```
 
-## 3. Wire-protocol planes
+For a `POST /v1/keys` over REST, the concrete steps are:
 
-All four planes terminate at the same `KeyService[F[_]]` algebra. They differ only in framing, auth, and which subset of operations they expose.
+1. `aegis-http` matches the route, generates a `request-id`, and parses the JSON body into a wire DTO.
+2. The DTO is validated and translated to the core domain (`KeySpec`); a parse failure short-circuits to `400 InvalidField` and `KeyService` is never called.
+3. IAM resolves the bearer token to a `Principal` and checks the `create_key` permission against policy.
+4. `KeyService.create(spec, principal)` runs. The state-changing event is persisted to the journal first; the audit event is emitted after the persist commits, so the audit log can never describe a key the journal doesn't have.
+5. If the audit sink is unavailable, the operation still commits and the actor records a `PendingAuditDelivery` event for a sweeper. The audit row is delivered late, never lost.
+6. The new `ManagedKey` is mapped back to a wire DTO (`ManagedKeyDto`) and returned with `201 Created`.
 
-| Plane | Framing | Auth (target) | Audience |
-| --- | --- | --- | --- |
-| REST (`aegis-http`) | JSON over HTTP/1.1, OpenAPI advertised | OIDC bearer + agent-issued JWT | App developers, dashboards |
-| KMIP (`aegis-kmip`) | TTLV over TLS 1.3 (mTLS) | Client certificate | Storage, DB, backup vendors |
-| MCP (`aegis-mcp-server`) | JSON-RPC 2.0 over stdio / SSE | Agent-issued JWT scoped to a session | LLM agents (Claude, GPT, etc.) |
-| Agent-AI (`aegis-agent-ai`) | JSON over HTTP, function-call shape | Agent-issued JWT | Custom agents, tool-use frameworks |
+KMIP, MCP, and Agent-AI flows differ only in steps 1, 2, and 6 — the framing layer. Steps 3–5 are identical for every plane.
 
-**Why two AI surfaces?** MCP is the standardized contract; the lower-level agent-AI plane lets us expose richer KMS-specific affordances (e.g. envelope-encryption helpers, structured rationales) that don't fit MCP's tool-call shape.
-
-## 4. Audit and logging
+## 5. Audit and logging
 
 Aegis-KMS distinguishes **operational logs** (for engineers) from **audit events** (for compliance and forensics). They have different retention, different consumers, and different write paths.
 
 ```
-                                                            ┌─ stdout (JSON, pekko-slf4j) ──► loki / cloudwatch
-   any plane ──► HttpRoutes / KmipServer / McpServer ──► logger ─┤
-                            │                                    └─ stderr (errors)
+                                                    ┌─ stdout (JSON, slf4j) ──► loki / cloudwatch / datadog
+   any plane ──► HTTP / KMIP / MCP / Agent ──► logger ─┤
+                            │                          └─ stderr (errors)
                             │
                             ▼
-                     KeyOpsActor (PR #2)
+                       KeyService
                             │
                             │  on every state-changing event
                             ▼
-                  AuditSink (aegis-audit)
+                        audit sink
                             │
-                            ├─► append-only Postgres table  (PR #3)
-                            ├─► fan-out to S3 / object store (planned)
-                            └─► optional SIEM webhook        (planned)
+                            ├─► append-only Postgres table
+                            ├─► fan-out to S3 / object store
+                            └─► optional SIEM webhook
 ```
 
 ### What gets logged vs audited
 
 | Event | Operational log | Audit event |
 | --- | --- | --- |
-| HTTP request received | yes (request ID, method, path, status, ms) | no |
+| HTTP request received | yes (request id, method, path, status, ms) | no |
 | `KeyService.create` succeeded | yes (info) | **yes** (`KeyCreated`) |
 | `KeyService.activate` succeeded | yes (info) | **yes** (`KeyStateChanged`) |
 | `KeyService.destroy` succeeded | yes (info) | **yes** (`KeyDestroyed`) |
@@ -140,7 +134,7 @@ Aegis-KMS distinguishes **operational logs** (for engineers) from **audit events
 | Internal error / unexpected exception | yes (error) | **yes** (`InternalError`) |
 | Root-of-trust unwrap / wrap | yes (debug) | **yes** (`KeyMaterialAccessed`) |
 
-### Audit event shape (target)
+### Audit event shape
 
 ```scala
 final case class AuditEvent(
@@ -154,27 +148,27 @@ final case class AuditEvent(
 )
 ```
 
-Audit events are written **after** the state-changing event has been persisted to the journal (PR #2 + #3). The order is: command → persist event → fold into state → emit audit event → reply. If the audit sink is unavailable, the operation is still committed but the actor records a `PendingAuditDelivery` event that a sweeper retries — the log is append-only and may be late, but is never lost.
-
 ### Correlation
 
-Every inbound request gets a `request-id` (generated at the HTTP/KMIP/MCP boundary). It propagates into:
+Every inbound request gets a `request-id` allocated at the plane boundary. It propagates into:
 
 - the structured log line (MDC),
-- the `AuditEvent.context["request_id"]`,
-- the response header (`X-Request-Id`) so callers can quote it in support tickets.
+- `AuditEvent.context["request_id"]`,
+- the response header (`X-Request-Id` or KMIP `Unique Identifier`) so callers can quote it in support tickets.
 
-### Logging stack
+A single `request-id` joins log lines, audit events, and the client-side trace into one timeline.
 
-`pekko-slf4j` bridges Pekko logging into Logback. `application.conf` already wires `org.apache.pekko.event.slf4j.Slf4jLogger` so `ActorSystem` startup, supervisor restarts, and stream materialization warnings all flow through the same pipeline. Output is JSON-line so a Loki / CloudWatch / Datadog agent can ingest without a custom parser.
+## 6. Security model
 
-## 5. Security model
+**No raw key material on the wire.** REST and KMIP both return key *handles* (`KeyId`); the actual material lives behind the Root of Trust (AWS KMS, Vault, PKCS#11, etc.). All cryptographic operations are server-side; clients never see plaintext key bytes.
 
-- **No raw key material on the wire.** REST and KMIP both return key *handles* (`KeyId`); the actual material lives behind `RootOfTrust` (AWS KMS or a local file-backed RoT for dev). Crypto operations are server-side.
-- **Principals are explicit.** `Principal.Human(sub, roles)` and `Principal.Agent(sub, parentHuman, scopes)` are separate cases — agent identities always carry a back-pointer to the human who issued them, so audit log queries like "everything done on behalf of user `alice`" are a single join.
-- **Library-safe tier has no I/O.** `aegis-core` is pure Scala — no Pekko, no JDBC, no HTTP. This makes property tests against `KeyService` cheap and keeps the SDKs slim.
+**Principals are explicit.** `Principal.Human(sub, roles)` and `Principal.Agent(sub, parentHuman, scopes)` are separate cases — agent identities always carry a back-pointer to the human who issued them. Audit queries like "everything done on behalf of `alice`" are a single join, not a heuristic.
 
-## 6. Operational topology
+**Defense in depth at every plane.** REST and Agent-AI use OIDC-issued bearer tokens; KMIP uses mTLS; MCP uses session-scoped JWTs. All four converge on the same IAM policy check before `KeyService` runs.
+
+**Library-safe tier has no I/O.** `aegis-core` is pure Scala — no Pekko, no JDBC, no HTTP. This makes property tests against `KeyService` cheap, keeps the SDKs slim, and lets embedders decide their own effect type.
+
+## 7. Operational topology
 
 ```
                        ┌──────────────────────────────┐
@@ -193,15 +187,36 @@ Every inbound request gets a `request-id` (generated at the HTTP/KMIP/MCP bounda
                               └────────────────┘
                                       │
                               ┌───────▼────────┐
-                              │  AWS KMS / RoT │  ─── never accessed except through aegis-crypto
+                              │  Root of Trust │  ─── never accessed except through aegis-crypto
                               └────────────────┘
 ```
 
-The Pekko Typed `ActorSystem` is local to each pod; cross-pod consistency is achieved through the journal (PR #3) — two pods racing on the same `KeyId` will conflict at the persistence layer, not via cluster sharding. This is deliberate: shipping single-pod first lets KMIP, MCP, and the SDKs ride alongside without waiting on cluster-mode work.
+The `ActorSystem` is local to each pod; cross-pod consistency is achieved through the journal — two pods racing on the same `KeyId` conflict at the persistence layer, not via cluster sharding. This is deliberate: a single-pod-first deployment lets KMIP, MCP, and the SDKs ride alongside without waiting on cluster-mode work, and most production deployments run a small fixed pool of pods rather than autoscaling the KMS itself.
 
-## 7. Where to read next
+## 8. Where to read next
 
 - `modules/aegis-core/src/main/scala/dev/aegiskms/core/KeyService.scala` — the algebra everything wires through.
-- `modules/aegis-http/src/main/scala/dev/aegiskms/http/HttpRoutes.scala` — Tapir → Pekko-HTTP wiring.
-- `modules/aegis-http/src/test/scala/dev/aegiskms/http/HttpRoutesSpec.scala` — what "done" looks like for each PR's tests.
-- `docs/architecture.html` — animated walk-through of a single REST request from edge to audit log (open in a browser).
+- `modules/aegis-http/src/main/scala/dev/aegiskms/http/HttpRoutes.scala` — Tapir → pekko-http wiring.
+- `modules/aegis-http/src/test/scala/dev/aegiskms/http/HttpRoutesSpec.scala` — what "done" looks like for each capability's tests.
+- [`architecture.html`](https://sharma-bhaskar.github.io/aegis-kms/architecture.html) — interactive walk-through of one REST request from edge to audit log.
+
+## 9. Status
+
+What's implemented today vs. what the design above describes. This is the only place in the document that talks about implementation phasing.
+
+| Capability | Status |
+| --- | --- |
+| `aegis-core` algebra (`KeyService`, `ManagedKey`, `KmsError`, `Principal`) | ✅ Available |
+| In-memory reference `KeyService` for tests and dev | ✅ Available |
+| REST plane (`aegis-http`): create / get / activate / destroy with Tapir + pekko-http | ✅ Available |
+| Server boot wiring (`aegis-server`), HTTP integration tests | ✅ Available |
+| Persistent `KeyOpsActor` with event-sourced state | 🚧 In progress |
+| Doobie + Postgres event journal & read model | 🚧 In progress |
+| Pluggable Root of Trust (AWS KMS first, others via the same SPI) | 🔜 Designed |
+| IAM: OIDC verification, JWT signing, agent-identity issuance | 🔜 Designed |
+| KMIP plane: TTLV codec, schema, operations, TLS server, multi-version | 🔜 Designed |
+| MCP server with curated KMS tool surface | 🔜 Designed |
+| Agent-AI plane | 🔜 Designed |
+| Scala / Java SDKs and operator CLI | 🔜 Designed |
+
+The full system is the point. Anything not yet built is either in active development or has its module skeleton, dependency contract, and tier placement already locked into the build so it can land without disturbing the surrounding code.

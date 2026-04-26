@@ -1,268 +1,414 @@
 <svg xmlns="http://www.w3.org/2000/svg"
      xmlns:xlink="http://www.w3.org/1999/xlink"
-     viewBox="0 0 1000 540" role="img"
-     aria-label="Aegis-KMS request flow: a POST /v1/keys travels from client through pekko-http, JSON decode, KeyService, the in-memory store, and emits an audit event plus a log line.">
-  <!-- ============================================================
-       Animated request-flow diagram for Aegis-KMS.
-       Pure SMIL animations; no JavaScript. Renders inline in
-       GitHub README via <img>, in any browser, in editors, etc.
-       Cycle length: 12 seconds, looping forever.
-       ============================================================ -->
+     viewBox="0 0 1240 700" role="img"
+     aria-label="Aegis-KMS architecture: four client classes (apps, storage vendors, AI agents, custom agents) reach the same audited KeyService through protocol-specific planes (REST, KMIP, MCP, Agent-AI), passing through IAM and writing to a Postgres journal, a pluggable root-of-trust, and an append-only audit sink.">
   <defs>
     <style>
       .bg     { fill: #0b1020; }
       .card   { fill: #182245; stroke: #2a3563; stroke-width: 1.5; }
-      .planned{ fill: #182245; stroke: #2a3563; stroke-width: 1.5; stroke-dasharray: 5 4; }
+      .core   { fill: #1a2350; stroke: #2a3563; stroke-width: 1.5; }
       .label  { fill: #e7ecff; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; font-size: 14px; text-anchor: middle; }
+      .label-sm { fill: #e7ecff; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; font-size: 13px; text-anchor: middle; }
       .sub    { fill: #8a96b8; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 11px; text-anchor: middle; }
+      .edge-label { fill: #6b7aa3; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 10.5px; text-anchor: middle; }
       .edge   { fill: none; stroke: #2a3563; stroke-width: 1.6; stroke-linecap: round; }
-      .edgeR  { fill: none; stroke: #2a3563; stroke-width: 1.6; stroke-linecap: round; stroke-dasharray: 4 4; }
-      .title  { fill: #e7ecff; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; font-size: 18px; font-weight: 600; }
+      .edge-r { fill: none; stroke: #2a3563; stroke-width: 1.4; stroke-linecap: round; stroke-dasharray: 4 4; }
+      .title  { fill: #e7ecff; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; font-size: 19px; font-weight: 600; }
       .stamp  { fill: #8a96b8; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 11px; }
-      .audit-title { fill: #9b87f5; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 10.5px; letter-spacing: 0.08em; }
-      .audit-row   { fill: #8a96b8; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 11.5px; }
-      .audit-good  { fill: #4ade80; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 11.5px; }
-      .audit-acc   { fill: #6ea8fe; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 11.5px; }
+      .col-head { fill: #c2cbe5; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; font-size: 11px; font-weight: 600; letter-spacing: 0.12em; text-anchor: middle; }
     </style>
   </defs>
 
   <!-- Background -->
-  <rect class="bg" x="0" y="0" width="1000" height="540" />
+  <rect class="bg" x="0" y="0" width="1240" height="700" />
 
   <!-- Title -->
-  <text class="title" x="32" y="38">Aegis-KMS · POST /v1/keys</text>
-  <text class="stamp" x="32" y="58">request → decode → KeyService → store → audit + log → response &#160;·&#160; loops every 12s</text>
+  <text class="title" x="32" y="40">Aegis-KMS — system surfaces</text>
+  <text class="stamp" x="32" y="60">Four protocol planes, one audited core, pluggable root-of-trust. Every client class uses the same algebra.</text>
 
-  <!-- =================== EDGES (drawn first so nodes overlay) =================== -->
-  <!-- 1: client → http  -->
-  <path id="p1" class="edge" d="M 170 130 L 320 130" />
-  <!-- 2: http → decode  -->
-  <path id="p2" class="edge" d="M 470 130 L 620 130" />
-  <!-- 3: decode → svc   -->
-  <path id="p3" class="edge" d="M 690 160 L 690 235" />
-  <!-- 4: svc → store    -->
-  <path id="p4" class="edge" d="M 620 270 L 470 270" />
-  <!-- 5: svc → audit    -->
-  <path id="p5" class="edge" d="M 690 310 L 690 380" />
-  <!-- 6: audit → log    -->
-  <path id="p6" class="edge" d="M 760 405 L 870 405" />
-  <!-- 7: response (back to client, dashed) -->
-  <path id="p7" class="edgeR" d="M 620 270 L 320 130 L 170 130" />
+  <!-- Column headings -->
+  <text class="col-head" x="125" y="92">CLIENTS</text>
+  <text class="col-head" x="385" y="92">WIRE PLANES</text>
+  <text class="col-head" x="640" y="92">POLICY &amp; CORE</text>
+  <text class="col-head" x="940" y="92">BACKENDS</text>
 
-  <!-- Edge captions -->
-  <text class="sub" x="245" y="120">POST /v1/keys</text>
-  <text class="sub" x="545" y="120">decode DTO</text>
-  <text class="sub" x="725" y="200">create(spec, principal)</text>
-  <text class="sub" x="545" y="260">put(KeyId)</text>
-  <text class="sub" x="725" y="350">emit AuditEvent</text>
-  <text class="sub" x="815" y="395">log line</text>
+  <!-- ============================================================
+       EDGES (drawn first so node fills overlay them)
+       ============================================================ -->
 
-  <!-- =================== NODES =================== -->
-  <!-- Client -->
+  <!-- Client → Plane horizontals -->
+  <path id="e-app-http"   class="edge" d="M 230 140 L 290 140" />
+  <path id="e-stor-kmip"  class="edge" d="M 230 250 L 290 250" />
+  <path id="e-mcp-mcps"   class="edge" d="M 230 410 L 290 410" />
+  <path id="e-aa-aa"      class="edge" d="M 230 520 L 290 520" />
+
+  <!-- Plane → IAM convergence -->
+  <path id="e-http-iam"   class="edge" d="M 480 140 C 540 140, 540 240, 580 240" />
+  <path id="e-kmip-iam"   class="edge" d="M 480 250 L 580 250" />
+  <path id="e-mcps-iam"   class="edge" d="M 480 410 C 540 410, 540 270, 580 270" />
+  <path id="e-aa-iam"     class="edge" d="M 480 520 C 540 520, 540 280, 580 280" />
+
+  <!-- IAM → KeyService -->
+  <path id="e-iam-svc"    class="edge" d="M 700 290 L 700 360" />
+  <text class="edge-label" x="745" y="328">authn / authz</text>
+
+  <!-- KeyService → Persistence -->
+  <path id="e-svc-per"    class="edge" d="M 820 380 L 880 240" />
+  <text class="edge-label" x="855" y="298">persist event</text>
+  <!-- KeyService → Root of Trust -->
+  <path id="e-svc-rot"    class="edge" d="M 820 405 L 880 410" />
+  <text class="edge-label" x="855" y="395">wrap / unwrap</text>
+  <!-- KeyService → Audit -->
+  <path id="e-svc-aud"    class="edge" d="M 700 440 L 700 540" />
+  <text class="edge-label" x="755" y="498">emit AuditEvent</text>
+  <!-- Audit → SIEM -->
+  <path id="e-aud-siem"   class="edge" d="M 820 565 L 880 580" />
+  <text class="edge-label" x="855" y="554">forward</text>
+
+  <!-- Response paths (dashed, back to clients) -->
+  <path id="e-r-http"     class="edge-r" d="M 580 240 L 480 140 L 230 140" />
+  <path id="e-r-kmip"     class="edge-r" d="M 580 250 L 480 250 L 230 250" />
+  <path id="e-r-mcp"      class="edge-r" d="M 580 270 L 480 410 L 230 410" />
+  <path id="e-r-aa"       class="edge-r" d="M 580 280 L 480 520 L 230 520" />
+
+  <!-- ============================================================
+       CLIENT NODES
+       ============================================================ -->
   <g>
-    <rect id="n-client" class="card" x="40" y="100" width="130" height="60" rx="10" />
-    <text class="label" x="105" y="128">Client</text>
-    <text class="sub"   x="105" y="146">curl / SDK</text>
+    <rect id="n-app" class="card" x="40" y="110" width="190" height="60" rx="10" />
+    <text class="label-sm" x="135" y="135">App / service / operator</text>
+    <text class="sub"     x="135" y="153">REST · CLI</text>
+  </g>
+  <g>
+    <rect id="n-storage" class="card" x="40" y="220" width="190" height="60" rx="10" />
+    <text class="label-sm" x="135" y="245">Storage / DB / backup</text>
+    <text class="sub"     x="135" y="263">KMIP-native vendor</text>
+  </g>
+  <g>
+    <rect id="n-aiagent" class="card" x="40" y="380" width="190" height="60" rx="10" />
+    <text class="label-sm" x="135" y="405">AI agent (MCP client)</text>
+    <text class="sub"     x="135" y="423">Claude · GPT · etc.</text>
+  </g>
+  <g>
+    <rect id="n-customagent" class="card" x="40" y="490" width="190" height="60" rx="10" />
+    <text class="label-sm" x="135" y="515">Custom tool-use agent</text>
+    <text class="sub"     x="135" y="533">function-call style</text>
   </g>
 
-  <!-- HTTP edge -->
+  <!-- ============================================================
+       WIRE PLANE NODES
+       ============================================================ -->
   <g>
-    <rect id="n-http" class="card" x="320" y="100" width="150" height="60" rx="10" />
-    <text class="label" x="395" y="126">aegis-http</text>
-    <text class="sub"   x="395" y="144">Tapir + pekko</text>
+    <rect id="n-http" class="card" x="290" y="110" width="190" height="60" rx="10" />
+    <text class="label-sm" x="385" y="135">aegis-http</text>
+    <text class="sub"     x="385" y="153">JSON / OpenAPI · pekko-http</text>
+  </g>
+  <g>
+    <rect id="n-kmip" class="card" x="290" y="220" width="190" height="60" rx="10" />
+    <text class="label-sm" x="385" y="245">aegis-kmip</text>
+    <text class="sub"     x="385" y="263">TTLV over TLS · 1.4–3.0</text>
+  </g>
+  <g>
+    <rect id="n-mcps" class="card" x="290" y="380" width="190" height="60" rx="10" />
+    <text class="label-sm" x="385" y="405">aegis-mcp-server</text>
+    <text class="sub"     x="385" y="423">JSON-RPC · MCP tools</text>
+  </g>
+  <g>
+    <rect id="n-aa" class="card" x="290" y="490" width="190" height="60" rx="10" />
+    <text class="label-sm" x="385" y="515">aegis-agent-ai</text>
+    <text class="sub"     x="385" y="533">function-call HTTP</text>
   </g>
 
-  <!-- JSON decode -->
+  <!-- ============================================================
+       CORE NODES
+       ============================================================ -->
   <g>
-    <rect id="n-decode" class="card" x="620" y="100" width="140" height="60" rx="10" />
-    <text class="label" x="690" y="126">JsonCodecs</text>
-    <text class="sub"   x="690" y="144">DTO → KeySpec</text>
+    <rect id="n-iam" class="core" x="580" y="210" width="240" height="80" rx="10" />
+    <text class="label" x="700" y="240">IAM</text>
+    <text class="sub"  x="700" y="260">OIDC · JWT · policy · agent-identity issuance</text>
+    <text class="sub"  x="700" y="278">human ↔ agent linkage</text>
+  </g>
+  <g>
+    <rect id="n-svc" class="core" x="580" y="360" width="240" height="80" rx="10" />
+    <text class="label" x="700" y="390">KeyService — the algebra</text>
+    <text class="sub"  x="700" y="410">create · get · activate · rotate</text>
+    <text class="sub"  x="700" y="428">destroy · wrap · unwrap · sign</text>
+  </g>
+  <g>
+    <rect id="n-aud" class="core" x="580" y="510" width="240" height="80" rx="10" />
+    <text class="label" x="700" y="540">aegis-audit</text>
+    <text class="sub"  x="700" y="560">append-only · every state change</text>
+    <text class="sub"  x="700" y="578">actor · action · resource · outcome</text>
   </g>
 
-  <!-- KeyService -->
+  <!-- ============================================================
+       BACKEND NODES
+       ============================================================ -->
   <g>
-    <rect id="n-svc" class="card" x="620" y="240" width="140" height="60" rx="10" />
-    <text class="label" x="690" y="266">KeyService[IO]</text>
-    <text class="sub"   x="690" y="284">aegis-core</text>
+    <rect id="n-per" class="card" x="880" y="200" width="240" height="80" rx="10" />
+    <text class="label" x="1000" y="230">Persistence</text>
+    <text class="sub"  x="1000" y="250">Postgres event journal</text>
+    <text class="sub"  x="1000" y="268">read model · projections</text>
+  </g>
+  <g>
+    <rect id="n-rot" class="card" x="880" y="370" width="240" height="80" rx="10" />
+    <text class="label" x="1000" y="400">Root of Trust</text>
+    <text class="sub"  x="1000" y="420">AWS KMS · GCP KMS · Azure KV</text>
+    <text class="sub"  x="1000" y="438">HashiCorp Vault · PKCS#11</text>
+  </g>
+  <g>
+    <rect id="n-siem" class="card" x="880" y="540" width="240" height="60" rx="10" />
+    <text class="label-sm" x="1000" y="565">SIEM / object store</text>
+    <text class="sub"     x="1000" y="583">Splunk · S3 · Loki</text>
   </g>
 
-  <!-- in-memory store -->
-  <g>
-    <rect id="n-store" class="card" x="320" y="240" width="150" height="60" rx="10" />
-    <text class="label" x="395" y="266">in-memory store</text>
-    <text class="sub"   x="395" y="284">→ Doobie (PR #3)</text>
-  </g>
+  <!-- ============================================================
+       NODE HIGHLIGHT ANIMATIONS (cycle 10s)
+       ============================================================ -->
 
-  <!-- KeyOpsActor (planned) -->
-  <g>
-    <rect id="n-actor" class="planned" x="40" y="240" width="220" height="60" rx="10" />
-    <text class="label" x="150" y="266">KeyOpsActor</text>
-    <text class="sub"   x="150" y="284">PR #2 — planned</text>
-  </g>
+  <!-- Each client class lights up briefly when its packet emits -->
+  <animate xlink:href="#n-app"         attributeName="stroke" values="#2a3563;#6ea8fe;#6ea8fe;#2a3563;#2a3563;#4ade80;#4ade80;#2a3563"
+           keyTimes="0;0.01;0.10;0.16;0.78;0.82;0.92;1" dur="10s" repeatCount="indefinite" />
+  <animate xlink:href="#n-storage"     attributeName="stroke" values="#2a3563;#22d3ee;#22d3ee;#2a3563;#2a3563;#4ade80;#4ade80;#2a3563"
+           keyTimes="0;0.05;0.14;0.20;0.80;0.84;0.94;1" dur="10s" repeatCount="indefinite" />
+  <animate xlink:href="#n-aiagent"     attributeName="stroke" values="#2a3563;#a78bfa;#a78bfa;#2a3563;#2a3563;#4ade80;#4ade80;#2a3563"
+           keyTimes="0;0.09;0.18;0.24;0.82;0.86;0.96;1" dur="10s" repeatCount="indefinite" />
+  <animate xlink:href="#n-customagent" attributeName="stroke" values="#2a3563;#fb923c;#fb923c;#2a3563;#2a3563;#4ade80;#4ade80;#2a3563"
+           keyTimes="0;0.13;0.22;0.28;0.84;0.88;0.98;1" dur="10s" repeatCount="indefinite" />
 
-  <!-- Audit -->
-  <g>
-    <rect id="n-audit" class="card" x="620" y="380" width="140" height="50" rx="10" />
-    <text class="label" x="690" y="402">aegis-audit</text>
-    <text class="sub"   x="690" y="418">append-only sink</text>
-  </g>
+  <!-- Wire planes light up as the matching packet passes through -->
+  <animate xlink:href="#n-http" attributeName="stroke" values="#2a3563;#6ea8fe;#6ea8fe;#2a3563"
+           keyTimes="0;0.10;0.20;0.28" dur="10s" repeatCount="indefinite" />
+  <animate xlink:href="#n-kmip" attributeName="stroke" values="#2a3563;#22d3ee;#22d3ee;#2a3563"
+           keyTimes="0;0.14;0.24;0.32" dur="10s" repeatCount="indefinite" />
+  <animate xlink:href="#n-mcps" attributeName="stroke" values="#2a3563;#a78bfa;#a78bfa;#2a3563"
+           keyTimes="0;0.18;0.28;0.36" dur="10s" repeatCount="indefinite" />
+  <animate xlink:href="#n-aa"   attributeName="stroke" values="#2a3563;#fb923c;#fb923c;#2a3563"
+           keyTimes="0;0.22;0.32;0.40" dur="10s" repeatCount="indefinite" />
 
-  <!-- Operational log -->
-  <g>
-    <rect id="n-log" class="card" x="870" y="380" width="100" height="50" rx="10" />
-    <text class="label" x="920" y="402">stdout</text>
-    <text class="sub"   x="920" y="418">JSON / slf4j</text>
-  </g>
+  <!-- IAM lights up while convergence happens -->
+  <animate xlink:href="#n-iam" attributeName="stroke" values="#2a3563;#e7ecff;#e7ecff;#2a3563"
+           keyTimes="0;0.30;0.50;0.58" dur="10s" repeatCount="indefinite" />
 
-  <!-- =================== NODE HIGHLIGHT ANIMATIONS =================== -->
-  <!-- All highlights use the same 12s repeating cycle, with begin offsets. -->
+  <!-- KeyService lights up at the heart of the request -->
+  <animate xlink:href="#n-svc" attributeName="stroke" values="#2a3563;#e7ecff;#e7ecff;#4ade80;#4ade80;#2a3563"
+           keyTimes="0;0.42;0.55;0.62;0.74;0.80" dur="10s" repeatCount="indefinite" />
 
-  <!-- Client highlight: 0.0s on, fade off at 1.5s; lights again on response 9.0–11.0s -->
-  <animate xlink:href="#n-client" attributeName="stroke" values="#2a3563;#6ea8fe;#6ea8fe;#2a3563;#2a3563;#4ade80;#4ade80;#2a3563"
-           keyTimes="0;0.02;0.12;0.18;0.74;0.78;0.92;1" dur="12s" repeatCount="indefinite" />
+  <!-- Backends light up green as success -->
+  <animate xlink:href="#n-per" attributeName="stroke" values="#2a3563;#4ade80;#4ade80;#2a3563"
+           keyTimes="0;0.55;0.65;0.72" dur="10s" repeatCount="indefinite" />
+  <animate xlink:href="#n-rot" attributeName="stroke" values="#2a3563;#fcd34d;#fcd34d;#2a3563"
+           keyTimes="0;0.55;0.65;0.72" dur="10s" repeatCount="indefinite" />
 
-  <!-- HTTP node highlight: ~1.0–3.0s and ~9.0–10.5s -->
-  <animate xlink:href="#n-http" attributeName="stroke" values="#2a3563;#6ea8fe;#6ea8fe;#2a3563;#2a3563;#4ade80;#4ade80;#2a3563"
-           keyTimes="0;0.08;0.25;0.30;0.74;0.78;0.88;1" dur="12s" repeatCount="indefinite" />
+  <!-- Audit lane lights purple -->
+  <animate xlink:href="#n-aud"  attributeName="stroke" values="#2a3563;#a78bfa;#a78bfa;#2a3563"
+           keyTimes="0;0.62;0.74;0.80" dur="10s" repeatCount="indefinite" />
+  <animate xlink:href="#n-siem" attributeName="stroke" values="#2a3563;#a78bfa;#a78bfa;#2a3563"
+           keyTimes="0;0.68;0.78;0.84" dur="10s" repeatCount="indefinite" />
 
-  <!-- Decode node highlight: ~2.0–3.0s -->
-  <animate xlink:href="#n-decode" attributeName="stroke" values="#2a3563;#6ea8fe;#6ea8fe;#2a3563"
-           keyTimes="0;0.18;0.28;0.34" dur="12s" repeatCount="indefinite" />
+  <!-- Edge highlight cycles -->
+  <animate xlink:href="#e-app-http"   attributeName="stroke" values="#2a3563;#6ea8fe;#6ea8fe;#2a3563" keyTimes="0;0.04;0.14;0.20" dur="10s" repeatCount="indefinite" />
+  <animate xlink:href="#e-stor-kmip"  attributeName="stroke" values="#2a3563;#22d3ee;#22d3ee;#2a3563" keyTimes="0;0.08;0.18;0.24" dur="10s" repeatCount="indefinite" />
+  <animate xlink:href="#e-mcp-mcps"   attributeName="stroke" values="#2a3563;#a78bfa;#a78bfa;#2a3563" keyTimes="0;0.12;0.22;0.28" dur="10s" repeatCount="indefinite" />
+  <animate xlink:href="#e-aa-aa"      attributeName="stroke" values="#2a3563;#fb923c;#fb923c;#2a3563" keyTimes="0;0.16;0.26;0.32" dur="10s" repeatCount="indefinite" />
+  <animate xlink:href="#e-http-iam"   attributeName="stroke" values="#2a3563;#6ea8fe;#6ea8fe;#2a3563" keyTimes="0;0.16;0.30;0.36" dur="10s" repeatCount="indefinite" />
+  <animate xlink:href="#e-kmip-iam"   attributeName="stroke" values="#2a3563;#22d3ee;#22d3ee;#2a3563" keyTimes="0;0.20;0.34;0.40" dur="10s" repeatCount="indefinite" />
+  <animate xlink:href="#e-mcps-iam"   attributeName="stroke" values="#2a3563;#a78bfa;#a78bfa;#2a3563" keyTimes="0;0.24;0.38;0.44" dur="10s" repeatCount="indefinite" />
+  <animate xlink:href="#e-aa-iam"     attributeName="stroke" values="#2a3563;#fb923c;#fb923c;#2a3563" keyTimes="0;0.28;0.42;0.48" dur="10s" repeatCount="indefinite" />
+  <animate xlink:href="#e-iam-svc"    attributeName="stroke" values="#2a3563;#e7ecff;#e7ecff;#2a3563" keyTimes="0;0.40;0.54;0.60" dur="10s" repeatCount="indefinite" />
+  <animate xlink:href="#e-svc-per"    attributeName="stroke" values="#2a3563;#4ade80;#4ade80;#2a3563" keyTimes="0;0.55;0.66;0.72" dur="10s" repeatCount="indefinite" />
+  <animate xlink:href="#e-svc-rot"    attributeName="stroke" values="#2a3563;#fcd34d;#fcd34d;#2a3563" keyTimes="0;0.55;0.66;0.72" dur="10s" repeatCount="indefinite" />
+  <animate xlink:href="#e-svc-aud"    attributeName="stroke" values="#2a3563;#a78bfa;#a78bfa;#2a3563" keyTimes="0;0.62;0.74;0.80" dur="10s" repeatCount="indefinite" />
+  <animate xlink:href="#e-aud-siem"   attributeName="stroke" values="#2a3563;#a78bfa;#a78bfa;#2a3563" keyTimes="0;0.68;0.78;0.84" dur="10s" repeatCount="indefinite" />
 
-  <!-- Service node highlight: ~3.5–7.5s -->
-  <animate xlink:href="#n-svc" attributeName="stroke" values="#2a3563;#6ea8fe;#6ea8fe;#4ade80;#4ade80;#2a3563"
-           keyTimes="0;0.27;0.35;0.45;0.62;0.70" dur="12s" repeatCount="indefinite" />
+  <!-- ============================================================
+       PACKETS — one per client class, staggered
+       ============================================================ -->
 
-  <!-- Store node highlight: ~4.5–5.5s -->
-  <animate xlink:href="#n-store" attributeName="stroke" values="#2a3563;#4ade80;#4ade80;#2a3563"
-           keyTimes="0;0.35;0.50;0.58" dur="12s" repeatCount="indefinite" />
-
-  <!-- Audit node highlight: ~6.0–7.5s -->
-  <animate xlink:href="#n-audit" attributeName="stroke" values="#2a3563;#9b87f5;#9b87f5;#2a3563"
-           keyTimes="0;0.48;0.62;0.70" dur="12s" repeatCount="indefinite" />
-
-  <!-- Log node highlight: ~6.5–7.5s -->
-  <animate xlink:href="#n-log" attributeName="stroke" values="#2a3563;#4ade80;#4ade80;#2a3563"
-           keyTimes="0;0.54;0.62;0.70" dur="12s" repeatCount="indefinite" />
-
-  <!-- =================== EDGE HIGHLIGHTS =================== -->
-  <animate xlink:href="#p1" attributeName="stroke" values="#2a3563;#6ea8fe;#6ea8fe;#2a3563"
-           keyTimes="0;0.08;0.18;0.24" dur="12s" repeatCount="indefinite" />
-  <animate xlink:href="#p2" attributeName="stroke" values="#2a3563;#6ea8fe;#6ea8fe;#2a3563"
-           keyTimes="0;0.18;0.28;0.34" dur="12s" repeatCount="indefinite" />
-  <animate xlink:href="#p3" attributeName="stroke" values="#2a3563;#6ea8fe;#6ea8fe;#2a3563"
-           keyTimes="0;0.28;0.38;0.44" dur="12s" repeatCount="indefinite" />
-  <animate xlink:href="#p4" attributeName="stroke" values="#2a3563;#4ade80;#4ade80;#2a3563"
-           keyTimes="0;0.38;0.50;0.58" dur="12s" repeatCount="indefinite" />
-  <animate xlink:href="#p5" attributeName="stroke" values="#2a3563;#9b87f5;#9b87f5;#2a3563"
-           keyTimes="0;0.48;0.60;0.68" dur="12s" repeatCount="indefinite" />
-  <animate xlink:href="#p6" attributeName="stroke" values="#2a3563;#4ade80;#4ade80;#2a3563"
-           keyTimes="0;0.54;0.65;0.72" dur="12s" repeatCount="indefinite" />
-  <animate xlink:href="#p7" attributeName="stroke" values="#2a3563;#4ade80;#4ade80;#2a3563"
-           keyTimes="0;0.74;0.86;0.92" dur="12s" repeatCount="indefinite" />
-
-  <!-- =================== PACKETS =================== -->
-  <!-- Each packet rides a path with animateMotion, then disappears via opacity animation. -->
-
-  <!-- Packet 1: client → http  (1.0s start, 0.9s flight) -->
+  <!-- App → http (blue) -->
   <g opacity="0">
-    <circle r="7" fill="#6ea8fe" />
-    <circle r="14" fill="#6ea8fe" opacity="0.25" />
-    <animate attributeName="opacity" values="0;1;1;0;0" keyTimes="0;0.085;0.16;0.18;1" dur="12s" repeatCount="indefinite" />
-    <animateMotion dur="12s" repeatCount="indefinite"
-                   keyPoints="0;0;1;1;1" keyTimes="0;0.085;0.16;0.18;1" calcMode="linear">
-      <mpath xlink:href="#p1" />
+    <circle r="6" fill="#6ea8fe" />
+    <circle r="12" fill="#6ea8fe" opacity="0.30" />
+    <animate attributeName="opacity" values="0;1;1;0;0" keyTimes="0;0.04;0.13;0.16;1" dur="10s" repeatCount="indefinite" />
+    <animateMotion dur="10s" repeatCount="indefinite"
+                   keyPoints="0;0;1;1;1" keyTimes="0;0.04;0.13;0.16;1" calcMode="linear">
+      <mpath xlink:href="#e-app-http" />
     </animateMotion>
   </g>
 
-  <!-- Packet 2: http → decode -->
+  <!-- http → IAM (blue) -->
   <g opacity="0">
-    <circle r="7" fill="#6ea8fe" />
-    <circle r="14" fill="#6ea8fe" opacity="0.25" />
-    <animate attributeName="opacity" values="0;1;1;0;0" keyTimes="0;0.20;0.27;0.29;1" dur="12s" repeatCount="indefinite" />
-    <animateMotion dur="12s" repeatCount="indefinite"
-                   keyPoints="0;0;1;1;1" keyTimes="0;0.20;0.27;0.29;1" calcMode="linear">
-      <mpath xlink:href="#p2" />
+    <circle r="6" fill="#6ea8fe" />
+    <circle r="12" fill="#6ea8fe" opacity="0.30" />
+    <animate attributeName="opacity" values="0;1;1;0;0" keyTimes="0;0.16;0.30;0.33;1" dur="10s" repeatCount="indefinite" />
+    <animateMotion dur="10s" repeatCount="indefinite"
+                   keyPoints="0;0;1;1;1" keyTimes="0;0.16;0.30;0.33;1" calcMode="linear">
+      <mpath xlink:href="#e-http-iam" />
     </animateMotion>
   </g>
 
-  <!-- Packet 3: decode → service -->
+  <!-- Storage → kmip (cyan) -->
   <g opacity="0">
-    <circle r="7" fill="#6ea8fe" />
-    <circle r="14" fill="#6ea8fe" opacity="0.25" />
-    <animate attributeName="opacity" values="0;1;1;0;0" keyTimes="0;0.30;0.37;0.39;1" dur="12s" repeatCount="indefinite" />
-    <animateMotion dur="12s" repeatCount="indefinite"
-                   keyPoints="0;0;1;1;1" keyTimes="0;0.30;0.37;0.39;1" calcMode="linear">
-      <mpath xlink:href="#p3" />
+    <circle r="6" fill="#22d3ee" />
+    <circle r="12" fill="#22d3ee" opacity="0.30" />
+    <animate attributeName="opacity" values="0;1;1;0;0" keyTimes="0;0.08;0.18;0.21;1" dur="10s" repeatCount="indefinite" />
+    <animateMotion dur="10s" repeatCount="indefinite"
+                   keyPoints="0;0;1;1;1" keyTimes="0;0.08;0.18;0.21;1" calcMode="linear">
+      <mpath xlink:href="#e-stor-kmip" />
     </animateMotion>
   </g>
 
-  <!-- Packet 4: service → store (green = success/persist) -->
+  <!-- kmip → IAM (cyan) -->
   <g opacity="0">
-    <circle r="7" fill="#4ade80" />
-    <circle r="14" fill="#4ade80" opacity="0.25" />
-    <animate attributeName="opacity" values="0;1;1;0;0" keyTimes="0;0.40;0.49;0.51;1" dur="12s" repeatCount="indefinite" />
-    <animateMotion dur="12s" repeatCount="indefinite"
-                   keyPoints="0;0;1;1;1" keyTimes="0;0.40;0.49;0.51;1" calcMode="linear">
-      <mpath xlink:href="#p4" />
+    <circle r="6" fill="#22d3ee" />
+    <circle r="12" fill="#22d3ee" opacity="0.30" />
+    <animate attributeName="opacity" values="0;1;1;0;0" keyTimes="0;0.20;0.34;0.37;1" dur="10s" repeatCount="indefinite" />
+    <animateMotion dur="10s" repeatCount="indefinite"
+                   keyPoints="0;0;1;1;1" keyTimes="0;0.20;0.34;0.37;1" calcMode="linear">
+      <mpath xlink:href="#e-kmip-iam" />
     </animateMotion>
   </g>
 
-  <!-- Packet 5: service → audit (purple = audit) -->
+  <!-- AI agent → mcp (purple) -->
   <g opacity="0">
-    <rect x="-9" y="-7" width="18" height="14" rx="3" fill="#9b87f5" />
-    <animate attributeName="opacity" values="0;1;1;0;0" keyTimes="0;0.50;0.59;0.61;1" dur="12s" repeatCount="indefinite" />
-    <animateMotion dur="12s" repeatCount="indefinite"
-                   keyPoints="0;0;1;1;1" keyTimes="0;0.50;0.59;0.61;1" calcMode="linear">
-      <mpath xlink:href="#p5" />
+    <rect x="-8" y="-6" width="16" height="12" rx="3" fill="#a78bfa" />
+    <animate attributeName="opacity" values="0;1;1;0;0" keyTimes="0;0.12;0.22;0.25;1" dur="10s" repeatCount="indefinite" />
+    <animateMotion dur="10s" repeatCount="indefinite"
+                   keyPoints="0;0;1;1;1" keyTimes="0;0.12;0.22;0.25;1" calcMode="linear">
+      <mpath xlink:href="#e-mcp-mcps" />
     </animateMotion>
   </g>
 
-  <!-- Packet 6: audit → log -->
+  <!-- mcp → IAM (purple) -->
   <g opacity="0">
-    <rect x="-9" y="-7" width="18" height="14" rx="3" fill="#4ade80" />
-    <animate attributeName="opacity" values="0;1;1;0;0" keyTimes="0;0.56;0.64;0.66;1" dur="12s" repeatCount="indefinite" />
-    <animateMotion dur="12s" repeatCount="indefinite"
-                   keyPoints="0;0;1;1;1" keyTimes="0;0.56;0.64;0.66;1" calcMode="linear">
-      <mpath xlink:href="#p6" />
+    <rect x="-8" y="-6" width="16" height="12" rx="3" fill="#a78bfa" />
+    <animate attributeName="opacity" values="0;1;1;0;0" keyTimes="0;0.24;0.38;0.41;1" dur="10s" repeatCount="indefinite" />
+    <animateMotion dur="10s" repeatCount="indefinite"
+                   keyPoints="0;0;1;1;1" keyTimes="0;0.24;0.38;0.41;1" calcMode="linear">
+      <mpath xlink:href="#e-mcps-iam" />
     </animateMotion>
   </g>
 
-  <!-- Packet 7: response (green dot back along dashed path) -->
+  <!-- Custom agent → agent-ai (orange) -->
+  <g opacity="0">
+    <rect x="-8" y="-6" width="16" height="12" rx="3" fill="#fb923c" />
+    <animate attributeName="opacity" values="0;1;1;0;0" keyTimes="0;0.16;0.26;0.29;1" dur="10s" repeatCount="indefinite" />
+    <animateMotion dur="10s" repeatCount="indefinite"
+                   keyPoints="0;0;1;1;1" keyTimes="0;0.16;0.26;0.29;1" calcMode="linear">
+      <mpath xlink:href="#e-aa-aa" />
+    </animateMotion>
+  </g>
+
+  <!-- agent-ai → IAM (orange) -->
+  <g opacity="0">
+    <rect x="-8" y="-6" width="16" height="12" rx="3" fill="#fb923c" />
+    <animate attributeName="opacity" values="0;1;1;0;0" keyTimes="0;0.28;0.42;0.45;1" dur="10s" repeatCount="indefinite" />
+    <animateMotion dur="10s" repeatCount="indefinite"
+                   keyPoints="0;0;1;1;1" keyTimes="0;0.28;0.42;0.45;1" calcMode="linear">
+      <mpath xlink:href="#e-aa-iam" />
+    </animateMotion>
+  </g>
+
+  <!-- IAM → KeyService (white = consolidated authenticated request) -->
+  <g opacity="0">
+    <circle r="7" fill="#e7ecff" />
+    <circle r="14" fill="#e7ecff" opacity="0.25" />
+    <animate attributeName="opacity" values="0;1;1;0;0" keyTimes="0;0.42;0.54;0.57;1" dur="10s" repeatCount="indefinite" />
+    <animateMotion dur="10s" repeatCount="indefinite"
+                   keyPoints="0;0;1;1;1" keyTimes="0;0.42;0.54;0.57;1" calcMode="linear">
+      <mpath xlink:href="#e-iam-svc" />
+    </animateMotion>
+  </g>
+
+  <!-- KeyService → Persistence (green) -->
   <g opacity="0">
     <circle r="6" fill="#4ade80" />
-    <circle r="12" fill="#4ade80" opacity="0.25" />
-    <animate attributeName="opacity" values="0;1;1;0;0" keyTimes="0;0.74;0.91;0.93;1" dur="12s" repeatCount="indefinite" />
-    <animateMotion dur="12s" repeatCount="indefinite"
-                   keyPoints="0;0;1;1;1" keyTimes="0;0.74;0.91;0.93;1" calcMode="linear">
-      <mpath xlink:href="#p7" />
+    <animate attributeName="opacity" values="0;1;1;0;0" keyTimes="0;0.56;0.66;0.69;1" dur="10s" repeatCount="indefinite" />
+    <animateMotion dur="10s" repeatCount="indefinite"
+                   keyPoints="0;0;1;1;1" keyTimes="0;0.56;0.66;0.69;1" calcMode="linear">
+      <mpath xlink:href="#e-svc-per" />
     </animateMotion>
   </g>
 
-  <!-- =================== AUDIT LOG STRIP =================== -->
-  <rect x="40" y="455" width="920" height="70" rx="10" fill="#0a0f25" stroke="#2a3563" stroke-width="1.5" />
-  <text class="audit-title" x="56" y="476">AUDIT LOG (append-only)</text>
-
-  <!-- Row 1 — appears at audit emission (~6.5s) -->
+  <!-- KeyService → Root of Trust (gold) -->
   <g opacity="0">
-    <text x="56" y="497" class="audit-row">
-      <tspan class="audit-row">2026-04-25T09:14:02.114Z</tspan>
-      <tspan class="audit-good" dx="14">KeyCreated</tspan>
-      <tspan class="audit-row" dx="14">key=</tspan><tspan class="audit-acc">k_8f31…</tspan>
-      <tspan class="audit-row" dx="14">actor=</tspan><tspan class="audit-acc">alice</tspan>
-      <tspan class="audit-row" dx="14">req=r-7c2a</tspan>
-    </text>
-    <animate attributeName="opacity" values="0;0;1;1" keyTimes="0;0.55;0.60;1" dur="12s" repeatCount="indefinite" />
+    <circle r="6" fill="#fcd34d" />
+    <animate attributeName="opacity" values="0;1;1;0;0" keyTimes="0;0.56;0.66;0.69;1" dur="10s" repeatCount="indefinite" />
+    <animateMotion dur="10s" repeatCount="indefinite"
+                   keyPoints="0;0;1;1;1" keyTimes="0;0.56;0.66;0.69;1" calcMode="linear">
+      <mpath xlink:href="#e-svc-rot" />
+    </animateMotion>
   </g>
 
-  <!-- Row 2 — appears at log emission (~7.5s) -->
+  <!-- KeyService → Audit (purple) -->
   <g opacity="0">
-    <text x="56" y="516" class="audit-row">
-      <tspan class="audit-row">2026-04-25T09:14:02.118Z</tspan>
-      <tspan class="audit-row" dx="14">outcome=</tspan><tspan class="audit-good">Success</tspan>
-      <tspan class="audit-row" dx="14">latency=4ms</tspan>
-      <tspan class="audit-row" dx="14">plane=REST</tspan>
-    </text>
-    <animate attributeName="opacity" values="0;0;1;1" keyTimes="0;0.62;0.67;1" dur="12s" repeatCount="indefinite" />
+    <rect x="-8" y="-6" width="16" height="12" rx="3" fill="#a78bfa" />
+    <animate attributeName="opacity" values="0;1;1;0;0" keyTimes="0;0.62;0.74;0.77;1" dur="10s" repeatCount="indefinite" />
+    <animateMotion dur="10s" repeatCount="indefinite"
+                   keyPoints="0;0;1;1;1" keyTimes="0;0.62;0.74;0.77;1" calcMode="linear">
+      <mpath xlink:href="#e-svc-aud" />
+    </animateMotion>
+  </g>
+
+  <!-- Audit → SIEM (purple) -->
+  <g opacity="0">
+    <rect x="-8" y="-6" width="16" height="12" rx="3" fill="#a78bfa" />
+    <animate attributeName="opacity" values="0;1;1;0;0" keyTimes="0;0.68;0.78;0.81;1" dur="10s" repeatCount="indefinite" />
+    <animateMotion dur="10s" repeatCount="indefinite"
+                   keyPoints="0;0;1;1;1" keyTimes="0;0.68;0.78;0.81;1" calcMode="linear">
+      <mpath xlink:href="#e-aud-siem" />
+    </animateMotion>
+  </g>
+
+  <!-- Response packets back to clients (green dots, dashed return paths) -->
+  <g opacity="0">
+    <circle r="5" fill="#4ade80" />
+    <animate attributeName="opacity" values="0;1;1;0;0" keyTimes="0;0.78;0.94;0.96;1" dur="10s" repeatCount="indefinite" />
+    <animateMotion dur="10s" repeatCount="indefinite"
+                   keyPoints="0;0;1;1;1" keyTimes="0;0.78;0.94;0.96;1" calcMode="linear">
+      <mpath xlink:href="#e-r-http" />
+    </animateMotion>
+  </g>
+  <g opacity="0">
+    <circle r="5" fill="#4ade80" />
+    <animate attributeName="opacity" values="0;1;1;0;0" keyTimes="0;0.78;0.94;0.96;1" dur="10s" repeatCount="indefinite" />
+    <animateMotion dur="10s" repeatCount="indefinite"
+                   keyPoints="0;0;1;1;1" keyTimes="0;0.78;0.94;0.96;1" calcMode="linear">
+      <mpath xlink:href="#e-r-kmip" />
+    </animateMotion>
+  </g>
+  <g opacity="0">
+    <circle r="5" fill="#4ade80" />
+    <animate attributeName="opacity" values="0;1;1;0;0" keyTimes="0;0.78;0.94;0.96;1" dur="10s" repeatCount="indefinite" />
+    <animateMotion dur="10s" repeatCount="indefinite"
+                   keyPoints="0;0;1;1;1" keyTimes="0;0.78;0.94;0.96;1" calcMode="linear">
+      <mpath xlink:href="#e-r-mcp" />
+    </animateMotion>
+  </g>
+  <g opacity="0">
+    <circle r="5" fill="#4ade80" />
+    <animate attributeName="opacity" values="0;1;1;0;0" keyTimes="0;0.78;0.94;0.96;1" dur="10s" repeatCount="indefinite" />
+    <animateMotion dur="10s" repeatCount="indefinite"
+                   keyPoints="0;0;1;1;1" keyTimes="0;0.78;0.94;0.96;1" calcMode="linear">
+      <mpath xlink:href="#e-r-aa" />
+    </animateMotion>
+  </g>
+
+  <!-- ============================================================
+       LEGEND
+       ============================================================ -->
+  <g transform="translate(40, 640)">
+    <circle cx="6" cy="0" r="5" fill="#6ea8fe" />
+    <text class="sub" x="20" y="4" text-anchor="start">REST</text>
+    <circle cx="80" cy="0" r="5" fill="#22d3ee" />
+    <text class="sub" x="94" y="4" text-anchor="start">KMIP</text>
+    <circle cx="156" cy="0" r="5" fill="#a78bfa" />
+    <text class="sub" x="170" y="4" text-anchor="start">MCP</text>
+    <circle cx="232" cy="0" r="5" fill="#fb923c" />
+    <text class="sub" x="246" y="4" text-anchor="start">Agent-AI</text>
+    <circle cx="332" cy="0" r="5" fill="#4ade80" />
+    <text class="sub" x="346" y="4" text-anchor="start">success / response</text>
+    <circle cx="500" cy="0" r="5" fill="#fcd34d" />
+    <text class="sub" x="514" y="4" text-anchor="start">key material (root of trust)</text>
   </g>
 </svg>
