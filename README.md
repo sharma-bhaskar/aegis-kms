@@ -1,114 +1,182 @@
-# Aegis-KMS
+# Aegis
 
-**Agent-native key management for AI and distributed systems.**
+**AI agents are using your API keys — but no one is really in control.**
 
-Aegis-KMS is a control plane for cryptographic keys. It runs in front of your existing key store — AWS KMS, GCP KMS, Azure Key Vault, HashiCorp Vault, an on-prem PKCS#11 HSM, or its own software root of trust — and adds three things every legacy KMS is missing:
+Aegis adds identity, intelligence, and real-time control in front of your existing KMS.
 
-1. **Agent identity tied to a human.** Every Claude / GPT / custom-agent action carries a `Principal.Agent(sub, parentHuman, scopes)`. The parent human is mandatory. Audit queries like "everything Alice's agents did today" are a one-line join, not a heuristic.
-2. **Intelligence layer over static policy.** Boolean allow/deny is the floor. Aegis adds context-aware risk scoring, baseline-aware anomaly detection on key usage, and an LLM advisor that explains why a key looks unused or risky and suggests rotation policies. *(Substrate today; full feature set in [Status](docs/ARCHITECTURE.md#11-status).)*
-3. **MCP-native.** Claude, Cursor, and any MCP-aware tool can use Aegis-KMS as a tool out of the box. The same agent identity and scope checks apply whether the call arrives over MCP, REST, or KMIP.
+> Smarter key security for the age of AI agents.
 
-Apache-2.0 · KMIP 1.4 / 2.x compliant · embeddable as a JVM library.
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
+[![Status](https://img.shields.io/badge/status-pre--alpha-orange.svg)](docs/ARCHITECTURE.md#11-status)
 
-> **Status:** pre-alpha. The scaffold and four wire planes are designed; `aegis-agent-ai` (anomaly detection + risk scoring + LLM advisor) is the next active workstream. See [docs/ARCHITECTURE.md §11](docs/ARCHITECTURE.md#11-status) for what runs today.
+> _Drop the marketing overview graphic at `docs/aegis-overview.png` and reference it here once committed:_  
+> `![Aegis — agent-native control plane for keys](docs/aegis-overview.png)`
 
-Read more: [positioning](docs/POSITIONING.md) · [architecture](docs/ARCHITECTURE.md) · [usage guide](docs/USAGE.md) · [interactive walk-through](https://sharma-bhaskar.github.io/aegis-kms/architecture.html).
+## Why Aegis exists
+
+AI agents — Claude, GPT, custom agents, RAG apps — are now signing payloads, decrypting data, and calling tools that need real credentials. **None of the existing key managers were built for this.**
+
+When something goes wrong:
+
+- You don't know **which agent** did it. Service-account audit trails collapse to "the API key did it."
+- You don't know **whose agent** did it. There's no link from the agent back to the human who set it loose.
+- You don't catch it until next week. Static IAM policy says "the agent is in the right role" while it's calling `sign` 80× per second at 3 AM from a new IP.
+- You can't respond in real time. Detection without auto-response means a human has to be paged, log in, and revoke — minutes or hours after the damage.
+
+Aegis exists to solve exactly this. It's not a general-purpose KMS. It's not a secrets manager. It's the **agent-native control plane** that sits in front of your existing key store (AWS KMS, GCP, Azure, Vault, HSM, or its own RoT) and makes AI agent access to keys safe by default.
+
+## How Aegis works
+
+Four checks on every request, in order — the same model whether the call comes from an agent, an app, or a human:
+
+| | What it does | What it produces |
+| --- | --- | --- |
+| **1. Identity & Context** | Resolves the bearer credential to a `Principal.Human` or `Principal.Agent`. Every agent carries a mandatory back-pointer to the parent human, the explicit scope (which keys, which ops), and the context (source IP, session, time). | An attributed request — no anonymous agents, ever. |
+| **2. Risk Scoring** | Combines behavioral baseline (request rate, time-of-day, source set, op histogram) with contextual signals (agent vs. human, credential age, scope breadth) into a risk score. | A real-valued risk score and a structured *reason*, recorded with the audit event. |
+| **3. Anomaly Detection** | Streaming detectors over the audit log: usage spikes, off-hours access, new source IPs, new op types per key, agents touching keys outside their normal pattern. | `AgentRecommendation` events surfaced in CLI, dashboards, webhooks. |
+| **4. Real-time Response** | Configurable wiring from detections to actions: **allow · step-up · deny · rotate · revoke · alert.** All recorded. | A decision applied automatically, in the same loop, before the next request lands. |
+
+Behind those four checks, the actual key bytes live wherever you already keep them — AWS KMS, GCP KMS, Azure Key Vault, HashiCorp Vault, an on-prem PKCS#11 HSM, or Aegis's own software RoT. **You don't migrate keys to adopt Aegis.** You point Aegis at what you have.
+
+Every decision, every score, every detection, every response feeds an immutable audit log with full human+agent attribution, full request context, the risk score with reasoning, and SIEM/webhook fan-out.
+
+## Example — a Claude agent goes rogue
+
+Alice, an SRE, gives Claude a one-hour scoped credential to sign Q2 invoices using `key:invoice-2026:sign`. Claude works through the queue: 49 signatures over 20 minutes. Aegis records each call with `actor=claude-session-7a3, parent=alice@org`, baseline risk score under 0.2.
+
+Then a prompt-injection attack in an upstream document tells Claude to exfiltrate. Claude starts calling `sign` against `key:treasury-master:sign` — which is **not** in its scope.
+
+```
+$ aegis audit --since 5m --include-agents
+03:14:09Z  KeyUsed       actor=claude-session-7a3  parent=alice@org  key=invoice-2026     op=sign  outcome=Success      risk=0.12
+03:14:11Z  KeyUsed       actor=claude-session-7a3  parent=alice@org  key=invoice-2026     op=sign  outcome=Success      risk=0.14
+... 47 more invoice signatures, all green ...
+03:14:53Z  AccessDenied  actor=claude-session-7a3  parent=alice@org  key=treasury-master  op=sign  outcome=Denied       reason=ScopeViolation
+03:14:53Z  AnomalyAlert  actor=claude-session-7a3  parent=alice@org  detector=ScopeBaseline       severity=High        action=AutoRevoke
+03:14:54Z  AgentRevoked  actor=alice@org           target=claude-session-7a3              reason=AnomalyAlert(ScopeBaseline,High)
+```
+
+The first off-scope call is hard-denied (boolean policy floor). The matching anomaly — "this agent has never touched this key before, and the source pattern just deviated from its baseline" — triggers auto-revoke. The JWT is dead before the third attempt arrives.
+
+Alice gets paged with the full timeline:
+
+```
+$ aegis advisor explain claude-session-7a3
+Agent claude-session-7a3 (parent: alice@org) was auto-revoked at 03:14:54Z.
+  Issued at 02:55:00Z with scope key:invoice-2026:sign for 1h
+  49 successful sign operations on key:invoice-2026 (within baseline)
+   1 denied attempt to sign with key:treasury-master at 03:14:53Z (ScopeViolation)
+   1 anomaly: unusual key target (ScopeBaseline detector, severity High)
+
+Auto-response: revoke. JWT jti=7a3...8ef invalidated. No further requests possible.
+Recommendation: review any other agent credentials issued under alice@org in the last 24h.
+Suggested follow-up: aegis agent list --parent alice@org --since 24h
+```
+
+Without Aegis, that scope violation is a 403 buried in a SIEM that someone reads tomorrow morning. With Aegis, it's a one-second loop: detect, revoke, page — **before the second misuse lands.**
+
+## Demo — what using Aegis looks like
+
+A short transcript of layered mode against an existing AWS KMS deployment.
+
+```
+# 1. Operator logs in via OIDC
+$ aegis login
+Opening browser to https://auth.your-org.internal/device ...
+✓ Logged in as alice@org (roles: kms-admin, sre)
+
+# 2. Register an existing AWS KMS CMK — no key material moves
+$ aegis key register \
+    --aws-arn arn:aws:kms:us-east-1:111122223333:key/d3b07384-... \
+    --alias   invoice-2026
+✓ Registered  invoice-2026  (k-9f2c-…)  backend=aws-kms  state=Active
+
+# 3. Issue Claude a one-hour scoped credential
+$ aegis agent issue \
+    --parent  alice@org \
+    --scopes  "key:k-9f2c-…:sign" \
+    --ttl     1h \
+    --label   "claude-invoice-batch-q2"
+agent=claude-session-7a3   jti=…8ef   ttl=1h
+JWT (export to your MCP host):
+eyJhbGciOiJFZERTQSI…
+
+# 4. Watch traffic in real time
+$ aegis audit tail --include-agents --include-risk
+03:14:09Z  KeyUsed     claude-session-7a3 → invoice-2026   sign   ok    risk=0.12
+03:14:11Z  KeyUsed     claude-session-7a3 → invoice-2026   sign   ok    risk=0.14
+03:14:13Z  KeyUsed     claude-session-7a3 → invoice-2026   sign   ok    risk=0.13
+… (continues)
+
+# 5. The advisor scans the inventory whenever you ask
+$ aegis advisor scan
+Scanning 47 keys, 12 agents, last 30 days …
+
+⚠  3 keys not used in 60+ days
+   k-2a11-…  legacy-ssh-ca           last used 2026-02-04 (82d)
+   k-7e8d-…  staging-tls-edge        last used 2026-01-12 (105d)
+   k-c4a9-…  retired-mongo-master    last used 2025-11-30 (148d)
+
+⚠  2 agents with unusually broad scopes for their parent
+   ci-bot-7    (parent: build-svc@org)   12 keys / 4 ops  — 95th percentile in your org
+   ddl-runner  (parent: dba@org)         8 keys / 3 ops   — recently widened on 04-22
+
+ℹ  No active anomalies. Last detector run 30s ago.
+
+Run  aegis advisor explain <id>  for any line above.
+```
+
+The same calls work whether the underlying key lives in AWS KMS, GCP, Azure, Vault, an HSM, or Aegis's own RoT. **You change the backend, you don't change the workflow.**
+
+> _Once the CLI is working end-to-end, record this transcript with `asciinema rec docs/demo.cast` and reference it here as_  
+> `[![Aegis demo](https://asciinema.org/a/<id>.svg)](https://asciinema.org/a/<id>)`
 
 ## Three ways to deploy
 
-Most teams should start with **layered** — keep your existing key store, get the intelligence and agent layer on top.
+Most teams should start with **layered** — keep your existing key store, get the agent identity and intelligence layer on top.
 
 | | **Layered** *(recommended)* | **Standalone** | **HSM-backed** |
 | --- | --- | --- | --- |
-| Who generates the key bytes? | AWS / GCP / Azure KMS or Vault — your existing service | Aegis, via its software or cloud-KMS RoT | The HSM, internally |
+| Who generates the key bytes? | AWS / GCP / Azure KMS or Vault | Aegis, via its software or cloud-KMS RoT | The HSM, internally |
 | Where does the key material live? | In your cloud KMS or Vault — Aegis stores only a reference | Wrapped in Aegis's Postgres | Inside the HSM, never leaves |
 | Where does the crypto op run? | Proxied to the cloud KMS | In Aegis (after RoT unwrap) | Inside the HSM |
-| What does Aegis own? | Identity, audit, **intelligence**, MCP, KMIP fronting | Everything (full data plane too) | Identity, audit, **intelligence**, MCP, KMIP fronting |
+| What does Aegis own? | Identity, audit, **intelligence**, agent governance | Everything (full data plane too) | Identity, audit, **intelligence**, agent governance |
 | Best for | Teams already on AWS / GCP / Vault wanting agent governance + AI integration **without migrating keys** | Air-gapped, sovereign cloud, full-stack OSS | FIPS 140-2 Level 3, regulated industries |
 
-The reason layered is the recommended path: most teams will not, and should not, migrate their existing AWS KMS CMKs. Layered mode means you keep your keys exactly where they are and adopt Aegis only as the **control and intelligence plane** — agent identity, audit consolidation, anomaly detection, MCP integration, and a unified interface across multiple cloud KMSes.
-
-## Architecture at a glance
-
-![Aegis-KMS — system surfaces, animated](docs/architecture-flow.svg)
-
-Apps, operators, storage vendors, and AI agents reach Aegis-KMS over four wire planes (REST, KMIP, MCP, Agent-AI). All four converge through IAM and a context-aware risk scorer into a single audited `KeyService`. Below `KeyService`, a pluggable **Root of Trust** decides where keys actually live — AWS KMS, GCP, Azure, Vault, PKCS#11 HSM, or local software. Every state change emits an `AuditEvent` with the actor identity preserved end to end; agent identities always carry a back-pointer to the human who issued them.
+In **layered mode** Aegis never sees plaintext key material. Every `sign` / `encrypt` / `decrypt` call passes through Aegis (identity → risk score → audit) and is proxied to your cloud KMS for the actual crypto. You keep AWS's FIPS attestation, SLA, and cost model — you add agent identity, anomaly detection, MCP integration, and the audit consolidation that AWS doesn't give you.
 
 ## How keys are generated
 
-This is the question every evaluator asks. The short answer: **Aegis is a control plane; the data plane is pluggable.** Concretely, key generation depends on which deployment mode you're in.
-
-### Layered mode — you already have AWS KMS / GCP / Azure / Vault
-
-You don't migrate keys. You register them.
+The short answer: **Aegis is a control plane; the data plane is pluggable.**
 
 ```bash
-# point Aegis at your existing CMKs — no key material moves
-aegis key register \
-  --aws-arn arn:aws:kms:us-east-1:111122223333:key/abcd-... \
-  --alias   invoice-signing
+# Layered — point Aegis at an existing CMK, no key material moves
+aegis key register --aws-arn arn:aws:kms:us-east-1:...:key/abcd-... --alias invoice-2026
+
+# Layered — new key, AWS HSMs generate it, Aegis stores only the ARN + metadata
+aegis key create invoice-2026 --backend aws-kms --spec ec-p256
+
+# Standalone — Aegis owns the data plane via its RoT
+aegis key create invoice-2026 --backend software --spec ec-p256
+
+# HSM-backed — generated inside the device, never leaves
+aegis key create invoice-2026 --backend pkcs11 --spec ec-p256
+
+# BYOK — import existing material on any backend
+aegis key import --alias customer-acme --wrapped wrapped.bin --wrap-scheme RSA-OAEP-SHA256
 ```
 
-Or create new keys and have Aegis delegate generation to your cloud KMS:
+Detail and per-backend semantics are in [docs/USAGE.md](docs/USAGE.md). RoT providers and plaintext lifetimes are in [docs/ARCHITECTURE.md §3](docs/ARCHITECTURE.md#3-key-lifecycle--how-a-key-actually-behaves).
 
-```bash
-aegis key create invoice-signing --backend aws-kms --spec ec-p256
-# Aegis calls `aws kms CreateKey` under the hood;
-# AWS HSMs generate the key; Aegis stores only the ARN + metadata.
-```
+## Architecture at a glance
 
-Every subsequent `sign` / `decrypt` / `verify` call goes through Aegis (IAM check, risk score, audit, MCP visibility) and is proxied to AWS KMS for the actual crypto. **No plaintext key material ever touches Aegis's host.**
+![Aegis — system surfaces, animated](docs/architecture-flow.svg)
 
-### Standalone mode — Aegis owns the data plane too
+Apps, operators, storage vendors, and AI agents reach Aegis over four wire planes (REST, KMIP, MCP, Agent-AI). All four converge through identity → risk score → policy → audit into a single audited `KeyService`. Below `KeyService`, a pluggable backend decides where keys actually live. Every state change emits an `AuditEvent` with the actor identity preserved end to end.
 
-```bash
-aegis key create invoice-signing --backend software --spec ec-p256
-```
+Lifecycle walkthrough: ![Aegis — key lifecycle](docs/usage-flow.svg)
 
-Aegis asks the configured Root of Trust for fresh material, wraps it under the RoT master key, and persists the wrapped form in Postgres. Plaintext is used briefly in-process for crypto ops, then immediately discarded.
-
-| RoT provider | How a fresh DEK is generated | Plaintext lifetime |
-| --- | --- | --- |
-| `software` (dev / test) | JCE `SecureRandom` (CSPRNG, `/dev/urandom` on Linux) | In JVM heap during the op, then zeroed |
-| `aws-kms` (envelope mode) | `GenerateDataKey` against an AWS CMK; AWS HSMs generate the DEK | In-process briefly, then discarded |
-| `gcp-kms` / `azure-keyvault` / `vault-transit` | Same envelope pattern | Same |
-| `pkcs11` | `C_GenerateKey` inside the HSM | **Never leaves the HSM** |
-
-The difference between layered mode with `aws-kms` and standalone mode with `aws-kms` RoT: in layered mode AWS KMS holds the *whole* key and every op proxies to AWS; in standalone envelope mode AWS KMS only wraps a DEK that Aegis stores in Postgres and unwraps per-operation.
-
-### HSM-backed mode — FIPS Level 3
-
-```bash
-aegis key create invoice-signing --backend pkcs11 --spec ec-p256
-```
-
-Aegis calls into the HSM via PKCS#11. The key is generated inside the device. Every crypto op runs inside the HSM. Aegis holds only an opaque handle. This is the deployment for regulated industries that need attestation that key material has never existed outside a tamper-resistant boundary.
-
-### Bring Your Own Key (BYOK) — any mode
-
-If you have existing key material (compliance escrow, customer-managed keys, legacy migration), import it on any plane:
-
-```bash
-aegis key import \
-  --alias       customer-acme-key \
-  --wrapped     wrapped.bin \
-  --wrap-scheme RSA-OAEP-SHA256
-```
-
-The imported key is wrapped by the configured backend before being persisted, so escrow material never sits anywhere in plaintext.
-
-## How it works end-to-end
-
-![Aegis-KMS — key lifecycle, end to end](docs/usage-flow.svg)
-
-A key in Aegis-KMS moves through four phases, and every transition is gated by IAM and recorded in the audit log:
-
-1. **Create.** An operator (human or via `aegis-cli`) requests a new key. IAM checks role and policy; the chosen backend generates the key (in layered mode this is AWS / GCP / Vault; in standalone it's the configured RoT; in HSM mode it's the device); audit records `KeyCreated`. The key starts in `PreActive` and transitions to `Active`.
-2. **Use.** An app (REST), a storage / database vendor (KMIP), or an AI agent (MCP) calls `encrypt` / `decrypt` / `sign` / `verify`. IAM checks the principal's scopes; the risk scorer evaluates the request against baseline; the operation runs through the backend; audit records `KeyUsed` with both the immediate actor and, for agents, the parent human operator.
-3. **Rotate.** Triggered manually, by policy, or by an `aegis-agent-ai` recommendation. `KeyService.rotate` mints a new version; the previous version stays available for decrypt-only so existing ciphertexts keep working; audit records `KeyRotated`.
-4. **Retire.** The operator deactivates the key (no new ops accepted), a configurable grace window passes, then `destroy` purges the wrapped DEK or revokes the cloud-KMS reference; audit records `KeyDestroyed`.
-
-The same `KeyService` algebra is reached from all four wire planes, which is why an AI agent calling over MCP is subject to exactly the same IAM checks, risk scoring, and audit trail as a human operator calling over REST.
+Deeper reading: [positioning](docs/POSITIONING.md) · [architecture](docs/ARCHITECTURE.md) · [usage](docs/USAGE.md) · [interactive walk-through](https://sharma-bhaskar.github.io/aegis-kms/architecture.html).
 
 ## Which wire do I use?
 
@@ -116,97 +184,16 @@ Most users only need one. KMIP is infrastructure plumbing; if you're writing app
 
 | You are... | Use | Why |
 | --- | --- | --- |
-| App developer (any language with HTTP / a JVM SDK) | **REST + SDK** | JSON over HTTPS, OpenAPI generated, easy to adopt |
+| App developer (any language with HTTP / a JVM SDK) | **REST + SDK** | JSON over HTTPS, OpenAPI generated |
 | AI agent or LLM tool | **MCP** | Native tool-use surface; scoped agent identity with mandatory parent-human linkage |
-| Storage array · database TDE · backup product · tape library · HSM proxy | **KMIP** | Your product already speaks KMIP — Aegis-KMS is a drop-in replacement for Vault Enterprise or Thales CipherTrust |
-| Custom tool-use / agent framework that isn't MCP-native | **Agent-AI** | Function-call shape with richer KMS-specific affordances |
+| Storage array · database TDE · backup product · tape library · HSM proxy | **KMIP** | Your product already speaks KMIP — Aegis is a drop-in for Vault Enterprise or Thales CipherTrust |
+| Custom tool-use / agent framework not MCP-native | **Agent-AI** | Function-call shape with KMS-specific affordances |
 
-KMIP is an OASIS binary protocol from 2010 (TTLV framing over mTLS). It exists because **storage vendors** (NetApp, Dell EMC, Pure Storage), **databases** (Oracle TDE, MSSQL EKM, MongoDB Enterprise), **backup systems** (Veeam, Commvault, Veritas), and **tape libraries** needed a standard way to talk to a KMS. If you are not one of those things, you almost certainly want REST or the SDK, not KMIP.
-
-KMIP is **optional** in any deployment — disable the listener in config and the rest of Aegis-KMS works exactly the same.
-
-## Using Aegis-KMS
-
-Four ways to use it, depending on who you are. End-to-end walkthrough with auth setup, full options, and common patterns is in [docs/USAGE.md](docs/USAGE.md).
-
-### As an app developer — REST + SDK
-
-```bash
-export AEGIS_URL=https://aegis.your-org.internal
-export AEGIS_TOKEN=$(your-oidc-flow)
-
-# create — in layered mode this delegates to your cloud KMS
-curl -X POST $AEGIS_URL/v1/keys \
-  -H "Authorization: Bearer $AEGIS_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"alias":"invoice-signing","backend":"aws-kms","spec":{"algorithm":"EC","curve":"P-256","usage":["Sign","Verify"]}}'
-
-curl -X POST $AEGIS_URL/v1/keys/<id>/activate -H "Authorization: Bearer $AEGIS_TOKEN"
-
-curl -X POST $AEGIS_URL/v1/keys/<id>/sign \
-  -H "Authorization: Bearer $AEGIS_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"message":"<base64>","algorithm":"ECDSA-SHA256"}'
-```
-
-```scala
-import cats.effect.IO
-import dev.aegiskms.sdk.{AegisClient, AegisConfig}
-import dev.aegiskms.core.KeySpec
-
-val client = AegisClient[IO](AegisConfig(url, token))
-for
-  k   <- client.keys.create(KeySpec.ec256("invoice-signing"))
-  _   <- client.keys.activate(k.id)
-  sig <- client.keys.sign(k.id, message = bytes)
-yield sig
-```
-
-### As an operator — `aegis-cli`
-
-```bash
-aegis login
-aegis key register --aws-arn arn:aws:kms:... --alias prod-signing       # layered: register existing
-aegis key create invoice-signing --backend aws-kms --spec ec-p256       # layered: new key delegated
-aegis key list --state Active
-aegis key rotate <id>
-aegis audit --actor alice@org --since 24h
-aegis agent issue --parent alice@org --scopes "key:<id>:sign" --ttl 1h
-aegis advisor scan                                                       # LLM advisor: unused / risky / under-rotated keys
-```
-
-### As an AI agent — MCP
-
-The operator issues a scoped, short-lived agent credential. The MCP client (Claude Desktop, Cursor, any MCP host) is configured to point at Aegis-KMS and uses that credential.
-
-```jsonc
-// claude_desktop_config.json
-{
-  "mcpServers": {
-    "aegis-kms": {
-      "command": "aegis-mcp-bridge",
-      "args": ["--url", "https://aegis.your-org.internal", "--token-env", "AEGIS_AGENT_JWT"]
-    }
-  }
-}
-```
-
-The agent sees tools like `create_key`, `sign`, `verify`, `rotate`, `list_keys`. Every call is gated by IAM against the agent's allowlist, scored by the risk engine, audited under the agent's identity, and joined back to the parent human in the audit log.
-
-### As a storage / database / backup vendor — KMIP
-
-```
-Host:      aegis.your-org.internal
-Port:      5696
-TLS:       1.3, mTLS (client cert via `aegis cert issue --cn <name>`)
-Versions:  KMIP 1.4 / 2.0 / 2.1 / 2.2 / 3.0 (auto-negotiated)
-```
-
-In layered mode, KMIP requests are scoped, scored, and proxied to the underlying cloud KMS or HSM. Your storage array doesn't know it's not talking to a traditional KMIP server; meanwhile, every request is observable to Aegis's intelligence layer and the audit log.
+KMIP is **optional** in any deployment.
 
 ## How it compares
 
-| Capability | Cloud KMS<br/>(AWS / GCP / Azure) | Vault Enterprise | OpenBao | **Aegis-KMS** |
+| Capability | Cloud KMS<br/>(AWS / GCP / Azure) | Vault Enterprise | OpenBao | **Aegis** |
 | --- | --- | --- | --- | --- |
 | License | Proprietary | BSL | MPL-2.0 | **Apache-2.0** |
 | Self-hostable / air-gapped | No | Yes | Yes | **Yes** |
@@ -227,7 +214,7 @@ Deeper writeup in [docs/ARCHITECTURE.md §10](docs/ARCHITECTURE.md#10-how-aegis-
 | Module | Purpose | Depends on Pekko? |
 | --- | --- | --- |
 | `aegis-core` | Pure domain (DTOs, `KeyService[F]` algebra) | No |
-| `aegis-crypto` | Root-of-trust SPI + provider impls (software / AWS / GCP / Azure / Vault / PKCS#11) | No |
+| `aegis-crypto` | Backend SPI + provider impls (software / AWS / GCP / Azure / Vault / PKCS#11) | No |
 | `aegis-iam` | Principals, policies, JWT/OIDC, agent identity | No |
 | `aegis-audit` | Append-only audit log SPI | No |
 | `aegis-persistence` | Doobie-based store + Postgres / MySQL drivers | No |
