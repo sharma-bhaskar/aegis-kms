@@ -1,7 +1,6 @@
 package dev.aegiskms.persistence
 
 import cats.effect.{IO, Ref}
-import cats.syntax.all.*
 import dev.aegiskms.core.KeyEvent
 
 /** Append-only journal of `KeyEvent`s. The lifecycle actor in `aegis-server` writes one event per state
