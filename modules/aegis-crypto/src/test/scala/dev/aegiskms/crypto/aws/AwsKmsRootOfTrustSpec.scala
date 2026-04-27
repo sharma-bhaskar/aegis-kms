@@ -4,7 +4,8 @@ import cats.effect.unsafe.implicits.global
 import dev.aegiskms.core.{Algorithm, ErrorCode, KeyId, KeyObjectType, KeySpec}
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatest.matchers.should.Matchers
-import software.amazon.awssdk.services.kms.model.{AwsErrorDetails, DataKeySpec, KmsException}
+import software.amazon.awssdk.awscore.exception.AwsErrorDetails
+import software.amazon.awssdk.services.kms.model.{DataKeySpec, KmsException}
 
 /** Unit tests for `AwsKmsRootOfTrust` using a hand-rolled stub of `AwsKmsPort`.
   *
