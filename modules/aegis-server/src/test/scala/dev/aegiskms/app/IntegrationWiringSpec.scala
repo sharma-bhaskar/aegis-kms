@@ -7,7 +7,6 @@ import dev.aegiskms.core.*
 import dev.aegiskms.iam.AuthorizingKeyService
 import dev.aegiskms.persistence.EventJournal
 import org.apache.pekko.actor.testkit.typed.scaladsl.ScalaTestWithActorTestKit
-import org.apache.pekko.actor.typed.scaladsl.AskPattern.*
 import org.apache.pekko.util.Timeout
 import org.scalatest.matchers.should.Matchers
 import org.scalatest.wordspec.AnyWordSpecLike
