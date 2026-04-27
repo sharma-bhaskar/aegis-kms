@@ -1,6 +1,6 @@
 package dev.aegiskms.cli
 
-import dev.aegiskms.cli.AegisHttpClient.{ClientError, renderError}
+import dev.aegiskms.cli.AegisHttpClient.{renderError, ClientError}
 import dev.aegiskms.cli.WireFormats.{KeySpecDto, ManagedKeyDto}
 
 import java.nio.file.Path
