@@ -76,21 +76,21 @@ object Commands:
   def agentIssue: CommandResult =
     CommandResult.err(
       "agent issue: not yet wired up — the agent-token issuance endpoint ships in PR A1.",
-      exitCode = 2
+      code = 2
     )
 
   /** `aegis audit tail` — streams the audit feed. Awaiting an audit-streaming endpoint (PR F2.b). */
   def auditTail: CommandResult =
     CommandResult.err(
       "audit tail: not yet wired up — server-side audit streaming ships in PR F2.b.",
-      exitCode = 2
+      code = 2
     )
 
   /** `aegis advisor scan` — runs the LLM advisor against recent audit data. Awaits PR W4. */
   def advisorScan: CommandResult =
     CommandResult.err(
       "advisor scan: not yet wired up — the LLM advisor ships in PR W4.",
-      exitCode = 2
+      code = 2
     )
 
   // ── Helpers ────────────────────────────────────────────────────────────────

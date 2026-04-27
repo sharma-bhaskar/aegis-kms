@@ -1,6 +1,7 @@
 package dev.aegiskms.cli
 
 import dev.aegiskms.cli.WireFormats.*
+import io.circe.Decoder
 import io.circe.parser.*
 import io.circe.syntax.*
 

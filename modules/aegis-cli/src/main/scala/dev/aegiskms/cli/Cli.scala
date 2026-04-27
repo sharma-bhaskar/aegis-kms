@@ -109,9 +109,9 @@ object Cli:
           case None    => Left("keys create: --size is required when --alg has no size suffix")
 
     for
-      n      <- name
-      (a, s) <- algAndSize
-    yield (a, s, n)
+      n  <- name
+      as <- algAndSize
+    yield (as._1, as._2, n)
 
   /** Tiny `--key value --key2 value2 …` flag parser. Anything else gets ignored — fine for our tiny surface. */
   private def parseFlags(args: List[String]): Map[String, String] =

@@ -38,13 +38,18 @@ final class CliSpec extends AnyFunSuite with Matchers:
     )
 
   /** A factory that captures the request the parser dispatches, so assertions about parsed flags can verify
-    * what made it onto the wire.
+    * what made it onto the wire. `status` defaults to 200 (the right code for `keys get`); pass 201 for
+    * `keys create` since `AegisHttpClient.createKey` only treats 201 Created as success.
     */
-  private def captureFactory(cap: HttpPort.Request => Unit, body: String): CliConfig => AegisHttpClient =
+  private def captureFactory(
+      cap: HttpPort.Request => Unit,
+      body: String,
+      status: Int = 200
+  ): CliConfig => AegisHttpClient =
     cfg => new AegisHttpClient(
       new HttpPort:
         def execute(req: HttpPort.Request): HttpPort.Response = {
-          cap(req); HttpPort.Response(200, body)
+          cap(req); HttpPort.Response(status, body)
         },
       cfg.serverUrl,
       cfg.principal
@@ -67,7 +72,7 @@ final class CliSpec extends AnyFunSuite with Matchers:
     val r = Cli.run(
       List("keys", "create", "--alg", "AES-256", "--name", "invoice-2026"),
       cfg,
-      captureFactory(req => captured = Some(req), sampleKey.asJson.noSpaces)
+      captureFactory(req => captured = Some(req), sampleKey.asJson.noSpaces, status = 201)
     )
     r.exitCode shouldBe 0
     captured.get.method shouldBe "POST"
@@ -81,7 +86,7 @@ final class CliSpec extends AnyFunSuite with Matchers:
     val r = Cli.run(
       List("keys", "create", "--alg", "AES", "--size", "256", "--name", "k"),
       cfg,
-      captureFactory(req => captured = Some(req), sampleKey.asJson.noSpaces)
+      captureFactory(req => captured = Some(req), sampleKey.asJson.noSpaces, status = 201)
     )
     r.exitCode shouldBe 0
     captured.get.body.get should include("\"sizeBits\":256")
