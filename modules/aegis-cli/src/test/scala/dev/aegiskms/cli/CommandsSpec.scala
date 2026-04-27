@@ -9,8 +9,8 @@ import java.nio.file.Files
 import java.time.Instant
 
 /** Tests for `Commands` — the pure command handlers. We assert exact stdout/stderr text + exit codes,
-  * matching the contract scripts and humans rely on. The HTTP boundary is faked with a tiny in-memory port
-  * so we don't need to spin up a server.
+  * matching the contract scripts and humans rely on. The HTTP boundary is faked with a tiny in-memory port so
+  * we don't need to spin up a server.
   */
 final class CommandsSpec extends AnyFunSuite with Matchers:
 
@@ -62,7 +62,7 @@ final class CommandsSpec extends AnyFunSuite with Matchers:
 
   test("keys create renders the resulting key in the human-readable block format") {
     val client = clientReturning(201, sampleKey.asJson.noSpaces)
-    val r = Commands.keysCreate(client, "AES", 256, "invoice-2026")
+    val r      = Commands.keysCreate(client, "AES", 256, "invoice-2026")
     r.exitCode shouldBe 0
     r.stdout should include("id:        " + sampleKey.id)
     r.stdout should include("name:      invoice-2026")
@@ -72,15 +72,15 @@ final class CommandsSpec extends AnyFunSuite with Matchers:
 
   test("keys get renders the key when the server returns 200") {
     val client = clientReturning(200, sampleKey.asJson.noSpaces)
-    val r = Commands.keysGet(client, sampleKey.id)
+    val r      = Commands.keysGet(client, sampleKey.id)
     r.exitCode shouldBe 0
     r.stdout should include(sampleKey.id)
   }
 
   test("keys get on a missing id exits 4 (not-found) with the server's error message") {
     val errBody = KmsErrorDto("ItemNotFound", "no such key").asJson.noSpaces
-    val client = clientReturning(404, errBody)
-    val r = Commands.keysGet(client, "missing")
+    val client  = clientReturning(404, errBody)
+    val r       = Commands.keysGet(client, "missing")
     r.exitCode shouldBe 4
     r.stderr should include("ItemNotFound")
     r.stderr should include("no such key")
@@ -88,22 +88,22 @@ final class CommandsSpec extends AnyFunSuite with Matchers:
 
   test("keys activate on a denied call exits 5 (permission) with the server's reason") {
     val errBody = KmsErrorDto("PermissionDenied", "subject not granted Activate").asJson.noSpaces
-    val client = clientReturning(403, errBody)
-    val r = Commands.keysActivate(client, sampleKey.id)
+    val client  = clientReturning(403, errBody)
+    val r       = Commands.keysActivate(client, sampleKey.id)
     r.exitCode shouldBe 5
     r.stderr should include("PermissionDenied")
   }
 
   test("keys destroy emits a single-line confirmation on 204") {
     val client = clientReturning(204, "")
-    val r = Commands.keysDestroy(client, sampleKey.id)
+    val r      = Commands.keysDestroy(client, sampleKey.id)
     r.exitCode shouldBe 0
     r.stdout shouldBe s"destroyed ${sampleKey.id}"
   }
 
   test("keys create on a server 500 with non-JSON body exits 1 with the snippet visible") {
     val client = clientReturning(500, "boom")
-    val r = Commands.keysCreate(client, "AES", 256, "k")
+    val r      = Commands.keysCreate(client, "AES", 256, "k")
     r.exitCode shouldBe 1
     r.stderr should include("500")
     r.stderr should include("boom")
@@ -115,4 +115,3 @@ final class CommandsSpec extends AnyFunSuite with Matchers:
     Commands.auditTail.stderr should include("PR F2.b")
     Commands.advisorScan.stderr should include("PR W4")
   }
-

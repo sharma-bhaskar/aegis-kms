@@ -16,8 +16,8 @@ object Cli:
   /** Pure parse + dispatch. Tests call this directly. */
   def run(args: List[String], cfg: => CliConfig, makeClient: CliConfig => AegisHttpClient): CommandResult =
     args match
-      case Nil                  => help
-      case "version" :: Nil     => Commands.version
+      case Nil                         => help
+      case "version" :: Nil            => Commands.version
       case "--help" :: _ | "help" :: _ => help
 
       case "login" :: rest =>
@@ -28,9 +28,9 @@ object Cli:
       case "keys" :: subcmd :: rest =>
         keysCommand(subcmd, rest, cfg, makeClient)
 
-      case "agent" :: "issue" :: _   => Commands.agentIssue
-      case "audit" :: "tail" :: _    => Commands.auditTail
-      case "advisor" :: "scan" :: _  => Commands.advisorScan
+      case "agent" :: "issue" :: _  => Commands.agentIssue
+      case "audit" :: "tail" :: _   => Commands.auditTail
+      case "advisor" :: "scan" :: _ => Commands.advisorScan
 
       case unknown =>
         CommandResult.err(s"unknown command: ${unknown.mkString(" ")}\n\n${help.stdout}")
@@ -64,17 +64,17 @@ object Cli:
       case "get" =>
         rest match
           case id :: _ if id.nonEmpty => Commands.keysGet(makeClient(cfg), id)
-          case _ => CommandResult.err(s"keys get: missing <id>\n\nUsage: aegis keys get <id>")
+          case _ => CommandResult.err("keys get: missing <id>\n\nUsage: aegis keys get <id>")
 
       case "activate" =>
         rest match
           case id :: _ if id.nonEmpty => Commands.keysActivate(makeClient(cfg), id)
-          case _ => CommandResult.err(s"keys activate: missing <id>\n\nUsage: aegis keys activate <id>")
+          case _ => CommandResult.err("keys activate: missing <id>\n\nUsage: aegis keys activate <id>")
 
       case "destroy" =>
         rest match
           case id :: _ if id.nonEmpty => Commands.keysDestroy(makeClient(cfg), id)
-          case _ => CommandResult.err(s"keys destroy: missing <id>\n\nUsage: aegis keys destroy <id>")
+          case _ => CommandResult.err("keys destroy: missing <id>\n\nUsage: aegis keys destroy <id>")
 
       case other =>
         CommandResult.err(s"unknown keys subcommand: $other\n\n${keysHelp}")
@@ -89,7 +89,7 @@ object Cli:
   /** Parse `aegis keys create --alg AES-256 --name <name>` (also accepts `--alg AES --size 256`). */
   private def parseKeysCreate(args: List[String]): Either[String, (String, Int, String)] =
     val flags = parseFlags(args)
-    val name = flags.get("--name").toRight("keys create: --name <name> is required")
+    val name  = flags.get("--name").toRight("keys create: --name <name> is required")
 
     // Two valid spellings:
     //   --alg AES-256          (combined; mirrors how users actually talk about it)
@@ -105,15 +105,16 @@ object Cli:
       case Some(alg) =>
         flags.get("--size") match
           case Some(s) => s.toIntOption.toRight(s"keys create: --size must be an integer, got $s")
-                          .map(size => (alg, size))
-          case None    => Left("keys create: --size is required when --alg has no size suffix")
+              .map(size => (alg, size))
+          case None => Left("keys create: --size is required when --alg has no size suffix")
 
     for
       n  <- name
       as <- algAndSize
     yield (as._1, as._2, n)
 
-  /** Tiny `--key value --key2 value2 …` flag parser. Anything else gets ignored — fine for our tiny surface. */
+  /** Tiny `--key value --key2 value2 …` flag parser. Anything else gets ignored — fine for our tiny surface.
+    */
   private def parseFlags(args: List[String]): Map[String, String] =
     args.sliding(2, 2).collect {
       case List(k, v) if k.startsWith("--") => k -> v
@@ -139,8 +140,8 @@ object Cli:
       |Env:    AEGIS_SERVER, AEGIS_USER override the saved config""".stripMargin
   )
 
-  private val loginHelp: String     = "Usage: aegis login --server <url> [--user <subject>]"
-  private val keysHelp: String      =
+  private val loginHelp: String = "Usage: aegis login --server <url> [--user <subject>]"
+  private val keysHelp: String =
     """Usage:
       |  aegis keys create --alg <ALG> --name <NAME>
       |  aegis keys get <id>

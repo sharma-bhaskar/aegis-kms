@@ -8,8 +8,8 @@ import software.amazon.awssdk.services.kms.model.{
   GenerateDataKeyRequest
 }
 
-/** A minimal seam over `software.amazon.awssdk.services.kms.KmsClient` covering only the operations the
-  * Aegis RoT calls. Two reasons it exists:
+/** A minimal seam over `software.amazon.awssdk.services.kms.KmsClient` covering only the operations the Aegis
+  * RoT calls. Two reasons it exists:
   *   - The SDK client interface has a huge abstract surface; subclassing it for tests is brittle.
   *   - It pins exactly the AWS calls Aegis depends on, which makes it the obvious place to add retry,
   *     metrics, and request-context plumbing in one place.

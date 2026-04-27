@@ -82,9 +82,9 @@ final class AuditingKeyService(inner: KeyService[IO], sink: AuditSink[IO]) exten
   // ── Helpers ────────────────────────────────────────────────────────────────
 
   /** Threads a fresh correlation id and a wall-clock timestamp through the action and writes the resulting
-    * `AuditRecord`. The caller closes over `op`, `by`, and `resource` directly when building the record — this
-    * helper deliberately doesn't take them, since duplicating that parameter list (helper + closure) was dead
-    * weight (and the compiler's `-Wunused` agreed).
+    * `AuditRecord`. The caller closes over `op`, `by`, and `resource` directly when building the record —
+    * this helper deliberately doesn't take them, since duplicating that parameter list (helper + closure) was
+    * dead weight (and the compiler's `-Wunused` agreed).
     */
   private def instrument[A](action: => IO[A])(
       record: (java.time.Instant, String, A) => AuditRecord

@@ -16,10 +16,10 @@ import scala.concurrent.duration.*
 
 /** Integration test for the I1 wiring: actor + audit + auth + W1 anomaly detector composed end-to-end.
   *
-  * This is what proves the README's "Claude goes rogue" demo works end-to-end against the actual Server
-  * stack — not the simplified unit-test fakes used in the W1 spec. We don't bind HTTP here (that's the
-  * existing `HttpRoutesSpec`); we exercise the assembled `KeyService[IO]` directly so we can verify side
-  * effects on every layer.
+  * This is what proves the README's "Claude goes rogue" demo works end-to-end against the actual Server stack
+  * — not the simplified unit-test fakes used in the W1 spec. We don't bind HTTP here (that's the existing
+  * `HttpRoutesSpec`); we exercise the assembled `KeyService[IO]` directly so we can verify side effects on
+  * every layer.
   */
 final class IntegrationWiringSpec extends ScalaTestWithActorTestKit with AnyWordSpecLike with Matchers:
 
@@ -40,15 +40,15 @@ final class IntegrationWiringSpec extends ScalaTestWithActorTestKit with AnyWord
 
   /** Build the assembled stack with an in-memory audit sink so we can read records back. */
   private def freshStack() =
-    val journal      = EventJournal.inMemory.unsafeRunSync()
-    val keyOpsActor  = spawn(KeyOpsActor.behavior(journal, replayed = Nil))
-    val actorBacked  = new ActorBackedKeyService(keyOpsActor)(using summon[Timeout], system.scheduler)
-    val authorizing  = new AuthorizingKeyService(actorBacked, new DevPolicyEngine)
-    val innerSink    = InMemoryAuditSink.make.unsafeRunSync()
-    val recSink      = InMemoryRecommendationSink.make.unsafeRunSync()
-    val detector     = BaselineDetector.make().unsafeRunSync()
-    val tappedSink   = TappedAuditSink(innerSink, detector, recSink)
-    val auditing     = new AuditingKeyService(authorizing, tappedSink)
+    val journal     = EventJournal.inMemory.unsafeRunSync()
+    val keyOpsActor = spawn(KeyOpsActor.behavior(journal, replayed = Nil))
+    val actorBacked = new ActorBackedKeyService(keyOpsActor)(using summon[Timeout], system.scheduler)
+    val authorizing = new AuthorizingKeyService(actorBacked, new DevPolicyEngine)
+    val innerSink   = InMemoryAuditSink.make.unsafeRunSync()
+    val recSink     = InMemoryRecommendationSink.make.unsafeRunSync()
+    val detector    = BaselineDetector.make().unsafeRunSync()
+    val tappedSink  = TappedAuditSink(innerSink, detector, recSink)
+    val auditing    = new AuditingKeyService(authorizing, tappedSink)
     (auditing, innerSink, recSink)
 
   "I1 stack" should {
@@ -116,4 +116,3 @@ final class IntegrationWiringSpec extends ScalaTestWithActorTestKit with AnyWord
       after.toOption.get.state shouldBe KeyState.Active
     }
   }
-

@@ -8,13 +8,13 @@ import software.amazon.awssdk.services.kms.model.{DataKeySpec, KmsException}
 
 /** A `RootOfTrust` backed by AWS KMS, implementing the **layered-mode** key generation flow.
   *
-  * In layered mode, Aegis never sees plaintext key material outside an envelope-encryption call. The
-  * sequence on `generateDataKey`:
-  *   1. Call `GenerateDataKey` on the configured KEK CMK in AWS KMS.
-  *   2. AWS returns the plaintext data key + the wrapped (CiphertextBlob) data key.
-  *   3. Aegis returns `WrappedKey(bytes = ciphertextBlob, rotationId = kekArn)`. The plaintext data key is
-  *      discarded by this layer — when the caller actually needs the bytes (e.g. inline AES-GCM in
-  *      `aegis-crypto`'s envelope module), it calls `unwrap` to materialize them.
+  * In layered mode, Aegis never sees plaintext key material outside an envelope-encryption call. The sequence
+  * on `generateDataKey`:
+  *   1. Call `GenerateDataKey` on the configured KEK CMK in AWS KMS. 2. AWS returns the plaintext data key +
+  *      the wrapped (CiphertextBlob) data key. 3. Aegis returns `WrappedKey(bytes = ciphertextBlob,
+  *      rotationId = kekArn)`. The plaintext data key is discarded by this layer — when the caller actually
+  *      needs the bytes (e.g. inline AES-GCM in `aegis-crypto`'s envelope module), it calls `unwrap` to
+  *      materialize them.
   *
   * `unwrap` reverses by calling `Decrypt` with the same KEK; we pass the KEK explicitly so AWS can validate
   * the ARN context even on aliased CMKs.
@@ -52,7 +52,7 @@ final class AwsKmsRootOfTrust(port: AwsKmsPort, kekArn: String) extends RootOfTr
     spec.algorithm match
       case Algorithm.AES if spec.sizeBits == 256 => DataKeySpec.AES_256
       case Algorithm.AES if spec.sizeBits == 128 => DataKeySpec.AES_128
-      case _ =>
+      case _                                     =>
         // AWS GenerateDataKey only supports AES-128/256 for symmetric data keys; for asymmetric we'd use
         // GenerateDataKeyPair. Map other specs to a default — the actor layer's spec validation should have
         // caught anything unsupported before we got here.

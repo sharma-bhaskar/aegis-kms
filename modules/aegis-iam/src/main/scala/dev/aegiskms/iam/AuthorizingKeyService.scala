@@ -29,8 +29,8 @@ final class AuthorizingKeyService(
 
   def locate(namePattern: String, by: Principal): IO[List[ManagedKey]] =
     engine.permit(by, Operation.Locate, s"pattern:$namePattern").flatMap {
-      case Decision.Allow            => inner.locate(namePattern, by)
-      case Decision.Deny(_)          => IO.pure(Nil)
+      case Decision.Allow             => inner.locate(namePattern, by)
+      case Decision.Deny(_)           => IO.pure(Nil)
       case Decision.StepUpRequired(_) => IO.pure(Nil)
     }
 
@@ -47,8 +47,8 @@ final class AuthorizingKeyService(
       action: => IO[Either[KmsError, A]]
   ): IO[Either[KmsError, A]] =
     engine.permit(by, op, resource).flatMap {
-      case Decision.Allow              => action
-      case Decision.Deny(reason)       => IO.pure(Left(KmsError(ErrorCode.PermissionDenied, reason)))
+      case Decision.Allow        => action
+      case Decision.Deny(reason) => IO.pure(Left(KmsError(ErrorCode.PermissionDenied, reason)))
       case Decision.StepUpRequired(why) =>
         IO.pure(Left(KmsError(ErrorCode.PermissionDenied, s"step-up required: $why")))
     }

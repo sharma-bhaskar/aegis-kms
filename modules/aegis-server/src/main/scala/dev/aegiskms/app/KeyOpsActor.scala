@@ -145,7 +145,10 @@ object KeyOpsActor:
                 replyTo ! Right(updated)
                 running(journal, state + (id -> updated), clock, idGen)
               } { err =>
-                replyTo ! Left(KmsError(ErrorCode.GeneralFailure, s"journal append failed: ${err.getMessage}"))
+                replyTo ! Left(KmsError(
+                  ErrorCode.GeneralFailure,
+                  s"journal append failed: ${err.getMessage}"
+                ))
                 Behaviors.same
               }
 
@@ -161,7 +164,10 @@ object KeyOpsActor:
                 replyTo ! Right(updated)
                 running(journal, state + (id -> updated), clock, idGen)
               } { err =>
-                replyTo ! Left(KmsError(ErrorCode.GeneralFailure, s"journal append failed: ${err.getMessage}"))
+                replyTo ! Left(KmsError(
+                  ErrorCode.GeneralFailure,
+                  s"journal append failed: ${err.getMessage}"
+                ))
                 Behaviors.same
               }
 
@@ -176,7 +182,10 @@ object KeyOpsActor:
                 replyTo ! Right(())
                 running(journal, state - id, clock, idGen)
               } { err =>
-                replyTo ! Left(KmsError(ErrorCode.GeneralFailure, s"journal append failed: ${err.getMessage}"))
+                replyTo ! Left(KmsError(
+                  ErrorCode.GeneralFailure,
+                  s"journal append failed: ${err.getMessage}"
+                ))
                 Behaviors.same
               }
     }

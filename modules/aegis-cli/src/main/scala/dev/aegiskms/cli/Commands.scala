@@ -18,9 +18,9 @@ object Commands:
     def withExit(code: Int): CommandResult = copy(exitCode = code)
 
   object CommandResult:
-    val ok: CommandResult                                    = CommandResult()
-    def out(text: String): CommandResult                     = CommandResult(stdout = text)
-    def err(text: String, code: Int = 1): CommandResult      = CommandResult(stderr = text, exitCode = code)
+    val ok: CommandResult                               = CommandResult()
+    def out(text: String): CommandResult                = CommandResult(stdout = text)
+    def err(text: String, code: Int = 1): CommandResult = CommandResult(stderr = text, exitCode = code)
 
   // ── version ────────────────────────────────────────────────────────────────
 

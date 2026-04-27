@@ -5,8 +5,8 @@ import dev.aegiskms.core.{Operation, Principal}
 
 /** A simple allowlist policy engine.
   *
-  * Boolean policy is the floor of the four-pillar model — risk scoring (PR W2) and anomaly detection
-  * (PR W1) layer on top, but a deny here is always honored without consulting them.
+  * Boolean policy is the floor of the four-pillar model — risk scoring (PR W2) and anomaly detection (PR W1)
+  * layer on top, but a deny here is always honored without consulting them.
   *
   * Rules:
   *   - `Principal.Human(subject, groups)` is allowed if any of `groups` is bound to the requested op via
@@ -47,9 +47,9 @@ final class RoleBasedPolicyEngine(
           Decision.Deny(s"agent $subject scope does not include $op")
         else
           decide(operator, op) match
-            case Decision.Allow                => Decision.Allow
-            case Decision.Deny(reason)         => Decision.Deny(s"agent $subject blocked by parent: $reason")
-            case Decision.StepUpRequired(why)  => Decision.StepUpRequired(why)
+            case Decision.Allow               => Decision.Allow
+            case Decision.Deny(reason)        => Decision.Deny(s"agent $subject blocked by parent: $reason")
+            case Decision.StepUpRequired(why) => Decision.StepUpRequired(why)
 
 object RoleBasedPolicyEngine:
 

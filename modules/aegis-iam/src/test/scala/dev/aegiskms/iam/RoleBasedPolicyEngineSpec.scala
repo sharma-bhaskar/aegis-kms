@@ -82,7 +82,7 @@ final class RoleBasedPolicyEngineSpec extends AnyFunSuite with Matchers:
     deny shouldBe a[Decision.Deny]
     deny match
       case Decision.Deny(reason) => reason should include("scope does not include")
-      case other                  => fail(s"expected Deny, got $other")
+      case other                 => fail(s"expected Deny, got $other")
   }
 
   test("Agent within scope but with a denied parent is denied — no escalation past the human") {
@@ -103,7 +103,7 @@ final class RoleBasedPolicyEngineSpec extends AnyFunSuite with Matchers:
     deny shouldBe a[Decision.Deny]
     deny match
       case Decision.Deny(reason) => reason should include("blocked by parent")
-      case other                  => fail(s"expected Deny, got $other")
+      case other                 => fail(s"expected Deny, got $other")
   }
 
   test("denyAll engine denies every call") {

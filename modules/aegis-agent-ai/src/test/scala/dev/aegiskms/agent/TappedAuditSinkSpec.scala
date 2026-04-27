@@ -36,8 +36,15 @@ final class TappedAuditSinkSpec extends AnyFunSuite with Matchers:
     val tap       = TappedAuditSink(auditSink, detector, recSink)
 
     val baseTs = Instant.parse("2026-04-25T03:00:00Z")
-    val rec1 = AuditRecord(baseTs, claude, Operation.Get, "key:invoice-2026", "Success", "c1")
-    val rec2 = AuditRecord(baseTs.plusSeconds(60), claude, Operation.Get, "key:treasury-master", "Failed code=PermissionDenied", "c2")
+    val rec1   = AuditRecord(baseTs, claude, Operation.Get, "key:invoice-2026", "Success", "c1")
+    val rec2 = AuditRecord(
+      baseTs.plusSeconds(60),
+      claude,
+      Operation.Get,
+      "key:treasury-master",
+      "Failed code=PermissionDenied",
+      "c2"
+    )
 
     tap.write(rec1).unsafeRunSync()
     tap.write(rec2).unsafeRunSync()
@@ -56,7 +63,14 @@ final class TappedAuditSinkSpec extends AnyFunSuite with Matchers:
 
     val baseTs = Instant.parse("2026-04-25T03:00:00Z")
     tap.write(AuditRecord(baseTs, claude, Operation.Get, "key:invoice-2026", "Success", "c1")).unsafeRunSync()
-    tap.write(AuditRecord(baseTs.plusSeconds(1), claude, Operation.Get, "key:treasury-master", "Failed", "c2")).unsafeRunSync()
+    tap.write(AuditRecord(
+      baseTs.plusSeconds(1),
+      claude,
+      Operation.Get,
+      "key:treasury-master",
+      "Failed",
+      "c2"
+    )).unsafeRunSync()
 
     val rec = recSink.all.unsafeRunSync().find(_.detector == "ScopeBaseline").get
     rec.actor match

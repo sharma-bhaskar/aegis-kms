@@ -11,8 +11,8 @@ import java.time.Instant
   * log. `AgentRecommendation` is produced by streaming detectors in real time on the request path; it is the
   * vehicle that drives the auto-response actions in PR W3.
   *
-  * One detector may emit multiple recommendations against the same actor over time. Each recommendation has
-  * a stable `detector` name plus an event id so consumers can de-duplicate.
+  * One detector may emit multiple recommendations against the same actor over time. Each recommendation has a
+  * stable `detector` name plus an event id so consumers can de-duplicate.
   */
 final case class AgentRecommendation(
     eventId: String,

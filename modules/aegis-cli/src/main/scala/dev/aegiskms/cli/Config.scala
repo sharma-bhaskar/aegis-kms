@@ -29,9 +29,8 @@ object CliConfig:
     }
 
   /** Resolved config, with fallbacks so commands work even before `aegis login` has run:
-    *   1. `AEGIS_SERVER` / `AEGIS_USER` env vars (handy in CI / docker)
-    *   2. The persisted config file
-    *   3. The hard-coded default of `http://localhost:8443` and no principal
+    *   1. `AEGIS_SERVER` / `AEGIS_USER` env vars (handy in CI / docker) 2. The persisted config file 3. The
+    *      hard-coded default of `http://localhost:8443` and no principal
     */
   def load(path: Path = defaultPath): CliConfig =
     val fromFile: Option[CliConfig] = Try {

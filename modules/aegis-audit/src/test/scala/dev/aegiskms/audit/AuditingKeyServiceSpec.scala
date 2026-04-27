@@ -7,18 +7,18 @@ import org.scalatest.matchers.should.Matchers
 
 /** Tests `AuditingKeyService` against an `InMemoryAuditSink`.
   *
-  * The decorator wraps the in-memory `KeyService` from `aegis-core` so we exercise the full chain: REST
-  * shape → service algebra → audit sink. Failures are required to produce records too — that's how the
-  * "Claude attempted to sign with treasury-master" line shows up in `aegis audit`.
+  * The decorator wraps the in-memory `KeyService` from `aegis-core` so we exercise the full chain: REST shape
+  * → service algebra → audit sink. Failures are required to produce records too — that's how the "Claude
+  * attempted to sign with treasury-master" line shows up in `aegis audit`.
   */
 final class AuditingKeyServiceSpec extends AnyFunSuite with Matchers:
 
   private val alice: Principal = Principal.Human("alice@org", Set("admins"))
 
   private def fixture(): (AuditingKeyService, InMemoryAuditSink) =
-    val sink   = InMemoryAuditSink.make.unsafeRunSync()
-    val inner  = KeyService.inMemory.unsafeRunSync()
-    val audit  = AuditingKeyService(inner, sink)
+    val sink  = InMemoryAuditSink.make.unsafeRunSync()
+    val inner = KeyService.inMemory.unsafeRunSync()
+    val audit = AuditingKeyService(inner, sink)
     (audit, sink)
 
   test("create writes a single Success audit record") {

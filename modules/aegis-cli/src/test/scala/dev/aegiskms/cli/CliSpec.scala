@@ -9,9 +9,9 @@ import java.time.Instant
 
 /** Tests for `Cli.run` — the top-level argument parser + dispatcher.
   *
-  * We feed the real `run` function arg lists exactly as a user would type them, with a stub config and a
-  * stub HTTP client factory. The tests assert exit codes and stdout/stderr text so the user-visible contract
-  * is locked in.
+  * We feed the real `run` function arg lists exactly as a user would type them, with a stub config and a stub
+  * HTTP client factory. The tests assert exit codes and stdout/stderr text so the user-visible contract is
+  * locked in.
   */
 final class CliSpec extends AnyFunSuite with Matchers:
 
@@ -30,30 +30,34 @@ final class CliSpec extends AnyFunSuite with Matchers:
     * response was rendered.
     */
   private def fakeClientFactory(status: Int, body: String): CliConfig => AegisHttpClient =
-    cfg => new AegisHttpClient(
-      new HttpPort:
-        def execute(req: HttpPort.Request): HttpPort.Response = HttpPort.Response(status, body),
-      cfg.serverUrl,
-      cfg.principal
-    )
+    cfg =>
+      new AegisHttpClient(
+        new HttpPort:
+          def execute(req: HttpPort.Request): HttpPort.Response = HttpPort.Response(status, body)
+        ,
+        cfg.serverUrl,
+        cfg.principal
+      )
 
   /** A factory that captures the request the parser dispatches, so assertions about parsed flags can verify
-    * what made it onto the wire. `status` defaults to 200 (the right code for `keys get`); pass 201 for
-    * `keys create` since `AegisHttpClient.createKey` only treats 201 Created as success.
+    * what made it onto the wire. `status` defaults to 200 (the right code for `keys get`); pass 201 for `keys
+    * create` since `AegisHttpClient.createKey` only treats 201 Created as success.
     */
   private def captureFactory(
       cap: HttpPort.Request => Unit,
       body: String,
       status: Int = 200
   ): CliConfig => AegisHttpClient =
-    cfg => new AegisHttpClient(
-      new HttpPort:
-        def execute(req: HttpPort.Request): HttpPort.Response = {
-          cap(req); HttpPort.Response(status, body)
-        },
-      cfg.serverUrl,
-      cfg.principal
-    )
+    cfg =>
+      new AegisHttpClient(
+        new HttpPort:
+          def execute(req: HttpPort.Request): HttpPort.Response = {
+            cap(req); HttpPort.Response(status, body)
+          }
+        ,
+        cfg.serverUrl,
+        cfg.principal
+      )
 
   test("no args prints help with exit 0") {
     val r = Cli.run(Nil, cfg, fakeClientFactory(200, sampleKey.asJson.noSpaces))
@@ -130,14 +134,16 @@ final class CliSpec extends AnyFunSuite with Matchers:
     val r = Cli.run(
       List("keys", "destroy", "abc"),
       cfg,
-      cfg => new AegisHttpClient(
-        new HttpPort:
-          def execute(req: HttpPort.Request): HttpPort.Response = {
-            captured = Some(req); HttpPort.Response(204, "")
-          },
-        cfg.serverUrl,
-        cfg.principal
-      )
+      cfg =>
+        new AegisHttpClient(
+          new HttpPort:
+            def execute(req: HttpPort.Request): HttpPort.Response = {
+              captured = Some(req); HttpPort.Response(204, "")
+            }
+          ,
+          cfg.serverUrl,
+          cfg.principal
+        )
     )
     r.exitCode shouldBe 0
     captured.get.method shouldBe "DELETE"

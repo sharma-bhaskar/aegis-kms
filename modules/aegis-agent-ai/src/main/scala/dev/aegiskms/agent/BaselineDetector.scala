@@ -65,9 +65,9 @@ object BaselineDetector:
       firstSeen: Option[Instant]
   ):
     def update(rec: AuditRecord, resource: String, retention: Duration): ActorBaseline =
-      val cutoff   = rec.at.minus(retention)
-      val pruned   = recentRequests.dropWhile(_.isBefore(cutoff))
-      val newOps   = opsSeen.updatedWith(rec.operation)(o => Some(o.getOrElse(0) + 1))
+      val cutoff = rec.at.minus(retention)
+      val pruned = recentRequests.dropWhile(_.isBefore(cutoff))
+      val newOps = opsSeen.updatedWith(rec.operation)(o => Some(o.getOrElse(0) + 1))
       ActorBaseline(
         keysSeen = keysSeen + resource,
         opsSeen = newOps,
@@ -107,16 +107,16 @@ object BaselineDetector:
         severity = severity,
         summary = s"Actor touched a key outside its established baseline (${resource})",
         details = Map(
-          "resource"        -> resource,
-          "keysSeenCount"   -> existing.keysSeen.size.toString,
-          "outcome"         -> rec.outcome,
-          "correlationId"   -> rec.correlationId
+          "resource"      -> resource,
+          "keysSeenCount" -> existing.keysSeen.size.toString,
+          "outcome"       -> rec.outcome,
+          "correlationId" -> rec.correlationId
         ),
         suggestedAction = action
       )
 
     // 2. RateSpike — too many requests in the burst window.
-    val burstStart   = rec.at.minus(config.rateBurstWindow)
+    val burstStart    = rec.at.minus(config.rateBurstWindow)
     val recentInBurst = existing.recentRequests.count(t => !t.isBefore(burstStart))
     if recentInBurst >= config.rateBurstThreshold then
       val factor = recentInBurst.toDouble / config.rateBurstThreshold
@@ -133,7 +133,8 @@ object BaselineDetector:
         actor = rec.principal,
         detector = "RateSpike",
         severity = severity,
-        summary = s"$recentInBurst requests in ${config.rateBurstWindow.getSeconds}s (threshold=${config.rateBurstThreshold})",
+        summary =
+          s"$recentInBurst requests in ${config.rateBurstWindow.getSeconds}s (threshold=${config.rateBurstThreshold})",
         details = Map(
           "burstCount"      -> recentInBurst.toString,
           "burstWindowSecs" -> config.rateBurstWindow.getSeconds.toString,

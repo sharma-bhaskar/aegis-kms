@@ -21,20 +21,20 @@ import scala.concurrent.{Await, Promise}
 /** Standalone entry point for Aegis-KMS.
   *
   * The wiring stack from outermost to innermost is:
-  *   - `HttpRoutes`           — extracts `Principal` from `X-Aegis-User`, parses path params
-  *   - `AuditingKeyService`   — writes one `AuditRecord` per call (incl. denies + errors)
+  *   - `HttpRoutes` — extracts `Principal` from `X-Aegis-User`, parses path params
+  *   - `AuditingKeyService` — writes one `AuditRecord` per call (incl. denies + errors)
   *   - `AuthorizingKeyService` — consults the [[DevPolicyEngine]] before delegating
   *   - `ActorBackedKeyService` — adapts ask-pattern → `KeyService[IO]`
-  *   - `KeyOpsActor`          — the single actor that owns the live state map
-  *   - `EventJournal`         — append-only log; replayed on boot to rebuild state
+  *   - `KeyOpsActor` — the single actor that owns the live state map
+  *   - `EventJournal` — append-only log; replayed on boot to rebuild state
   *
-  * Decorator order matters: audit OUTSIDE auth so denied calls still produce audit records. Audit OUTSIDE
-  * the actor so audit writes never block on the actor's mailbox.
+  * Decorator order matters: audit OUTSIDE auth so denied calls still produce audit records. Audit OUTSIDE the
+  * actor so audit writes never block on the actor's mailbox.
   *
   * The audit sink is composed: every record is fanned out to `StdoutAuditSink` (so `aegis-server` produces
-  * the README's demo transcript on stdout) and through a `TappedAuditSink` to drive the W1 anomaly
-  * detector. The detector publishes recommendations into an `InMemoryRecommendationSink` for now; later PRs
-  * (W3, W3.b) replace that with the auto-responder + webhook fan-out.
+  * the README's demo transcript on stdout) and through a `TappedAuditSink` to drive the W1 anomaly detector.
+  * The detector publishes recommendations into an `InMemoryRecommendationSink` for now; later PRs (W3, W3.b)
+  * replace that with the auto-responder + webhook fan-out.
   *
   * Productionising checklist (deferred to later PRs):
   *   - Replace `EventJournal.inMemory` with the Doobie/Postgres impl (PR F1.b)
@@ -82,12 +82,12 @@ object Server:
 
     val app: IO[Unit] =
       for
-        recSink   <- InMemoryRecommendationSink.make
-        detector  <- BaselineDetector.make()
+        recSink  <- InMemoryRecommendationSink.make
+        detector <- BaselineDetector.make()
         // Demo wiring: the inner sink is stdout (visible to whoever boots `aegis-server`); the tap drives
         // the W1 anomaly detector and publishes recommendations into the in-memory sink.
-        sink       = TappedAuditSink(StdoutAuditSink(), detector, recSink)
-        auditing   = new AuditingKeyService(authorizing, sink)
+        sink     = TappedAuditSink(StdoutAuditSink(), detector, recSink)
+        auditing = new AuditingKeyService(authorizing, sink)
         _ <- IO {
           logger.warn(
             "aegis-server starting in DEV MODE — DevPolicyEngine grants every Human full access. " +

@@ -47,15 +47,15 @@ final class AwsKmsRootOfTrustSpec extends AnyFunSuite with Matchers:
         AwsKmsPort.GenerateResult(ciphertext = "c".getBytes, plaintext = "p".getBytes)
       }
     )
-    val rot = AwsKmsRootOfTrust.withPort(port, kekArn)
+    val rot        = AwsKmsRootOfTrust.withPort(port, kekArn)
     val aes128Spec = KeySpec("k", Algorithm.AES, 128, KeyObjectType.SymmetricKey)
     rot.generateDataKey(aes128Spec).unsafeRunSync()
     seenSpec shouldBe Some(DataKeySpec.AES_128)
   }
 
   test("unwrap returns the plaintext bytes that the port's Decrypt produced") {
-    val cipher = "ENCRYPTED".getBytes
-    val plain  = "PLAINTEXT-DATA".getBytes
+    val cipher                                           = "ENCRYPTED".getBytes
+    val plain                                            = "PLAINTEXT-DATA".getBytes
     var decryptCalledWith: Option[(String, Array[Byte])] = None
 
     val port = new StubAwsKmsPort(
@@ -129,7 +129,7 @@ final class AwsKmsRootOfTrustSpec extends AnyFunSuite with Matchers:
     * constructor parameters intentionally do NOT share names with the trait methods (`generateDataKey`,
     * `decrypt`, `enableRotation`) to avoid Scala name-shadowing inside the method bodies.
     */
-  private final class StubAwsKmsPort(
+  final private class StubAwsKmsPort(
       generate: (String, DataKeySpec) => AwsKmsPort.GenerateResult = (_, _) =>
         throw new UnsupportedOperationException("generate not stubbed"),
       decryptFn: (String, Array[Byte]) => Array[Byte] = (_, _) =>

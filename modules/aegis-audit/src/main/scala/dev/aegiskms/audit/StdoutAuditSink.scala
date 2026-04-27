@@ -20,11 +20,11 @@ final class StdoutAuditSink extends AuditSink[IO]:
     val parentSubject = record.principal match
       case Principal.Agent(_, op, _, _, _, _, _) => op.subject
       case _                                     => "-"
-    val ts = record.at.toString
-    val actor = padTo(record.principal.subject, 22)
-    val parent = padTo(parentSubject, 22)
+    val ts       = record.at.toString
+    val actor    = padTo(record.principal.subject, 22)
+    val parent   = padTo(parentSubject, 22)
     val resource = padTo(record.resource, 36)
-    val op = padTo(record.operation.toString, 9)
+    val op       = padTo(record.operation.toString, 9)
     println(s"$ts  KeyOp     actor=$actor parent=$parent key=$resource op=$op outcome=${record.outcome}")
   }
 
