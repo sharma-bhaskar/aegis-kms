@@ -21,7 +21,7 @@ import java.util.UUID
 final class AuditingKeyService(inner: KeyService[IO], sink: AuditSink[IO]) extends KeyService[IO]:
 
   def create(spec: KeySpec, by: Principal): IO[Either[KmsError, ManagedKey]] =
-    instrument(Operation.Create, by, resourceForCreate(spec)) {
+    instrument {
       inner.create(spec, by)
     } { (now, corr, result) =>
       val outcome = result match
@@ -31,7 +31,7 @@ final class AuditingKeyService(inner: KeyService[IO], sink: AuditSink[IO]) exten
     }
 
   def get(id: KeyId, by: Principal): IO[Either[KmsError, ManagedKey]] =
-    instrument(Operation.Get, by, id.value) {
+    instrument {
       inner.get(id, by)
     } { (now, corr, result) =>
       val outcome = result match
@@ -50,7 +50,7 @@ final class AuditingKeyService(inner: KeyService[IO], sink: AuditSink[IO]) exten
     yield list
 
   def activate(id: KeyId, by: Principal): IO[Either[KmsError, ManagedKey]] =
-    instrument(Operation.Activate, by, id.value) {
+    instrument {
       inner.activate(id, by)
     } { (now, corr, result) =>
       val outcome = result match
@@ -60,7 +60,7 @@ final class AuditingKeyService(inner: KeyService[IO], sink: AuditSink[IO]) exten
     }
 
   def revoke(id: KeyId, by: Principal): IO[Either[KmsError, ManagedKey]] =
-    instrument(Operation.Revoke, by, id.value) {
+    instrument {
       inner.revoke(id, by)
     } { (now, corr, result) =>
       val outcome = result match
@@ -70,7 +70,7 @@ final class AuditingKeyService(inner: KeyService[IO], sink: AuditSink[IO]) exten
     }
 
   def destroy(id: KeyId, by: Principal): IO[Either[KmsError, Unit]] =
-    instrument(Operation.Destroy, by, id.value) {
+    instrument {
       inner.destroy(id, by)
     } { (now, corr, result) =>
       val outcome = result match
@@ -81,11 +81,15 @@ final class AuditingKeyService(inner: KeyService[IO], sink: AuditSink[IO]) exten
 
   // ── Helpers ────────────────────────────────────────────────────────────────
 
-  private def instrument[A](op: Operation, by: Principal, resource: String)(
-      action: => IO[A]
-  )(record: (java.time.Instant, String, A) => AuditRecord): IO[A] =
+  /** Threads a fresh correlation id and a wall-clock timestamp through the action and writes the resulting
+    * `AuditRecord`. The caller closes over `op`, `by`, and `resource` directly when building the record — this
+    * helper deliberately doesn't take them, since duplicating that parameter list (helper + closure) was dead
+    * weight (and the compiler's `-Wunused` agreed).
+    */
+  private def instrument[A](action: => IO[A])(
+      record: (java.time.Instant, String, A) => AuditRecord
+  ): IO[A] =
     for
-      _      <- IO.unit
       corr   <- IO(freshCorrelationId())
       result <- action
       now    <- IO.realTimeInstant
