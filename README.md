@@ -11,8 +11,6 @@ Aegis adds identity, intelligence, and real-time control in front of your existi
 [![Release](https://img.shields.io/github/v/release/sharma-bhaskar/aegis-kms?include_prereleases&label=release)](https://github.com/sharma-bhaskar/aegis-kms/releases)
 [![Maven Central](https://img.shields.io/maven-central/v/dev.aegiskms/aegis-core_3?label=maven)](https://search.maven.org/artifact/dev.aegiskms/aegis-core_3)
 
-> _Drop the marketing overview graphic at `docs/aegis-overview.png` and reference it here once committed:_  
-> `![Aegis — agent-native control plane for keys](docs/aegis-overview.png)`
 
 ## Why Aegis exists
 
