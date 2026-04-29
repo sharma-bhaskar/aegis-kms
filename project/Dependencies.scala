@@ -61,10 +61,21 @@ object Dependencies {
   )
 
   val crypto: Seq[ModuleID] = Seq(
-    "software.amazon.awssdk" % "kms"          % V.aws,
-    "io.jsonwebtoken"        % "jjwt-api"     % V.jjwt,
-    "io.jsonwebtoken"        % "jjwt-impl"    % V.jjwt % Runtime,
-    "io.jsonwebtoken"        % "jjwt-jackson" % V.jjwt % Runtime
+    "software.amazon.awssdk" % "kms" % V.aws
+  )
+
+  /** JJWT (Java JWT) suite for issuing and verifying JWS tokens. Used by `aegis-iam` for the JWT bearer
+    * `PrincipalResolver` and (in later PRs) for agent-token issuance.
+    *
+    * `jjwt-impl` and `jjwt-jackson` are loaded reflectively by jjwt-api at runtime; they MUST be on the
+    * classpath. We declare them at Compile scope (rather than Runtime) so downstream test classpaths in other
+    * modules pick them up via inter-project dependency — sbt's `Runtime` scope is local to the owning
+    * project's test classpath only.
+    */
+  val jwt: Seq[ModuleID] = Seq(
+    "io.jsonwebtoken" % "jjwt-api"     % V.jjwt,
+    "io.jsonwebtoken" % "jjwt-impl"    % V.jjwt,
+    "io.jsonwebtoken" % "jjwt-jackson" % V.jjwt
   )
 
   val logging: Seq[ModuleID] = Seq(

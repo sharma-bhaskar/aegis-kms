@@ -7,7 +7,7 @@ import dev.aegiskms.agent.{BaselineDetector, InMemoryRecommendationSink, TappedA
 import dev.aegiskms.audit.{AuditingKeyService, StdoutAuditSink}
 import dev.aegiskms.core.KeyService
 import dev.aegiskms.http.HttpRoutes
-import dev.aegiskms.iam.AuthorizingKeyService
+import dev.aegiskms.iam.{AuthorizingKeyService, JwtVerifier, PrincipalResolver}
 import dev.aegiskms.persistence.{EventJournal, PostgresEventJournal, PostgresJournalConfig}
 import org.apache.pekko.actor.typed.scaladsl.Behaviors
 import org.apache.pekko.actor.typed.{ActorRef, ActorSystem, Scheduler}
@@ -83,6 +83,8 @@ object Server:
     val actorBacked: KeyService[IO] = new ActorBackedKeyService(keyOpsRef)
     val authorizing: KeyService[IO] = new AuthorizingKeyService(actorBacked, new DevPolicyEngine)
 
+    val resolver = buildResolver(rootConfig)
+
     val app: IO[Unit] =
       for
         recSink  <- InMemoryRecommendationSink.make
@@ -97,7 +99,7 @@ object Server:
               "Replace with OIDC + RoleBasedPolicyEngine before exposing this beyond a workstation."
           )
         }
-        _ <- IO.fromFuture(IO(Http().newServerAt(host, port).bind(HttpRoutes(auditing).routes)))
+        _ <- IO.fromFuture(IO(Http().newServerAt(host, port).bind(HttpRoutes(auditing, resolver).routes)))
         _ <- IO {
           logger.info(s"aegis-server listening on http://$host:$port (try POST /v1/keys)")
           logger.info("audit feed → stdout; recommendations → in-memory sink (visible via /admin in PR W1.b)")
@@ -143,3 +145,26 @@ object Server:
       password = pg.getString("password"),
       poolSize = pg.getInt("pool-size")
     )
+
+  /** Build the principal resolver from `aegis.auth.kind`. Misconfiguration fails fast at boot — silent
+    * fallback to dev would be a security hole.
+    */
+  private def buildResolver(config: Config): PrincipalResolver =
+    config.getString("aegis.auth.kind") match
+      case "dev" =>
+        logger.warn(
+          "auth: DEV MODE — accepting X-Aegis-User as the principal. Do not expose this server to a network you do not control."
+        )
+        PrincipalResolver.dev
+      case "hmac" =>
+        val secret = config.getString("aegis.auth.hmac.secret")
+        if secret.isEmpty then
+          throw new IllegalArgumentException(
+            "aegis.auth.kind=hmac requires aegis.auth.hmac.secret (set AEGIS_AUTH_HMAC_SECRET)"
+          )
+        logger.info("auth: hmac (HS256) — verifying Authorization: Bearer <jwt>")
+        PrincipalResolver.jwt(JwtVerifier.hmac(secret))
+      case other =>
+        throw new IllegalArgumentException(
+          s"Unknown aegis.auth.kind=$other (expected 'dev' or 'hmac')"
+        )

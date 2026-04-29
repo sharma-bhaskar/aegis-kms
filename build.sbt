@@ -60,7 +60,7 @@ lazy val crypto = (project in file("modules/aegis-crypto"))
 
 lazy val iam = (project in file("modules/aegis-iam"))
   .dependsOn(core, persistence)
-  .settings(commonSettings, name := "aegis-iam")
+  .settings(commonSettings, name := "aegis-iam", libraryDependencies ++= Dependencies.jwt)
 
 lazy val audit = (project in file("modules/aegis-audit"))
   .dependsOn(core, persistence)
