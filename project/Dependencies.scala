@@ -3,17 +3,18 @@ import sbt._
 object Dependencies {
 
   object V {
-    val pekko     = "1.1.2"
-    val pekkoHttp = "1.1.0"
-    val tapir     = "1.11.10"
-    val circe     = "0.14.9"
-    val cats      = "3.5.4"
-    val doobie    = "1.0.0-RC5"
-    val aws       = "2.28.10"
-    val jjwt      = "0.12.6"
-    val logback   = "1.5.8"
-    val slf4j     = "2.0.16"
-    val scalatest = "3.2.19"
+    val pekko          = "1.1.2"
+    val pekkoHttp      = "1.1.0"
+    val tapir          = "1.11.10"
+    val circe          = "0.14.9"
+    val cats           = "3.5.4"
+    val doobie         = "1.0.0-RC5"
+    val aws            = "2.28.10"
+    val jjwt           = "0.12.6"
+    val logback        = "1.5.8"
+    val slf4j          = "2.0.16"
+    val scalatest      = "3.2.19"
+    val testcontainers = "0.41.4"
   }
 
   val core: Seq[ModuleID] = Seq(
@@ -43,9 +44,20 @@ object Dependencies {
   )
 
   val persistence: Seq[ModuleID] = Seq(
-    "org.tpolecat" %% "doobie-core"       % V.doobie,
-    "org.tpolecat" %% "doobie-postgres"   % V.doobie,
-    "com.mysql"     % "mysql-connector-j" % "8.4.0"
+    "org.tpolecat" %% "doobie-core"           % V.doobie,
+    "org.tpolecat" %% "doobie-postgres"       % V.doobie,
+    "org.tpolecat" %% "doobie-postgres-circe" % V.doobie,
+    "org.tpolecat" %% "doobie-hikari"         % V.doobie,
+    "com.mysql"     % "mysql-connector-j"     % "8.4.0"
+  )
+
+  /** Test-only dep for spinning up a real Postgres in Docker during integration tests. Pulls in
+    * `org.testcontainers:postgresql` transitively. Tests using this should skip via `assume(...)` when Docker
+    * isn't available so workstation runs of `sbt test` don't fail.
+    */
+  val testcontainersPostgres: Seq[ModuleID] = Seq(
+    "com.dimafeng" %% "testcontainers-scala-scalatest"  % V.testcontainers % Test,
+    "com.dimafeng" %% "testcontainers-scala-postgresql" % V.testcontainers % Test
   )
 
   val crypto: Seq[ModuleID] = Seq(

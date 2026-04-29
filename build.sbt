@@ -48,7 +48,11 @@ lazy val core = (project in file("modules/aegis-core"))
 
 lazy val persistence = (project in file("modules/aegis-persistence"))
   .dependsOn(core)
-  .settings(commonSettings, name := "aegis-persistence", libraryDependencies ++= Dependencies.persistence)
+  .settings(
+    commonSettings,
+    name := "aegis-persistence",
+    libraryDependencies ++= Dependencies.persistence ++ Dependencies.testcontainersPostgres
+  )
 
 lazy val crypto = (project in file("modules/aegis-crypto"))
   .dependsOn(core)

@@ -2,13 +2,13 @@ package dev.aegiskms.app
 
 import cats.effect.IO
 import cats.effect.unsafe.IORuntime
-import com.typesafe.config.ConfigFactory
+import com.typesafe.config.{Config, ConfigFactory}
 import dev.aegiskms.agent.{BaselineDetector, InMemoryRecommendationSink, TappedAuditSink}
 import dev.aegiskms.audit.{AuditingKeyService, StdoutAuditSink}
 import dev.aegiskms.core.KeyService
 import dev.aegiskms.http.HttpRoutes
 import dev.aegiskms.iam.AuthorizingKeyService
-import dev.aegiskms.persistence.EventJournal
+import dev.aegiskms.persistence.{EventJournal, PostgresEventJournal, PostgresJournalConfig}
 import org.apache.pekko.actor.typed.scaladsl.Behaviors
 import org.apache.pekko.actor.typed.{ActorRef, ActorSystem, Scheduler}
 import org.apache.pekko.http.scaladsl.Http
@@ -55,8 +55,11 @@ object Server:
     val host       = rootConfig.getString("aegis.http.host")
     val port       = rootConfig.getInt("aegis.http.port")
 
-    // 1. Build the journal up front. The actor needs it at construction time to replay.
-    val journal: EventJournal[IO] = EventJournal.inMemory.unsafeRunSync()
+    // 1. Build the journal up front. The actor needs it at construction time to replay. The Postgres path
+    //    leaks a Resource (connection pool) for the whole process lifetime — `aegis-server` is a long-running
+    //    daemon, so on shutdown the JVM exit closes the pool. A future PR will tie this to a proper
+    //    `cats.effect.Resource` boot scope.
+    val journal: EventJournal[IO] = buildJournal(rootConfig)
 
     // 2. The guardian is a tiny setup behavior that spawns KeyOpsActor and hands its ref back to the main
     //    thread via a Promise. Pekko Typed has no `systemActorOf` for arbitrary children; the guardian is
@@ -103,3 +106,40 @@ object Server:
       yield ()
 
     app.unsafeRunSync()
+
+  /** Choose the journal backend from configuration. `in-memory` (default for dev/tests) is built directly;
+    * `postgres` allocates a connection pool via `Resource` and we lift the journal out for the lifetime of
+    * the process. Any other value fails fast at boot — this is operator-facing and silent fallback would mask
+    * a misconfigured deployment.
+    */
+  private def buildJournal(config: Config)(using IORuntime): EventJournal[IO] =
+    config.getString("aegis.persistence.journal.kind") match
+      case "in-memory" =>
+        logger.info(
+          "journal: in-memory (state is non-durable; set aegis.persistence.journal.kind=postgres for production)"
+        )
+        EventJournal.inMemory.unsafeRunSync()
+      case "postgres" =>
+        val pgConfig = readPostgresJournalConfig(config)
+        logger.info(s"journal: postgres at ${pgConfig.jdbcUrl} (pool-size=${pgConfig.poolSize})")
+        // `allocated` returns (resource, finalizer); we discard the finalizer because the JVM exit is the
+        // process's only shutdown trigger today. A real `Resource[IO, Unit]` boot wrapper is on the F1.b
+        // follow-up list; doing it now would pull every other component into the same Resource, which is a
+        // larger refactor than this PR's scope.
+        PostgresEventJournal.make(pgConfig).allocated.unsafeRunSync()._1
+      case other =>
+        throw new IllegalArgumentException(
+          s"Unknown aegis.persistence.journal.kind=$other (expected 'in-memory' or 'postgres')"
+        )
+
+  /** HOCON loader for `aegis.persistence.journal.postgres`. Lives in the server module rather than the
+    * persistence library so the library stays dependency-free of typesafe-config.
+    */
+  private def readPostgresJournalConfig(c: Config): PostgresJournalConfig =
+    val pg = c.getConfig("aegis.persistence.journal.postgres")
+    PostgresJournalConfig(
+      jdbcUrl = pg.getString("jdbc-url"),
+      username = pg.getString("username"),
+      password = pg.getString("password"),
+      poolSize = pg.getInt("pool-size")
+    )
