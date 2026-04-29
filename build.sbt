@@ -8,7 +8,17 @@ ThisBuild / licenses         := Seq("Apache-2.0" -> url("https://www.apache.org/
 ThisBuild / developers := List(
   Developer("bhaskar", "Bhaskar Sharma", "sharma.b6@gmail.com", url("https://github.com/sharma-bhaskar"))
 )
-ThisBuild / version := "0.1.0-SNAPSHOT"
+ThisBuild / scmInfo := Some(
+  ScmInfo(
+    browseUrl = url("https://github.com/sharma-bhaskar/aegis-kms"),
+    connection = "scm:git:https://github.com/sharma-bhaskar/aegis-kms.git"
+  )
+)
+// Versioning: sbt-ci-release derives this from the current git tag at publish time. Local builds keep
+// `0.1.0-SNAPSHOT` so unreleased work is unambiguous; tagged releases (`vX.Y.Z`) compute the version
+// automatically.
+ThisBuild / version                := "0.1.0-SNAPSHOT"
+ThisBuild / sonatypeCredentialHost := "s01.oss.sonatype.org"
 ThisBuild / scalacOptions ++= Seq(
   "-deprecation",
   "-feature",
@@ -108,8 +118,15 @@ lazy val server = (project in file("modules/aegis-server"))
 
 lazy val cli = (project in file("modules/aegis-cli"))
   .dependsOn(sdkScala)
-  .enablePlugins(JavaAppPackaging)
-  .settings(commonSettings, name := "aegis-cli")
+  .enablePlugins(JavaAppPackaging, BuildInfoPlugin)
+  .settings(
+    commonSettings,
+    name                      := "aegis-cli",
+    buildInfoKeys             := Seq[BuildInfoKey](version, scalaVersion),
+    buildInfoPackage          := "dev.aegiskms.cli",
+    buildInfoObject           := "BuildInfo",
+    buildInfoUsePackageAsPath := true
+  )
 
 lazy val root = (project in file("."))
   .aggregate(

@@ -1,0 +1,50 @@
+# Local development quickstart for Aegis 0.1.0.
+#
+# Brings up:
+#   - Postgres 16 — durable event journal
+#   - aegis-server  — fronted on http://localhost:8080
+#
+# Auth defaults to dev mode (X-Aegis-User header). To exercise the JWT path:
+#   1. Generate a 32-byte secret:  openssl rand -base64 48
+#   2. Set AEGIS_AUTH_KIND=hmac and AEGIS_AUTH_HMAC_SECRET in your shell.
+#   3. Mint a token with the Scala SDK or jjwt; pass as `Authorization: Bearer <jwt>`.
+#
+# Run with:
+#   docker compose -f deploy/docker/docker-compose.yml up
+#
+# To use the locally-built image instead of the GHCR-published one:
+#   sbt 'server / Docker / publishLocal'
+#   IMAGE_TAG=0.1.0-SNAPSHOT docker compose -f deploy/docker/docker-compose.yml up
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB:       aegis
+      POSTGRES_USER:     aegis
+      POSTGRES_PASSWORD: aegis-dev-password-change-me
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test:     ["CMD-SHELL", "pg_isready -U aegis -d aegis"]
+      interval: 5s
+      timeout:  5s
+      retries:  10
+
+  aegis-server:
+    image: ghcr.io/sharma-bhaskar/aegis-server:${IMAGE_TAG:-0.1.0}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8080:8080"
+    environment:
+      AEGIS_HTTP_HOST:    "0.0.0.0"
+      AEGIS_HTTP_PORT:    "8080"
+      AEGIS_JOURNAL_KIND: "postgres"
+      AEGIS_JDBC_URL:     "jdbc:postgresql://postgres:5432/aegis"
+      AEGIS_JDBC_USERNAME: "aegis"
+      AEGIS_JDBC_PASSWORD: "aegis-dev-password-change-me"
+      AEGIS_AUTH_KIND:    "dev"
+      # AEGIS_AUTH_KIND:        "hmac"
+      # AEGIS_AUTH_HMAC_SECRET: "set-me-to-32-or-more-bytes-please"

@@ -24,7 +24,7 @@ object Commands:
 
   // ── version ────────────────────────────────────────────────────────────────
 
-  def version: CommandResult = CommandResult.out("aegis 0.1.0-SNAPSHOT")
+  def version: CommandResult = CommandResult.out(s"aegis ${BuildInfo.version}")
 
   // ── login ──────────────────────────────────────────────────────────────────
 

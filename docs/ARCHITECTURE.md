@@ -329,19 +329,39 @@ Honest counter-positioning:
 
 What's implemented today vs. what the design above describes. This is the only place in the document that talks about implementation phasing.
 
+### v0.1.0 (current)
+
 | Capability | Status |
 | --- | --- |
-| `aegis-core` algebra (`KeyService`, `ManagedKey`, `KmsError`, `Principal`) | ✅ Available |
-| In-memory reference `KeyService` for tests and dev | ✅ Available |
-| REST plane (`aegis-http`): create / get / activate / destroy with Tapir + pekko-http | ✅ Available |
-| Server boot wiring (`aegis-server`), HTTP integration tests | ✅ Available |
-| Persistent `KeyOpsActor` with event-sourced state | 🚧 In progress |
-| Doobie + Postgres event journal & read model | 🚧 In progress |
-| Pluggable Root of Trust (AWS KMS first, others via the same SPI) | 🔜 Designed |
-| IAM: OIDC verification, JWT signing, agent-identity issuance | 🔜 Designed |
-| KMIP plane: TTLV codec, schema, operations, TLS server, multi-version | 🔜 Designed |
-| MCP server with curated KMS tool surface | 🔜 Designed |
+| `aegis-core` algebra (`KeyService`, `ManagedKey`, `KmsError`, `Principal`, `KeyEvent`) | ✅ Shipped |
+| In-memory reference `KeyService` for tests and dev | ✅ Shipped |
+| REST plane (`aegis-http`): create / get / activate / destroy with Tapir + pekko-http | ✅ Shipped |
+| Server boot wiring (`aegis-server`), HTTP integration tests | ✅ Shipped |
+| Persistent `KeyOpsActor` with event-sourced state (Pekko Typed) | ✅ Shipped |
+| Doobie + Postgres event journal (`PostgresEventJournal`) with bootstrap migration | ✅ Shipped |
+| Pluggable Root of Trust SPI; AWS KMS adapter (layered mode) | ✅ Shipped (AWS only) |
+| IAM allowlist policy engine + recursive parent-check for agents | ✅ Shipped |
+| JWT bearer auth — `Authorization: Bearer`, HS256 verification + issuance | ✅ Shipped |
+| Audit decorator + stdout sink + W1 anomaly detector (BaselineDetector) | ✅ Shipped |
+| Operator CLI — `version`, `login`, `keys create/get/activate/destroy` | ✅ Shipped |
+| Scala SDK skeleton + Java SDK skeleton | ✅ Shipped (skeleton) |
+| Docker image (`ghcr.io/sharma-bhaskar/aegis-server`) + Maven Central jars | ✅ Shipped |
+
+### v0.2.0 and beyond (deferred)
+
+| Capability | Status |
+| --- | --- |
+| GCP / Azure / Vault / PKCS#11 Root of Trust adapters | 🔜 Designed (SPI in place) |
+| OIDC discovery + JWKS verification + RS256/ES256 verifier | 🔜 Designed (trait in place) |
+| Agent-token issuance HTTP endpoint (`POST /v1/agents/issue`) | 🔜 Designed (`JwtIssuer` in place) |
+| Postgres / Kafka / SIEM webhook audit sinks | 🔜 Designed (sink SPI in place) |
+| Risk scorer (W2) — numeric scores feeding access decisions | 🔜 Designed |
+| Auto-responder (W3) consuming `AgentRecommendation`s | 🔜 Designed |
+| LLM advisor (W4) — `aegis advisor scan/explain` | 🔜 Designed (CLI stub in place) |
+| KMIP plane: TTLV codec, schema, operations, TLS server, multi-version | 🔜 Designed (skeleton module) |
+| MCP server with curated KMS tool surface | 🔜 Designed (skeleton module) |
 | Agent-AI plane | 🔜 Designed |
-| Scala / Java SDKs and operator CLI | 🔜 Designed |
+| `Resource[IO, Unit]` boot-scope wrapper for the whole server | 🔜 Tracked (F1.b follow-up) |
+| Helm chart | 🔜 Tracked (`deploy/helm/aegis-kms` is empty today) |
 
 The full system is the point. Anything not yet built is either in active development or has its module skeleton, dependency contract, and tier placement already locked into the build so it can land without disturbing the surrounding code.

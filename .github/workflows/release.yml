@@ -1,0 +1,103 @@
+name: Release
+
+# Triggers on a `v*` tag push (e.g. `v0.1.0`). The job:
+#   1. Runs the full CI gate so we never ship a release with failing tests.
+#   2. Publishes the library jars (aegis-core, aegis-iam, aegis-audit, aegis-crypto, aegis-persistence,
+#      aegis-sdk-scala, aegis-sdk-java) to Maven Central via sbt-ci-release.
+#   3. Builds and pushes the aegis-server Docker image to GHCR.
+#   4. Builds the aegis-cli universal tarball and attaches it to a GitHub Release.
+#
+# Required repository secrets (configure under Settings → Secrets and variables → Actions):
+#   - PGP_SECRET             base64-encoded GPG private key (`gpg --armor --export-secret-keys KEY_ID | base64`)
+#   - PGP_PASSPHRASE         passphrase for that GPG key
+#   - SONATYPE_USERNAME      Sonatype OSSRH user-token name
+#   - SONATYPE_PASSWORD      Sonatype OSSRH user-token value
+#
+# The Docker push uses the built-in `GITHUB_TOKEN` and pushes to `ghcr.io/<owner>/aegis-server`. No extra
+# secrets needed.
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write    # needed to attach assets to the GitHub Release
+  packages: write    # needed to push to GHCR
+
+jobs:
+  release:
+    name: Publish v${{ github.ref_name }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # sbt-ci-release derives the version from `git describe`; full history is required.
+          fetch-depth: 0
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+          cache: sbt
+
+      - name: Set up sbt
+        uses: sbt/setup-sbt@v1
+
+      - name: CI gate (compile, fmt, lint, test)
+        run: sbt scalafmtCheckAll scalafmtSbtCheck "scalafixAll --check" test
+
+      # ─── Maven Central — library jars ──────────────────────────────────────
+      - name: Publish to Maven Central
+        env:
+          PGP_SECRET:        ${{ secrets.PGP_SECRET }}
+          PGP_PASSPHRASE:    ${{ secrets.PGP_PASSPHRASE }}
+          SONATYPE_USERNAME: ${{ secrets.SONATYPE_USERNAME }}
+          SONATYPE_PASSWORD: ${{ secrets.SONATYPE_PASSWORD }}
+        run: sbt ci-release
+
+      # ─── Docker — aegis-server image to GHCR ───────────────────────────────
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute lowercase image owner
+        id: owner
+        run: echo "value=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_OUTPUT"
+
+      - name: Build & publish aegis-server Docker image
+        env:
+          GHCR_OWNER: ${{ steps.owner.outputs.value }}
+          GIT_TAG:    ${{ github.ref_name }}
+        run: |
+          # Strip leading "v" from the tag for the Docker tag.
+          IMAGE_TAG="${GIT_TAG#v}"
+          sbt \
+            -Ddocker.username="ghcr.io/${GHCR_OWNER}" \
+            "set server / Docker / dockerRepository := Some(\"ghcr.io/${GHCR_OWNER}\")" \
+            "set server / Docker / version := \"${IMAGE_TAG}\"" \
+            "server / Docker / publish"
+
+      # ─── CLI — universal tarball as a release asset ────────────────────────
+      - name: Build aegis-cli tarball
+        run: sbt 'cli / Universal / packageZipTarball'
+
+      - name: Find tarball path
+        id: tarball
+        run: |
+          tarball=$(ls modules/aegis-cli/target/universal/*.tgz | head -n1)
+          echo "path=${tarball}" >> "$GITHUB_OUTPUT"
+          echo "name=$(basename "${tarball}")" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ github.ref_name }}
+          generate_release_notes: true
+          files: |
+            ${{ steps.tarball.outputs.path }}

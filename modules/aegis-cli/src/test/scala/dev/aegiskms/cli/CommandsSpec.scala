@@ -31,7 +31,7 @@ final class CommandsSpec extends AnyFunSuite with Matchers:
 
   test("version emits the canonical version string with exit 0") {
     val r = Commands.version
-    r.stdout shouldBe "aegis 0.1.0-SNAPSHOT"
+    r.stdout shouldBe s"aegis ${BuildInfo.version}"
     r.exitCode shouldBe 0
   }
 

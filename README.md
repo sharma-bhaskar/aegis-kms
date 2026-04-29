@@ -8,6 +8,8 @@ Aegis adds identity, intelligence, and real-time control in front of your existi
 
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![Status](https://img.shields.io/badge/status-pre--alpha-orange.svg)](docs/ARCHITECTURE.md#11-status)
+[![Release](https://img.shields.io/github/v/release/sharma-bhaskar/aegis-kms?include_prereleases&label=release)](https://github.com/sharma-bhaskar/aegis-kms/releases)
+[![Maven Central](https://img.shields.io/maven-central/v/dev.aegiskms/aegis-core_3?label=maven)](https://search.maven.org/artifact/dev.aegiskms/aegis-core_3)
 
 > _Drop the marketing overview graphic at `docs/aegis-overview.png` and reference it here once committed:_  
 > `![Aegis — agent-native control plane for keys](docs/aegis-overview.png)`
@@ -229,12 +231,37 @@ Deeper writeup in [docs/ARCHITECTURE.md §10](docs/ARCHITECTURE.md#10-how-aegis-
 
 ## Quickstart — running the server
 
-Prerequisites: JDK 21, sbt 1.10+, Postgres 14+.
+### Option A: Docker Compose (Postgres + aegis-server)
+
+Prerequisites: Docker.
 
 ```bash
 git clone https://github.com/sharma-bhaskar/aegis-kms.git
 cd aegis-kms
-sbt "server/run"
+docker compose -f deploy/docker/docker-compose.yml up
+```
+
+In another shell:
+
+```bash
+curl -X POST http://localhost:8080/v1/keys \
+  -H 'Content-Type: application/json' \
+  -H 'X-Aegis-User: alice' \
+  -d '{"spec":{"name":"invoice-signing","algorithm":"AES","sizeBits":256,"objectType":"SymmetricKey"}}'
+```
+
+Auth defaults to dev mode (`X-Aegis-User`). To use JWT bearer auth, set `AEGIS_AUTH_KIND=hmac` and
+`AEGIS_AUTH_HMAC_SECRET=<≥32-byte secret>` in `docker-compose.yml`, then mint tokens with
+`dev.aegiskms.iam.JwtIssuer.hmac(...)`.
+
+### Option B: from source
+
+Prerequisites: JDK 21, sbt 1.10+. Server defaults to in-memory journal (no Postgres needed).
+
+```bash
+git clone https://github.com/sharma-bhaskar/aegis-kms.git
+cd aegis-kms
+sbt 'server / run'
 ```
 
 ## Quickstart — embedding as a library
@@ -242,9 +269,22 @@ sbt "server/run"
 ```scala
 libraryDependencies ++= Seq(
   "dev.aegiskms" %% "aegis-core"        % "0.1.0",
+  "dev.aegiskms" %% "aegis-iam"         % "0.1.0",
+  "dev.aegiskms" %% "aegis-audit"       % "0.1.0",
   "dev.aegiskms" %% "aegis-crypto"      % "0.1.0",
   "dev.aegiskms" %% "aegis-persistence" % "0.1.0"
 )
+```
+
+## Quickstart — running the CLI
+
+Download the `aegis-cli-<version>.tgz` tarball from the [latest release](https://github.com/sharma-bhaskar/aegis-kms/releases/latest):
+
+```bash
+tar -xzf aegis-cli-0.1.0.tgz
+./aegis-cli-0.1.0/bin/aegis version
+./aegis-cli-0.1.0/bin/aegis login --server http://localhost:8080 --principal alice
+./aegis-cli-0.1.0/bin/aegis keys create --alg AES-256 --name invoice-signing
 ```
 
 ```scala

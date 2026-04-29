@@ -68,7 +68,7 @@ final class CliSpec extends AnyFunSuite with Matchers:
 
   test("'aegis version' returns the version string") {
     val r = Cli.run(List("version"), cfg, fakeClientFactory(200, sampleKey.asJson.noSpaces))
-    r.stdout shouldBe "aegis 0.1.0-SNAPSHOT"
+    r.stdout shouldBe s"aegis ${BuildInfo.version}"
   }
 
   test("'keys create --alg AES-256 --name foo' parses the combined alg-size form") {

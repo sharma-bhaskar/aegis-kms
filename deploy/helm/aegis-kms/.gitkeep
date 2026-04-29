@@ -1,0 +1,2 @@
+Helm chart pending. v0.1.0 ships only `deploy/docker/docker-compose.yml`.
+A real Chart.yaml + templates land in v0.2.0.
