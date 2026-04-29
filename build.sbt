@@ -113,7 +113,13 @@ lazy val server = (project in file("modules/aegis-server"))
     name := "aegis-server",
     libraryDependencies ++= pekkoHttp ++ Dependencies.tapir,
     Docker / packageName := "aegis-server",
-    dockerBaseImage      := "eclipse-temurin:21-jre"
+    dockerBaseImage      := "eclipse-temurin:21-jre",
+    // Fork `sbt 'server/run'` into its own JVM. Without this, sbt's in-process classloader and
+    // thread group interfere with Pekko's user-guardian dispatcher and the `Await.result` on the
+    // initialization promise hangs indefinitely on cold start.
+    run / fork         := true,
+    run / connectInput := true,
+    run / javaOptions ++= Seq("-Xms256m", "-Xmx1g")
   )
 
 lazy val cli = (project in file("modules/aegis-cli"))
@@ -121,7 +127,11 @@ lazy val cli = (project in file("modules/aegis-cli"))
   .enablePlugins(JavaAppPackaging, BuildInfoPlugin)
   .settings(
     commonSettings,
-    name                      := "aegis-cli",
+    name := "aegis-cli",
+    // The published launcher should be `bin/aegis`, matching the README and the way users will
+    // invoke it (`aegis keys create ...`). sbt-native-packager defaults to `bin/<name>` which
+    // would produce `bin/aegis-cli`.
+    executableScriptName      := "aegis",
     buildInfoKeys             := Seq[BuildInfoKey](version, scalaVersion),
     buildInfoPackage          := "dev.aegiskms.cli",
     buildInfoObject           := "BuildInfo",

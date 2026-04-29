@@ -11,6 +11,23 @@ Aegis adds identity, intelligence, and real-time control in front of your existi
 [![Release](https://img.shields.io/github/v/release/sharma-bhaskar/aegis-kms?include_prereleases&label=release)](https://github.com/sharma-bhaskar/aegis-kms/releases)
 [![Maven Central](https://img.shields.io/maven-central/v/dev.aegiskms/aegis-core_3?label=maven)](https://search.maven.org/artifact/dev.aegiskms/aegis-core_3)
 
+> ## ⚠️ Status — v0.1.0 (pre-alpha)
+>
+> This README describes **the full design** Aegis is being built toward. v0.1.0 is the first usable
+> slice. To see exactly which capabilities ship today vs. which are planned, read the
+> [**v0.1.0 status table**](docs/ARCHITECTURE.md#11-status) and the [CHANGELOG](CHANGELOG.md).
+>
+> **Shipping in v0.1.0** ✅ — REST `/v1/keys` (create/get/activate/destroy), Pekko-actor key state,
+> Postgres event journal, JWT bearer auth (HS256), AWS KMS root-of-trust adapter, anomaly-detector
+> MVP, audit decorator → stdout, `aegis` admin CLI for key ops.
+>
+> **WIP for v0.2.0+** 🚧 — Risk scorer · auto-responder · LLM advisor · OIDC + JWKS · agent-token
+> issuance endpoint · MCP server · KMIP server · GCP/Azure/Vault/PKCS#11 root-of-trust adapters ·
+> SIEM/Kafka/Postgres audit fan-out · Helm chart.
+>
+> Sections marked 🚧 below describe target shape, not current behaviour. Code blocks containing
+> commands like `aegis advisor`, `aegis agent issue`, `aegis audit tail`, or `aegis key register`
+> are design previews — the corresponding CLI verbs print "not yet wired up" today.
 
 ## Why Aegis exists
 
@@ -29,18 +46,23 @@ Aegis exists to solve exactly this. It's not a general-purpose KMS. It's not a s
 
 Four checks on every request, in order — the same model whether the call comes from an agent, an app, or a human:
 
-| | What it does | What it produces |
-| --- | --- | --- |
-| **1. Identity & Context** | Resolves the bearer credential to a `Principal.Human` or `Principal.Agent`. Every agent carries a mandatory back-pointer to the parent human, the explicit scope (which keys, which ops), and the context (source IP, session, time). | An attributed request — no anonymous agents, ever. |
-| **2. Risk Scoring** | Combines behavioral baseline (request rate, time-of-day, source set, op histogram) with contextual signals (agent vs. human, credential age, scope breadth) into a risk score. | A real-valued risk score and a structured *reason*, recorded with the audit event. |
-| **3. Anomaly Detection** | Streaming detectors over the audit log: usage spikes, off-hours access, new source IPs, new op types per key, agents touching keys outside their normal pattern. | `AgentRecommendation` events surfaced in CLI, dashboards, webhooks. |
-| **4. Real-time Response** | Configurable wiring from detections to actions: **allow · step-up · deny · rotate · revoke · alert.** All recorded. | A decision applied automatically, in the same loop, before the next request lands. |
+| | What it does | What it produces | Status |
+| --- | --- | --- | --- |
+| **1. Identity & Context** | Resolves the bearer credential to a `Principal.Human` or `Principal.Agent`. Every agent carries a mandatory back-pointer to the parent human, the explicit scope (which keys, which ops), and the context (source IP, session, time). | An attributed request — no anonymous agents, ever. | ✅ v0.1.0 |
+| **2. Risk Scoring** | Combines behavioral baseline (request rate, time-of-day, source set, op histogram) with contextual signals (agent vs. human, credential age, scope breadth) into a risk score. | A real-valued risk score and a structured *reason*, recorded with the audit event. | 🚧 WIP — v0.2.0 (PR W2) |
+| **3. Anomaly Detection** | Streaming detectors over the audit log: usage spikes, off-hours access, new source IPs, new op types per key, agents touching keys outside their normal pattern. | `AgentRecommendation` events surfaced in CLI, dashboards, webhooks. | ⚠️ MVP shipped (`BaselineDetector`: scope + rate-spike); CLI/dashboard surfacing 🚧 v0.2.0 |
+| **4. Real-time Response** | Configurable wiring from detections to actions: **allow · step-up · deny · rotate · revoke · alert.** All recorded. | A decision applied automatically, in the same loop, before the next request lands. | 🚧 WIP — v0.2.0 (PR W3) |
 
-Behind those four checks, the actual key bytes live wherever you already keep them — AWS KMS, GCP KMS, Azure Key Vault, HashiCorp Vault, an on-prem PKCS#11 HSM, or Aegis's own software RoT. **You don't migrate keys to adopt Aegis.** You point Aegis at what you have.
+Behind those four checks, the data plane is pluggable. **v0.1.0 ships the AWS KMS adapter** for layered mode; GCP KMS, Azure Key Vault, HashiCorp Vault, on-prem PKCS#11, and Aegis's own software RoT are 🚧 WIP for v0.2.0 — the SPI (`RootOfTrust`) is in place, only the adapters need to land.
 
-Every decision, every score, every detection, every response feeds an immutable audit log with full human+agent attribution, full request context, the risk score with reasoning, and SIEM/webhook fan-out.
+Every decision, every score, every detection, every response feeds an immutable audit log with full human+agent attribution and full request context. **v0.1.0 fans out to stdout only**; SIEM / webhook / Kafka / Postgres sinks are 🚧 WIP for v0.2.0.
 
 ## Example — a Claude agent goes rogue
+
+> 🚧 **Design preview — v0.2.0 / v0.3.0 target.** The `aegis audit`, `aegis advisor`, and auto-revoke
+> commands shown below don't ship in v0.1.0. v0.1.0 already attributes every audit record with the
+> agent + parent identity and emits `AgentRecommendation`s when the `BaselineDetector` fires; the
+> CLI surface and the auto-response loop land in PRs W3 + W4 + F2.b.
 
 Alice, an SRE, gives Claude a one-hour scoped credential to sign Q2 invoices using `key:invoice-2026:sign`. Claude works through the queue: 49 signatures over 20 minutes. Aegis records each call with `actor=claude-session-7a3, parent=alice@org`, baseline risk score under 0.2.
 
@@ -76,6 +98,13 @@ Suggested follow-up: aegis agent list --parent alice@org --since 24h
 Without Aegis, that scope violation is a 403 buried in a SIEM that someone reads tomorrow morning. With Aegis, it's a one-second loop: detect, revoke, page — **before the second misuse lands.**
 
 ## Demo — what using Aegis looks like
+
+> 🚧 **Design preview.** The transcript below is the target shape. **In v0.1.0 today**, the working
+> CLI verbs are `version`, `login`, and `keys create/get/activate/destroy` — see
+> [Quickstart — running the CLI](#quickstart--running-the-cli) for what actually executes.
+> Specifically: `aegis login` is currently a config-save (no OIDC browser flow yet);
+> `aegis key register --aws-arn`, `aegis agent issue`, `aegis audit tail`, and `aegis advisor scan`
+> are planned for v0.2.0.
 
 A short transcript of layered mode against an existing AWS KMS deployment.
 
@@ -137,6 +166,7 @@ Most teams should start with **layered** — keep your existing key store, get t
 
 | | **Layered** *(recommended)* | **Standalone** | **HSM-backed** |
 | --- | --- | --- | --- |
+| Status in v0.1.0 | ✅ AWS KMS adapter ships; GCP/Azure/Vault 🚧 v0.2.0 | 🚧 WIP — software RoT not yet shipped | 🚧 WIP — PKCS#11 adapter not yet shipped |
 | Who generates the key bytes? | AWS / GCP / Azure KMS or Vault | Aegis, via its software or cloud-KMS RoT | The HSM, internally |
 | Where does the key material live? | In your cloud KMS or Vault — Aegis stores only a reference | Wrapped in Aegis's Postgres | Inside the HSM, never leaves |
 | Where does the crypto op run? | Proxied to the cloud KMS | In Aegis (after RoT unwrap) | Inside the HSM |
@@ -149,20 +179,26 @@ In **layered mode** Aegis never sees plaintext key material. Every `sign` / `enc
 
 The short answer: **Aegis is a control plane; the data plane is pluggable.**
 
+> 🚧 **Design preview.** The CLI commands below are the target surface for v0.2.0+. **In v0.1.0
+> today**, the working command is `aegis keys create --alg AES-256 --name <name>` (the server
+> generates the key in the in-memory backend or the AWS KMS RoT depending on how the embedder
+> wires `KeyService`). The `--backend` flag, `aegis key register --aws-arn`, and `aegis key import`
+> all land in v0.2.0 alongside the GCP / Azure / Vault / PKCS#11 adapters.
+
 ```bash
-# Layered — point Aegis at an existing CMK, no key material moves
+# Layered — point Aegis at an existing CMK, no key material moves                  🚧 v0.2.0
 aegis key register --aws-arn arn:aws:kms:us-east-1:...:key/abcd-... --alias invoice-2026
 
-# Layered — new key, AWS HSMs generate it, Aegis stores only the ARN + metadata
+# Layered — new key, AWS HSMs generate it, Aegis stores only the ARN + metadata    🚧 v0.2.0
 aegis key create invoice-2026 --backend aws-kms --spec ec-p256
 
-# Standalone — Aegis owns the data plane via its RoT
+# Standalone — Aegis owns the data plane via its RoT                               🚧 v0.2.0
 aegis key create invoice-2026 --backend software --spec ec-p256
 
-# HSM-backed — generated inside the device, never leaves
+# HSM-backed — generated inside the device, never leaves                           🚧 v0.2.0
 aegis key create invoice-2026 --backend pkcs11 --spec ec-p256
 
-# BYOK — import existing material on any backend
+# BYOK — import existing material on any backend                                   🚧 v0.2.0
 aegis key import --alias customer-acme --wrapped wrapped.bin --wrap-scheme RSA-OAEP-SHA256
 ```
 
@@ -182,12 +218,12 @@ Deeper reading: [positioning](docs/POSITIONING.md) · [architecture](docs/ARCHIT
 
 Most users only need one. KMIP is infrastructure plumbing; if you're writing application code, use REST or the SDK.
 
-| You are... | Use | Why |
-| --- | --- | --- |
-| App developer (any language with HTTP / a JVM SDK) | **REST + SDK** | JSON over HTTPS, OpenAPI generated |
-| AI agent or LLM tool | **MCP** | Native tool-use surface; scoped agent identity with mandatory parent-human linkage |
-| Storage array · database TDE · backup product · tape library · HSM proxy | **KMIP** | Your product already speaks KMIP — Aegis is a drop-in for Vault Enterprise or Thales CipherTrust |
-| Custom tool-use / agent framework not MCP-native | **Agent-AI** | Function-call shape with KMS-specific affordances |
+| You are... | Use | Why | Status |
+| --- | --- | --- | --- |
+| App developer (any language with HTTP / a JVM SDK) | **REST + SDK** | JSON over HTTPS, OpenAPI generated | ✅ v0.1.0 |
+| AI agent or LLM tool | **MCP** | Native tool-use surface; scoped agent identity with mandatory parent-human linkage | 🚧 v0.2.0 (skeleton in `aegis-mcp-server`) |
+| Storage array · database TDE · backup product · tape library · HSM proxy | **KMIP** | Your product already speaks KMIP — Aegis is a drop-in for Vault Enterprise or Thales CipherTrust | 🚧 v0.2.0+ (skeleton in `aegis-kmip`) |
+| Custom tool-use / agent framework not MCP-native | **Agent-AI** | Function-call shape with KMS-specific affordances | 🚧 v0.2.0 |
 
 KMIP is **optional** in any deployment.
 
@@ -197,35 +233,35 @@ KMIP is **optional** in any deployment.
 | --- | --- | --- | --- | --- |
 | License | Proprietary | BSL | MPL-2.0 | **Apache-2.0** |
 | Self-hostable / air-gapped | No | Yes | Yes | **Yes** |
-| KMIP 1.4 / 2.x wire protocol | No | Enterprise only | No | **Yes** |
-| MCP server for AI agents | No | No | No | **Yes** |
-| Agent identity tied to a human operator | No | No | No | **Yes** |
-| Risk-scored access (not just policy) | No | No | No | **Yes** *(in design)* |
-| Anomaly detection on key usage | No | No | No | **Yes** *(in design)* |
-| LLM advisor (explain / suggest / clean) | No | No | No | **Yes** *(in design)* |
-| Layered mode (front existing AWS / GCP / Vault, no migration) | n/a | No | No | **Yes** |
-| Embeddable as a JVM library | No | No | No | **Yes** |
+| KMIP 1.4 / 2.x wire protocol | No | Enterprise only | No | 🚧 v0.2.0+ (skeleton in repo) |
+| MCP server for AI agents | No | No | No | 🚧 v0.2.0 (skeleton in repo) |
+| Agent identity tied to a human operator | No | No | No | ✅ v0.1.0 (`Principal.Agent` + parent linkage in audit) |
+| Risk-scored access (not just policy) | No | No | No | 🚧 v0.2.0 (W2) |
+| Anomaly detection on key usage | No | No | No | ⚠️ MVP in v0.1.0 (`BaselineDetector`); CLI surfacing 🚧 v0.2.0 |
+| LLM advisor (explain / suggest / clean) | No | No | No | 🚧 v0.2.0 (W4) |
+| Layered mode (front existing AWS / GCP / Vault, no migration) | n/a | No | No | ⚠️ AWS adapter ✅ v0.1.0; GCP/Azure/Vault 🚧 v0.2.0 |
+| Embeddable as a JVM library | No | No | No | ✅ v0.1.0 (`aegis-core`, `aegis-iam`, `aegis-audit`, `aegis-crypto`, `aegis-persistence`, `aegis-sdk-scala`, `aegis-sdk-java`) |
 | Per-operation cost | $$ per API call | License + ops | Ops only | **Ops only** |
 
 Deeper writeup in [docs/ARCHITECTURE.md §10](docs/ARCHITECTURE.md#10-how-aegis-kms-compares).
 
 ## Modules
 
-| Module | Purpose | Depends on Pekko? |
-| --- | --- | --- |
-| `aegis-core` | Pure domain (DTOs, `KeyService[F]` algebra) | No |
-| `aegis-crypto` | Backend SPI + provider impls (software / AWS / GCP / Azure / Vault / PKCS#11) | No |
-| `aegis-iam` | Principals, policies, JWT/OIDC, agent identity | No |
-| `aegis-audit` | Append-only audit log SPI | No |
-| `aegis-persistence` | Doobie-based store + Postgres / MySQL drivers | No |
-| `aegis-sdk-scala` | Scala client SDK | No |
-| `aegis-sdk-java` | Java client SDK | No |
-| `aegis-kmip` | KMIP codec + TCP server | Yes |
-| `aegis-http` | pekko-http REST + OpenAPI | Yes |
-| `aegis-agent-ai` | **Risk scorer · anomaly detector · auto-responder · LLM advisor** | Yes |
-| `aegis-mcp-server` | MCP tool surface for LLMs | Yes |
-| `aegis-server` | Main server app wiring everything | Yes |
-| `aegis-cli` | `aegis` admin CLI | No |
+| Module | Purpose | Pekko? | Status in v0.1.0 |
+| --- | --- | --- | --- |
+| `aegis-core` | Pure domain (DTOs, `KeyService[F]` algebra, `KeyEvent` ADT + Circe codecs) | No | ✅ shipped |
+| `aegis-crypto` | Backend SPI + provider impls | No | ✅ AWS KMS adapter; 🚧 GCP / Azure / Vault / PKCS#11 / software-RoT in v0.2.0 |
+| `aegis-iam` | Principals, policies, JWT issuer/verifier, agent identity | No | ✅ HMAC-SHA256 JWT (HS256); 🚧 OIDC + JWKS in v0.2.0 |
+| `aegis-audit` | Append-only audit log SPI | No | ✅ stdout sink; 🚧 SIEM/Kafka/Postgres sinks in v0.2.0 |
+| `aegis-persistence` | Doobie-based event journal | No | ✅ Postgres journal; 🚧 MySQL driver listed in deps but not wired |
+| `aegis-sdk-scala` | Scala client SDK | No | ✅ shipped |
+| `aegis-sdk-java` | Java client SDK | No | ✅ shipped |
+| `aegis-kmip` | KMIP codec + TCP server | Yes | 🚧 skeleton only — v0.2.0+ |
+| `aegis-http` | Tapir + pekko-http REST + OpenAPI | Yes | ✅ `/v1/keys` create/get/activate/destroy |
+| `aegis-agent-ai` | Risk scorer · anomaly detector · auto-responder · LLM advisor | Yes | ⚠️ `BaselineDetector` MVP only; risk scorer + auto-responder + LLM advisor 🚧 v0.2.0 |
+| `aegis-mcp-server` | MCP tool surface for LLMs | Yes | 🚧 skeleton only — v0.2.0 |
+| `aegis-server` | Main server app wiring everything | Yes | ✅ shipped (config-driven journal + auth) |
+| `aegis-cli` | `aegis` admin CLI | No | ✅ `version`, `login`, `keys create/get/activate/destroy`; 🚧 `agent issue`, `audit tail`, `advisor scan` are stubs printing "not yet wired up" |
 
 ## Quickstart — running the server
 
@@ -238,6 +274,14 @@ git clone https://github.com/sharma-bhaskar/aegis-kms.git
 cd aegis-kms
 docker compose -f deploy/docker/docker-compose.yml up
 ```
+
+> The compose file pulls `ghcr.io/sharma-bhaskar/aegis-server:0.1.0`. Until v0.1.0 is published to
+> GHCR, build the image locally first:
+>
+> ```bash
+> sbt 'server / Docker / publishLocal'
+> IMAGE_TAG=0.1.0-SNAPSHOT docker compose -f deploy/docker/docker-compose.yml up
+> ```
 
 In another shell:
 
@@ -286,17 +330,20 @@ tar -xzf aegis-cli-0.1.0.tgz
 ```
 
 ```scala
-import cats.effect.IO
+import cats.effect.{IO, IOApp}
 import dev.aegiskms.core.*
 
-val keys: KeyService[IO] = KeyService.inMemory[IO]
+object Demo extends IOApp.Simple:
+  val alice: Principal.Human = Principal.Human("alice", Set("admins"))
 
-val program: IO[Unit] =
-  for
-    alice <- IO.pure(Principal.Human("alice", Set("admins")))
-    k     <- keys.create(KeySpec.aes256("invoice-signing"), alice)
-    got   <- keys.get(k.id, alice)
-  yield println(got)
+  def run: IO[Unit] =
+    for
+      keys    <- KeyService.inMemory                       // IO[KeyService[IO]]
+      created <- keys.create(KeySpec.aes256("invoice-signing"), alice)
+      key     <- IO.fromEither(created.left.map(e => RuntimeException(e.message)))
+      got     <- keys.get(key.id, alice)
+      _       <- IO.println(got)
+    yield ()
 ```
 
 ## Contributing

@@ -9,14 +9,12 @@ import dev.aegiskms.core.KeyService
 import dev.aegiskms.http.HttpRoutes
 import dev.aegiskms.iam.{AuthorizingKeyService, JwtVerifier, PrincipalResolver}
 import dev.aegiskms.persistence.{EventJournal, PostgresEventJournal, PostgresJournalConfig}
-import org.apache.pekko.actor.typed.scaladsl.Behaviors
-import org.apache.pekko.actor.typed.{ActorRef, ActorSystem, Scheduler}
+import org.apache.pekko.actor.typed.{ActorSystem, Scheduler}
 import org.apache.pekko.http.scaladsl.Http
 import org.apache.pekko.util.Timeout
 import org.slf4j.LoggerFactory
 
 import scala.concurrent.duration.*
-import scala.concurrent.{Await, Promise}
 
 /** Standalone entry point for Aegis-KMS.
   *
@@ -61,26 +59,18 @@ object Server:
     //    `cats.effect.Resource` boot scope.
     val journal: EventJournal[IO] = buildJournal(rootConfig)
 
-    // 2. The guardian is a tiny setup behavior that spawns KeyOpsActor and hands its ref back to the main
-    //    thread via a Promise. Pekko Typed has no `systemActorOf` for arbitrary children; the guardian is
-    //    the only place we can spawn from. Once the actor is up, the guardian sits idle.
-    val initialized = Promise[ActorRef[KeyOpsActor.Command]]()
-
-    val guardian = Behaviors.setup[Nothing] { ctx =>
-      val keyOps = ctx.spawn(KeyOpsActor.fromJournal(journal), "key-ops")
-      initialized.success(keyOps)
-      Behaviors.empty
-    }
-
-    given system: ActorSystem[Nothing] =
-      ActorSystem[Nothing](guardian, "aegis-server", rootConfig)
+    // 2. Make the user guardian *be* the KeyOpsActor. Pekko's `ActorSystem[T]` itself implements
+    //    `ActorRef[T]` for the user guardian, so we can use `system` directly wherever an
+    //    `ActorRef[KeyOpsActor.Command]` is needed. This avoids the Promise/Await dance that, on
+    //    some JDK + Pekko + sbt combinations, hangs at boot waiting for a `Behaviors.setup` block
+    //    that never gets dispatched.
+    given system: ActorSystem[KeyOpsActor.Command] =
+      ActorSystem(KeyOpsActor.fromJournal(journal), "aegis-server", rootConfig)
     given Scheduler = system.scheduler
-
-    val keyOpsRef = Await.result(initialized.future, 5.seconds)
 
     // 3. Decorate the actor-backed service with auth then audit. See the class docstring above for why this
     //    order matters.
-    val actorBacked: KeyService[IO] = new ActorBackedKeyService(keyOpsRef)
+    val actorBacked: KeyService[IO] = new ActorBackedKeyService(system)
     val authorizing: KeyService[IO] = new AuthorizingKeyService(actorBacked, new DevPolicyEngine)
 
     val resolver = buildResolver(rootConfig)

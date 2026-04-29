@@ -6,7 +6,35 @@ All notable changes to Aegis will be documented here. This project follows
 
 ## Unreleased
 
-_(empty)_
+### Fixed
+
+- **Server boot hung on first launch.** `aegis-server` used a Pekko user-guardian + Promise pattern
+  to expose the `KeyOpsActor`'s `ActorRef` to the main thread. On some JDK + sbt + Pekko combinations,
+  the guardian's `Behaviors.setup` block was never dispatched, so `Await.result(initialized.future, …)`
+  hung past every reasonable timeout. The fix makes the user guardian *be* the `KeyOpsActor` directly
+  (`ActorSystem[T] <: ActorRef[T]` in Pekko Typed) and removes the Promise/Await dance entirely.
+  This affected the `sbt 'server / run'` README quickstart and the Docker image's startup.
+- **CLI launcher script was named `bin/aegis-cli`, not `bin/aegis`.** sbt-native-packager defaults to
+  the project name; we now set `executableScriptName := "aegis"` so the published tarball matches the
+  README's `./aegis-cli-0.1.0/bin/aegis version` instructions.
+- **`Server.scala` ran sbt's `run` task in-process (no fork).** Added `run / fork := true` for the
+  `server` module so the run task gets an isolated JVM. Previously this entangled Pekko's dispatcher
+  with sbt's classloader.
+
+### Added
+
+- **`ReadmeQuickstartSpec` in `aegis-core`.** Compiles + runs the embedded-library example from
+  `README.md` so that snippet can never silently bitrot. If you change the README's
+  "Quickstart — embedding as a library" Scala block, mirror the change in this test.
+
+### Documentation
+
+- **README accuracy pass.** Each section that described future capabilities is now explicitly
+  marked 🚧 WIP (status column in tables, design-preview callouts above example/demo transcripts).
+  The "Modules" table now lists per-module v0.1.0 status. The library-embedding example was rewritten
+  to actually compile (the previous version used `KeyService.inMemory[IO]` which doesn't typecheck —
+  `KeyService.inMemory` returns `IO[KeyService[IO]]`). Added a callout under "Docker Compose
+  quickstart" telling users how to build the image locally before v0.1.0 hits GHCR.
 
 ## 0.1.0 — 2026-04-29
 
