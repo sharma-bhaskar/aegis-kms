@@ -14,10 +14,10 @@ ThisBuild / scmInfo := Some(
     connection = "scm:git:https://github.com/sharma-bhaskar/aegis-kms.git"
   )
 )
-// Versioning: sbt-ci-release derives this from the current git tag at publish time. Local builds keep
-// `0.1.0-SNAPSHOT` so unreleased work is unambiguous; tagged releases (`vX.Y.Z`) compute the version
-// automatically.
-ThisBuild / version                := "0.1.0-SNAPSHOT"
+// Versioning is delegated to sbt-dynver (pulled in by sbt-ci-release): on a `v<X.Y.Z>` tag the
+// version becomes `<X.Y.Z>`; between tags it's `<base>+<n>-<sha>-SNAPSHOT`. Setting `version :=`
+// here would OVERRIDE the dynver-derived value and break Maven Central publishing — we'd push
+// every tag as `0.1.0-SNAPSHOT` regardless of the tag name. Don't reintroduce a `version :=`.
 ThisBuild / sonatypeCredentialHost := "s01.oss.sonatype.org"
 ThisBuild / scalacOptions ++= Seq(
   "-deprecation",
