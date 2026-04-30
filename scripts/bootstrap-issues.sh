@@ -30,9 +30,13 @@ run() {
   fi
 }
 
+_is_duplicate_err() {
+  echo "$1" | grep -qiE "already[ _]?exists|already in use|422|name has already been taken|title.*already"
+}
+
 ensure_label() {
   local name="$1" color="$2" desc="$3"
-  if gh label list --repo "$REPO" --limit 500 --json name -q '.[].name' | grep -Fxq "$name"; then
+  if gh label list --repo "$REPO" --limit 500 --json name -q '.[].name' 2>/dev/null | grep -Fxq "$name"; then
     echo "  · label exists: $name"
     return 0
   fi
@@ -41,19 +45,21 @@ ensure_label() {
     echo "    [dry-run] gh label create $name"
     return 0
   fi
-  if ! gh label create --repo "$REPO" "$name" --color "$color" --description "$desc" 2>&1 | tee /tmp/aegis-label-err >/dev/null; then
-    if grep -q "already exists" /tmp/aegis-label-err; then
-      echo "    (already exists on GitHub, listing missed it - skipping)"
-    else
-      cat /tmp/aegis-label-err >&2
-      return 1
-    fi
+  local out
+  if out=$(gh label create --repo "$REPO" "$name" --color "$color" --description "$desc" 2>&1); then
+    return 0
   fi
+  if _is_duplicate_err "$out"; then
+    echo "    (already exists on GitHub - skipping)"
+    return 0
+  fi
+  echo "$out" >&2
+  return 1
 }
 
 ensure_milestone() {
   local title="$1" desc="$2"
-  if gh api --paginate "repos/$REPO/milestones?state=all&per_page=100" --jq '.[].title' | grep -Fxq "$title"; then
+  if gh api --paginate "repos/$REPO/milestones?state=all&per_page=100" --jq '.[].title' 2>/dev/null | grep -Fxq "$title"; then
     echo "  · milestone exists: $title"
     return 0
   fi
@@ -62,16 +68,17 @@ ensure_milestone() {
     echo "    [dry-run] gh api POST repos/$REPO/milestones"
     return 0
   fi
-  if ! gh api --method POST "repos/$REPO/milestones" \
-       -f "title=$title" -f "description=$desc" \
-       --silent 2>&1 | tee /tmp/aegis-ms-err >/dev/null; then
-    if grep -q "already_exists" /tmp/aegis-ms-err; then
-      echo "    (already exists on GitHub, listing missed it - skipping)"
-    else
-      cat /tmp/aegis-ms-err >&2
-      return 1
-    fi
+  local out
+  if out=$(gh api --method POST "repos/$REPO/milestones" \
+           -f "title=$title" -f "description=$desc" 2>&1); then
+    return 0
   fi
+  if _is_duplicate_err "$out"; then
+    echo "    (already exists on GitHub - skipping)"
+    return 0
+  fi
+  echo "$out" >&2
+  return 1
 }
 
 ensure_issue() {
