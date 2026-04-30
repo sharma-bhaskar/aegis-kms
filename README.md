@@ -15,7 +15,9 @@ Aegis adds identity, intelligence, and real-time control in front of your existi
 >
 > This README describes **the full design** Aegis is being built toward. v0.1.0 is the first usable
 > slice. To see exactly which capabilities ship today vs. which are planned, read the
-> [**v0.1.0 status table**](docs/ARCHITECTURE.md#11-status) and the [CHANGELOG](CHANGELOG.md).
+> [**v0.1.0 status table**](docs/ARCHITECTURE.md#11-status), the [CHANGELOG](CHANGELOG.md), and
+> the [**ROADMAP**](ROADMAP.md) for the per-release delivery plan and cross-cutting capability
+> tracks.
 >
 > **Shipping in v0.1.0** ✅ — REST `/v1/keys` (create/get/activate/destroy), Pekko-actor key state,
 > Postgres event journal, JWT bearer auth (HS256), AWS KMS root-of-trust adapter, anomaly-detector
