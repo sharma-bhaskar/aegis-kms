@@ -32,30 +32,52 @@ run() {
 
 ensure_label() {
   local name="$1" color="$2" desc="$3"
-  if gh label list --repo "$REPO" --json name -q '.[].name' | grep -Fxq "$name"; then
+  if gh label list --repo "$REPO" --limit 500 --json name -q '.[].name' | grep -Fxq "$name"; then
     echo "  · label exists: $name"
     return 0
   fi
   echo "  + label: $name ($color)"
-  run gh label create --repo "$REPO" "$name" --color "$color" --description "$desc"
+  if [[ -n "$DRY_RUN" ]]; then
+    echo "    [dry-run] gh label create $name"
+    return 0
+  fi
+  if ! gh label create --repo "$REPO" "$name" --color "$color" --description "$desc" 2>&1 | tee /tmp/aegis-label-err >/dev/null; then
+    if grep -q "already exists" /tmp/aegis-label-err; then
+      echo "    (already exists on GitHub, listing missed it - skipping)"
+    else
+      cat /tmp/aegis-label-err >&2
+      return 1
+    fi
+  fi
 }
 
 ensure_milestone() {
   local title="$1" desc="$2"
-  if gh api "repos/$REPO/milestones?state=all" --jq '.[].title' | grep -Fxq "$title"; then
+  if gh api --paginate "repos/$REPO/milestones?state=all&per_page=100" --jq '.[].title' | grep -Fxq "$title"; then
     echo "  · milestone exists: $title"
     return 0
   fi
   echo "  + milestone: $title"
-  run gh api --method POST "repos/$REPO/milestones" \
-    -f "title=$title" -f "description=$desc" \
-    --silent
+  if [[ -n "$DRY_RUN" ]]; then
+    echo "    [dry-run] gh api POST repos/$REPO/milestones"
+    return 0
+  fi
+  if ! gh api --method POST "repos/$REPO/milestones" \
+       -f "title=$title" -f "description=$desc" \
+       --silent 2>&1 | tee /tmp/aegis-ms-err >/dev/null; then
+    if grep -q "already_exists" /tmp/aegis-ms-err; then
+      echo "    (already exists on GitHub, listing missed it - skipping)"
+    else
+      cat /tmp/aegis-ms-err >&2
+      return 1
+    fi
+  fi
 }
 
 ensure_issue() {
   local title="$1" milestone="$2" labels="$3" body="$4"
 
-  if gh issue list --repo "$REPO" --state all --search "\"$title\" in:title" --json title -q '.[].title' | grep -Fxq "$title"; then
+  if gh issue list --repo "$REPO" --state all --limit 500 --search "\"$title\" in:title" --json title -q '.[].title' | grep -Fxq "$title"; then
     echo "  · issue exists: $title"
     return 0
   fi
