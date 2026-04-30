@@ -60,12 +60,21 @@ ensure_issue() {
     return 0
   fi
   echo "  + issue: $title  [milestone=$milestone, labels=$labels]"
-  run gh issue create --repo "$REPO" \
-    --title "$title" \
-    --milestone "$milestone" \
-    --label "$labels" \
-    --body "$body"
+  if [[ -n "$DRY_RUN" ]]; then
+    echo "    [dry-run] gh issue create --title \"$title\" --milestone \"$milestone\" --label \"$labels\""
+    return 0
+  fi
+  if ! gh issue create --repo "$REPO" \
+       --title "$title" \
+       --milestone "$milestone" \
+       --label "$labels" \
+       --body "$body" >/dev/null; then
+    echo "    !! issue creation failed (continuing): $title" >&2
+    FAILED_ISSUES+=("$title")
+  fi
 }
+
+FAILED_ISSUES=()
 
 # ─── 1. Labels ───────────────────────────────────────────────────────────────
 
@@ -83,7 +92,9 @@ ensure_label "area/integration/aws"   "FF9900" "AWS-specific integrations"
 ensure_label "area/integration/azure" "0089D6" "Azure-specific integrations"
 ensure_label "area/integration/gcp"   "4285F4" "GCP-specific integrations"
 ensure_label "area/integration/kafka" "231F20" "Apache Kafka audit fan-out / source"
+ensure_label "area/integration/mysql" "00758F" "MySQL / MariaDB event journal adapter"
 ensure_label "area/integration/nats"  "27AAE1" "NATS / NATS JetStream audit fan-out"
+ensure_label "area/integration/sqlite" "003B57" "SQLite event journal (embedded / dev)"
 ensure_label "area/integration/oidc"  "0E8A16" "OIDC providers (Keycloak / Authentik / Dex / Okta / Auth0)"
 ensure_label "area/integration/opa"   "7D4698" "Open Policy Agent (Rego) externalised policy"
 ensure_label "area/integration/redis" "DC382C" "Redis (jti revocation, rate limit, nonce cache)"
@@ -388,6 +399,13 @@ Tracked in [ROADMAP.md cross-cutting](../ROADMAP.md#wire-planes)."
 
 echo ""
 echo "── done ────────────────────────────────────────────────────────────────"
+if [[ ${#FAILED_ISSUES[@]} -gt 0 ]]; then
+  echo "${#FAILED_ISSUES[@]} issue(s) failed to create:" >&2
+  for t in "${FAILED_ISSUES[@]}"; do
+    echo "  - $t" >&2
+  done
+  echo "Re-run the script after fixing the underlying problem (it's idempotent)." >&2
+fi
 echo "Browse:"
 echo "  https://github.com/${REPO}/issues"
 echo "  https://github.com/${REPO}/milestones"
