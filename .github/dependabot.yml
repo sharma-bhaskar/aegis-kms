@@ -1,17 +1,27 @@
 version: 2
 updates:
+  # GitHub Actions used by .github/workflows/*.yml
+  # Grouped so we get one weekly PR with all bumps, not one PR per action.
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "weekly"
+      day: "monday"
+      time: "09:00"
+      timezone: "Asia/Kolkata"
+    open-pull-requests-limit: 5
     labels:
-      - "dependencies"
-      - "ci"
+      - "kind/release"
+      - "area/deployment"
+    commit-message:
+      prefix: "chore(ci)"
+      include: "scope"
+    groups:
+      gh-actions:
+        patterns:
+          - "*"
 
-  - package-ecosystem: "maven"
-    directory: "/"
-    schedule:
-      interval: "weekly"
-    labels:
-      - "dependencies"
-      - "scala"
+  # Note: this project's runtime deps are managed in project/Dependencies.scala
+  # via sbt, which Dependabot can't parse. Use Scala Steward for that
+  # (https://github.com/scala-steward-org/scala-steward) — opt-in via a
+  # separate workflow when we're ready.
