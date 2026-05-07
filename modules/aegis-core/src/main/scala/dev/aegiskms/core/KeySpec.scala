@@ -10,7 +10,7 @@ enum Algorithm:
 
 /** KMIP operation names. Used for principal allowlists and audit records. */
 enum Operation:
-  case Create, Get, Locate, Activate, Revoke, Destroy, Query, GetAttributes, AddAttribute
+  case Create, Get, Locate, Activate, Revoke, Destroy, Sign, Verify, Query, GetAttributes, AddAttribute
 
 /** Specification for a new key the server must generate. */
 final case class KeySpec(

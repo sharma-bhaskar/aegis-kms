@@ -118,9 +118,75 @@ final class HttpRoutes(
               }
     }
 
+  private val signSE: ServerEndpoint[Any, Future] =
+    Endpoints.signKey.serverLogic { case (auth, devHdr, idStr, req) =>
+      principalOf(auth, devHdr) match
+        case Left(e) => Future.successful(Left(e))
+        case Right(principal) =>
+          parseId(idStr) match
+            case Left(e) => Future.successful(Left(e))
+            case Right(id) =>
+              decodeSignRequest(req) match
+                case Left(e) => Future.successful(Left(e))
+                case Right((message, alg)) =>
+                  runIO(svc.sign(id, message, alg, principal)).map {
+                    case Left(err)  => Left(errorOut(err))
+                    case Right(sig) => Right(SignResponse.fromCore(sig))
+                  }
+    }
+
+  private val verifySE: ServerEndpoint[Any, Future] =
+    Endpoints.verifyKey.serverLogic { case (auth, devHdr, idStr, req) =>
+      principalOf(auth, devHdr) match
+        case Left(e) => Future.successful(Left(e))
+        case Right(principal) =>
+          parseId(idStr) match
+            case Left(e) => Future.successful(Left(e))
+            case Right(id) =>
+              decodeVerifyRequest(req) match
+                case Left(e) => Future.successful(Left(e))
+                case Right((message, signature)) =>
+                  runIO(svc.verify(id, message, signature, principal)).map {
+                    case Left(err) => Left(errorOut(err))
+                    case Right(ok) => Right(VerifyResponse(ok, signature.algorithm.toString))
+                  }
+    }
+
+  private def decodeSignRequest(
+      req: SignRequest
+  ): Either[(StatusCode, KmsErrorDto), (Array[Byte], SigAlgorithm)] =
+    for
+      msg <- decodeBase64(req.messageBase64, "messageBase64")
+      alg <- SigAlgorithm.fromString(req.algorithm).left.map { msg =>
+        StatusCode.BadRequest -> KmsErrorDto.of(ErrorCode.InvalidField, msg)
+      }
+    yield (msg, alg)
+
+  private def decodeVerifyRequest(
+      req: VerifyRequest
+  ): Either[(StatusCode, KmsErrorDto), (Array[Byte], Signature)] =
+    for
+      msg <- decodeBase64(req.messageBase64, "messageBase64")
+      alg <- SigAlgorithm.fromString(req.algorithm).left.map { msg =>
+        StatusCode.BadRequest -> KmsErrorDto.of(ErrorCode.InvalidField, msg)
+      }
+      sig <- Signature.fromBase64(req.signatureBase64, alg).left.map { msg =>
+        StatusCode.BadRequest -> KmsErrorDto.of(ErrorCode.InvalidField, msg)
+      }
+    yield (msg, sig)
+
+  private def decodeBase64(
+      b64: String,
+      field: String
+  ): Either[(StatusCode, KmsErrorDto), Array[Byte]] =
+    try Right(java.util.Base64.getDecoder.decode(b64))
+    catch
+      case e: IllegalArgumentException =>
+        Left(StatusCode.BadRequest -> KmsErrorDto.of(ErrorCode.InvalidField, s"$field: ${e.getMessage}"))
+
   /** All server endpoints, for the OpenAPI generator and the test stub interpreter. */
   val serverEndpoints: List[ServerEndpoint[Any, Future]] =
-    List(createSE, getSE, activateSE, destroySE)
+    List(createSE, getSE, activateSE, destroySE, signSE, verifySE)
 
   /** A pekko-http `Route` that mounts every endpoint. */
   def routes: Route = PekkoHttpServerInterpreter().toRoute(serverEndpoints)

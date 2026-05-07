@@ -83,3 +83,32 @@ final class AuditingKeyServiceSpec extends AnyFunSuite with Matchers:
     records.size shouldBe 2
     records.map(_.correlationId).toSet.size shouldBe 2
   }
+
+  test("sign emits a Success record carrying the algorithm and message length") {
+    val (svc, sink) = fixture()
+
+    val created = svc.create(KeySpec.rsa2048("audit-sign"), alice).unsafeRunSync().toOption.get
+    svc.activate(created.id, alice).unsafeRunSync()
+    svc.sign(created.id, "hello".getBytes, SigAlgorithm.RsaPssSha256, alice).unsafeRunSync()
+
+    val signRecord = sink.all.unsafeRunSync().find(_.operation == Operation.Sign).get
+    signRecord.outcome should startWith("Success")
+    signRecord.outcome should include("alg=RsaPssSha256")
+    signRecord.outcome should include("msgLen=5")
+  }
+
+  test("verify emits a Success record with valid=true/false") {
+    val (svc, sink) = fixture()
+
+    val created = svc.create(KeySpec.rsa2048("audit-verify"), alice).unsafeRunSync().toOption.get
+    svc.activate(created.id, alice).unsafeRunSync()
+    val sig = svc.sign(created.id, "msg".getBytes, SigAlgorithm.RsaPssSha256, alice)
+      .unsafeRunSync().toOption.get
+    svc.verify(created.id, "msg".getBytes, sig, alice).unsafeRunSync()
+    svc.verify(created.id, "tampered".getBytes, sig, alice).unsafeRunSync()
+
+    val verifyRecords = sink.all.unsafeRunSync().filter(_.operation == Operation.Verify)
+    verifyRecords.size shouldBe 2
+    verifyRecords.head.outcome should include("valid=true")
+    verifyRecords(1).outcome should include("valid=false")
+  }

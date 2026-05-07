@@ -43,6 +43,22 @@ final class AuthorizingKeyService(
   def destroy(id: KeyId, by: Principal): IO[Either[KmsError, Unit]] =
     guard(by, Operation.Destroy, id.value)(inner.destroy(id, by))
 
+  def sign(
+      id: KeyId,
+      message: Array[Byte],
+      alg: SigAlgorithm,
+      by: Principal
+  ): IO[Either[KmsError, Signature]] =
+    guard(by, Operation.Sign, id.value)(inner.sign(id, message, alg, by))
+
+  def verify(
+      id: KeyId,
+      message: Array[Byte],
+      signature: Signature,
+      by: Principal
+  ): IO[Either[KmsError, Boolean]] =
+    guard(by, Operation.Verify, id.value)(inner.verify(id, message, signature, by))
+
   private def guard[A](by: Principal, op: Operation, resource: String)(
       action: => IO[Either[KmsError, A]]
   ): IO[Either[KmsError, A]] =

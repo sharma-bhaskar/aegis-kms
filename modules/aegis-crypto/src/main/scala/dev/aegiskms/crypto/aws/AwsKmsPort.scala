@@ -5,7 +5,11 @@ import software.amazon.awssdk.services.kms.model.{
   DataKeySpec,
   DecryptRequest,
   EnableKeyRotationRequest,
-  GenerateDataKeyRequest
+  GenerateDataKeyRequest,
+  MessageType,
+  SignRequest,
+  SigningAlgorithmSpec,
+  VerifyRequest
 }
 
 /** A minimal seam over `software.amazon.awssdk.services.kms.KmsClient` covering only the operations the Aegis
@@ -20,6 +24,13 @@ trait AwsKmsPort:
   def generateDataKey(kekArn: String, spec: DataKeySpec): AwsKmsPort.GenerateResult
   def decrypt(kekArn: String, ciphertext: Array[Byte]): Array[Byte]
   def enableRotation(kekArn: String): Unit
+  def sign(keyArn: String, message: Array[Byte], alg: SigningAlgorithmSpec): Array[Byte]
+  def verify(
+      keyArn: String,
+      message: Array[Byte],
+      signature: Array[Byte],
+      alg: SigningAlgorithmSpec
+  ): Boolean
 
 object AwsKmsPort:
 
@@ -51,3 +62,37 @@ object AwsKmsPort:
 
     def enableRotation(kekArn: String): Unit =
       val _ = client.enableKeyRotation(EnableKeyRotationRequest.builder().keyId(kekArn).build())
+
+    def sign(keyArn: String, message: Array[Byte], alg: SigningAlgorithmSpec): Array[Byte] =
+      val res = client.sign(
+        SignRequest.builder()
+          .keyId(keyArn)
+          .message(software.amazon.awssdk.core.SdkBytes.fromByteArray(message))
+          .messageType(MessageType.RAW)
+          .signingAlgorithm(alg)
+          .build()
+      )
+      res.signature().asByteArray()
+
+    def verify(
+        keyArn: String,
+        message: Array[Byte],
+        signature: Array[Byte],
+        alg: SigningAlgorithmSpec
+    ): Boolean =
+      // AWS KMS Verify throws KmsInvalidSignatureException on bad signatures; otherwise sets signatureValid.
+      // We catch the validity exception here and translate to `false`. Any other exception (network, auth)
+      // propagates so the RootOfTrust adapter can map it to KmsError.
+      try
+        val res = client.verify(
+          VerifyRequest.builder()
+            .keyId(keyArn)
+            .message(software.amazon.awssdk.core.SdkBytes.fromByteArray(message))
+            .messageType(MessageType.RAW)
+            .signature(software.amazon.awssdk.core.SdkBytes.fromByteArray(signature))
+            .signingAlgorithm(alg)
+            .build()
+        )
+        res.signatureValid().booleanValue()
+      catch
+        case _: software.amazon.awssdk.services.kms.model.KmsInvalidSignatureException => false

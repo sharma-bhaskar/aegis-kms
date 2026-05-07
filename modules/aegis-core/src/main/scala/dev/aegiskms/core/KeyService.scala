@@ -31,6 +31,21 @@ trait KeyService[F[_]]:
   def revoke(id: KeyId, by: Principal): F[Either[KmsError, ManagedKey]]
   def destroy(id: KeyId, by: Principal): F[Either[KmsError, Unit]]
 
+  /** Sign `message` with the key identified by `id` using `alg`. The key must be in `KeyState.Active`. */
+  def sign(id: KeyId, message: Array[Byte], alg: SigAlgorithm, by: Principal): F[Either[KmsError, Signature]]
+
+  /** Verify `signature` over `message` for the key identified by `id`. Returns `Right(true)` for a valid
+    * signature, `Right(false)` for a bad one, `Left(_)` for missing keys / lookup failures. The error/false
+    * distinction matters: a caller seeing `Right(false)` knows the key was found and the verifier ran; only
+    * `Left` indicates that the verifier could not even be invoked.
+    */
+  def verify(
+      id: KeyId,
+      message: Array[Byte],
+      signature: Signature,
+      by: Principal
+  ): F[Either[KmsError, Boolean]]
+
 object KeyService:
 
   /** An in-memory reference implementation. Not durable, not safe for production — useful for tests, smoke
@@ -67,6 +82,37 @@ object KeyService:
               case Some(_) => (m - id, Right(()))
           }
 
+        def sign(
+            id: KeyId,
+            message: Array[Byte],
+            alg: SigAlgorithm,
+            by: Principal
+        ): IO[Either[KmsError, Signature]] =
+          ref.get.map { m =>
+            m.get(id) match
+              case None =>
+                Left(KmsError(ErrorCode.ItemNotFound, s"No key with id ${id.value}"))
+              case Some(k) if k.state != KeyState.Active =>
+                Left(KmsError(ErrorCode.IllegalOperation, s"Key ${id.value} is ${k.state}, must be Active"))
+              case Some(_) =>
+                Right(Signature(deterministicMac(id, message), alg))
+          }
+
+        def verify(
+            id: KeyId,
+            message: Array[Byte],
+            signature: Signature,
+            by: Principal
+        ): IO[Either[KmsError, Boolean]] =
+          ref.get.map { m =>
+            m.get(id) match
+              case None =>
+                Left(KmsError(ErrorCode.ItemNotFound, s"No key with id ${id.value}"))
+              case Some(_) =>
+                val expected = deterministicMac(id, message)
+                Right(java.util.Arrays.equals(expected, signature.bytes))
+          }
+
         private def transition(id: KeyId, to: KeyState): IO[Either[KmsError, ManagedKey]] =
           ref.modify { m =>
             m.get(id) match
@@ -77,3 +123,12 @@ object KeyService:
                 (m + (id -> updated), Right(updated))
           }
     }
+
+  /** Deterministic in-memory MAC keyed by the KeyId. Not real cryptography — the in-memory KeyService is a
+    * dev/test reference, and "sign/verify round-trip" is the only contract its tests assert. Real signing
+    * lives in `AwsKmsRootOfTrust` (and the upcoming GCP/Azure/Vault adapters).
+    */
+  private def deterministicMac(id: KeyId, message: Array[Byte]): Array[Byte] =
+    val mac = javax.crypto.Mac.getInstance("HmacSHA256")
+    mac.init(new javax.crypto.spec.SecretKeySpec(id.value.getBytes("UTF-8"), "HmacSHA256"))
+    mac.doFinal(message)

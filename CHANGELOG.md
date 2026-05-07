@@ -23,6 +23,21 @@ All notable changes to Aegis will be documented here. This project follows
 
 ### Added
 
+- **Sign / verify across the whole stack (closes #5).** New `sign(id, message, alg, by)` and
+  `verify(id, message, signature, by)` methods on `KeyService[F[_]]` in `aegis-core`, with
+  `Operation.Sign` / `Operation.Verify` added to the IAM allowlist enum, a new `Signature` type +
+  `SigAlgorithm` enum (`RsaPssSha256`, `EcdsaSha256` for v0.1.1), and matching `AuditingKeyService`
+  decorator records that capture the algorithm and `valid=true|false` outcome. The `RootOfTrust` SPI
+  gained the same operations; `AwsKmsRootOfTrust` implements them via the AWS KMS `Sign` / `Verify`
+  APIs (mapping `RsaPssSha256` → `RSASSA_PSS_SHA_256`, `EcdsaSha256` → `ECDSA_SHA_256`). On the wire:
+  `POST /v1/keys/{id}/sign` (request: `{messageBase64, algorithm}`, response: `{signatureBase64,
+  algorithm}`) and `POST /v1/keys/{id}/verify` (request adds `signatureBase64`, response is `{valid,
+  algorithm}`). The CLI gained `aegis keys sign --id <id> --message <text|@file> [--alg
+  RsaPssSha256]` and `aegis keys verify --id <id> --message <text|@file> --signature <base64> [--alg
+  RsaPssSha256]`; verify exits 0 for `valid:true`, 3 for `valid:false`. The in-memory `KeyService`
+  uses a deterministic HMAC-SHA-256 keyed by the KeyId so the dev REST surface has a working
+  round-trip without a real KMS. Sign requires the key to be in `KeyState.Active`; calls against
+  PreActive keys return `KmsError(IllegalOperation, ...)` and produce a `Failed` audit record.
 - **`ReadmeQuickstartSpec` in `aegis-core`.** Compiles + runs the embedded-library example from
   `README.md` so that snippet can never silently bitrot. If you change the README's
   "Quickstart — embedding as a library" Scala block, mirror the change in this test.

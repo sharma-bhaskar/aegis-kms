@@ -1,9 +1,17 @@
 package dev.aegiskms.cli
 
 import dev.aegiskms.cli.AegisHttpClient.{ClientError, renderError}
-import dev.aegiskms.cli.WireFormats.{KeySpecDto, ManagedKeyDto}
+import dev.aegiskms.cli.WireFormats.{
+  KeySpecDto,
+  ManagedKeyDto,
+  SignRequest,
+  SignResponse,
+  VerifyRequest,
+  VerifyResponse
+}
 
-import java.nio.file.Path
+import java.nio.file.{Files, Path}
+import java.util.Base64
 
 /** Pure command handlers. Each one returns a [[CommandResult]] with stdout/stderr text and an exit code so
   * the entry point can write the strings and propagate the code. Keeping them pure lets us assert exact
@@ -66,6 +74,51 @@ object Commands:
     client.destroyKey(id) match
       case Right(_)  => CommandResult.out(s"destroyed $id")
       case Left(err) => CommandResult.err(renderError(err), exitCodeFor(err))
+
+  // ── keys sign ──────────────────────────────────────────────────────────────
+
+  /** `aegis keys sign --id <id> --message <text|@file> [--alg RsaPssSha256]`. The message can be supplied
+    * inline (taken as UTF-8 bytes) or read from a file path prefixed with `@`. The signature is printed as
+    * base64.
+    */
+  def keysSign(client: AegisHttpClient, id: String, message: String, alg: String): CommandResult =
+    readMessage(message) match
+      case Left(msg) => CommandResult.err(s"keys sign: $msg")
+      case Right(bytes) =>
+        val req = SignRequest(Base64.getEncoder.encodeToString(bytes), alg)
+        client.signKey(id, req) match
+          case Right(SignResponse(sigB64, algo)) =>
+            CommandResult.out(s"signature: $sigB64\nalgorithm: $algo")
+          case Left(err) => CommandResult.err(renderError(err), exitCodeFor(err))
+
+  // ── keys verify ────────────────────────────────────────────────────────────
+
+  /** `aegis keys verify --id <id> --message <text|@file> --signature <b64> [--alg RsaPssSha256]`. */
+  def keysVerify(
+      client: AegisHttpClient,
+      id: String,
+      message: String,
+      signatureB64: String,
+      alg: String
+  ): CommandResult =
+    readMessage(message) match
+      case Left(msg) => CommandResult.err(s"keys verify: $msg")
+      case Right(bytes) =>
+        val req = VerifyRequest(Base64.getEncoder.encodeToString(bytes), signatureB64, alg)
+        client.verifyKey(id, req) match
+          case Right(VerifyResponse(true, algo))  => CommandResult.out(s"valid: true ($algo)")
+          case Right(VerifyResponse(false, algo)) => CommandResult.err(s"valid: false ($algo)", code = 3)
+          case Left(err)                          => CommandResult.err(renderError(err), exitCodeFor(err))
+
+  /** Read the message argument: `@/path/to/file` reads from disk, anything else is taken as a literal UTF-8
+    * string. Mirrors how curl handles `--data @file`.
+    */
+  private def readMessage(arg: String): Either[String, Array[Byte]] =
+    if arg.startsWith("@") then
+      val path = Path.of(arg.drop(1))
+      try Right(Files.readAllBytes(path))
+      catch case e: Exception => Left(s"could not read $path: ${e.getMessage}")
+    else Right(arg.getBytes("UTF-8"))
 
   // ── placeholders for agent-native commands (backends arrive in later PRs) ──
 

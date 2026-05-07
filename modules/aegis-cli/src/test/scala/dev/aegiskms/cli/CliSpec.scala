@@ -173,3 +173,48 @@ final class CliSpec extends AnyFunSuite with Matchers:
     r.stderr should include("unknown command")
     r.stderr should include("Usage:")
   }
+
+  test("'keys sign' missing --message reports a usage error and exits 1") {
+    val r = Cli.run(
+      List("keys", "sign", "--id", "abc"),
+      cfg,
+      fakeClientFactory(200, sampleKey.asJson.noSpaces)
+    )
+    r.exitCode shouldBe 1
+    r.stderr should include("--message")
+  }
+
+  test("'keys sign --id <id> --message <text>' POSTs to /sign with the algorithm default") {
+    var captured: Option[HttpPort.Request] = None
+    val responseBody                       = SignResponse("c2ln", "RsaPssSha256").asJson.noSpaces
+    val r = Cli.run(
+      List("keys", "sign", "--id", "abc", "--message", "hello"),
+      cfg,
+      captureFactory(req => captured = Some(req), responseBody, status = 200)
+    )
+    r.exitCode shouldBe 0
+    captured.get.method shouldBe "POST"
+    captured.get.url should endWith("/v1/keys/abc/sign")
+    captured.get.body.get should include("\"algorithm\":\"RsaPssSha256\"")
+  }
+
+  test("'keys verify' missing --signature reports a usage error and exits 1") {
+    val r = Cli.run(
+      List("keys", "verify", "--id", "abc", "--message", "x"),
+      cfg,
+      fakeClientFactory(200, sampleKey.asJson.noSpaces)
+    )
+    r.exitCode shouldBe 1
+    r.stderr should include("--signature")
+  }
+
+  test("'keys verify' renders valid:true on a server 'valid:true' response") {
+    val responseBody = VerifyResponse(true, "RsaPssSha256").asJson.noSpaces
+    val r = Cli.run(
+      List("keys", "verify", "--id", "abc", "--message", "hi", "--signature", "c2ln"),
+      cfg,
+      fakeClientFactory(200, responseBody)
+    )
+    r.exitCode shouldBe 0
+    r.stdout should include("valid: true")
+  }

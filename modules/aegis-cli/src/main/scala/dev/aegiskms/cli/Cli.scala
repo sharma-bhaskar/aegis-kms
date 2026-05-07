@@ -76,6 +76,16 @@ object Cli:
           case id :: _ if id.nonEmpty => Commands.keysDestroy(makeClient(cfg), id)
           case _ => CommandResult.err("keys destroy: missing <id>\n\nUsage: aegis keys destroy <id>")
 
+      case "sign" =>
+        parseKeysSign(rest) match
+          case Right((id, msg, alg)) => Commands.keysSign(makeClient(cfg), id, msg, alg)
+          case Left(msg)             => CommandResult.err(s"$msg\n\n${keysSignHelp}")
+
+      case "verify" =>
+        parseKeysVerify(rest) match
+          case Right((id, msg, sig, alg)) => Commands.keysVerify(makeClient(cfg), id, msg, sig, alg)
+          case Left(msg)                  => CommandResult.err(s"$msg\n\n${keysVerifyHelp}")
+
       case other =>
         CommandResult.err(s"unknown keys subcommand: $other\n\n${keysHelp}")
 
@@ -113,6 +123,25 @@ object Cli:
       as <- algAndSize
     yield (as._1, as._2, n)
 
+  /** Parse `aegis keys sign --id <id> --message <text|@file> [--alg RsaPssSha256]`. */
+  private def parseKeysSign(args: List[String]): Either[String, (String, String, String)] =
+    val flags = parseFlags(args)
+    val alg   = flags.getOrElse("--alg", "RsaPssSha256")
+    for
+      id  <- flags.get("--id").toRight("keys sign: --id <id> is required")
+      msg <- flags.get("--message").toRight("keys sign: --message <text|@file> is required")
+    yield (id, msg, alg)
+
+  /** Parse `aegis keys verify --id <id> --message <text|@file> --signature <b64> [--alg RsaPssSha256]`. */
+  private def parseKeysVerify(args: List[String]): Either[String, (String, String, String, String)] =
+    val flags = parseFlags(args)
+    val alg   = flags.getOrElse("--alg", "RsaPssSha256")
+    for
+      id  <- flags.get("--id").toRight("keys verify: --id <id> is required")
+      msg <- flags.get("--message").toRight("keys verify: --message <text|@file> is required")
+      sig <- flags.get("--signature").toRight("keys verify: --signature <base64> is required")
+    yield (id, msg, sig, alg)
+
   /** Tiny `--key value --key2 value2 …` flag parser. Anything else gets ignored — fine for our tiny surface.
     */
   private def parseFlags(args: List[String]): Map[String, String] =
@@ -132,6 +161,8 @@ object Cli:
       |  aegis keys get <id>
       |  aegis keys activate <id>
       |  aegis keys destroy <id>
+      |  aegis keys sign --id <id> --message <text|@file> [--alg RsaPssSha256]
+      |  aegis keys verify --id <id> --message <text|@file> --signature <b64> [--alg RsaPssSha256]
       |  aegis agent issue        (planned — PR A1)
       |  aegis audit tail         (planned — PR F2.b)
       |  aegis advisor scan       (planned — PR W4)
@@ -146,5 +177,11 @@ object Cli:
       |  aegis keys create --alg <ALG> --name <NAME>
       |  aegis keys get <id>
       |  aegis keys activate <id>
-      |  aegis keys destroy <id>""".stripMargin
+      |  aegis keys destroy <id>
+      |  aegis keys sign --id <id> --message <text|@file> [--alg RsaPssSha256]
+      |  aegis keys verify --id <id> --message <text|@file> --signature <b64> [--alg RsaPssSha256]""".stripMargin
   private val keysCreateHelp: String = "Usage: aegis keys create --alg AES-256 --name <name>"
+  private val keysSignHelp: String =
+    "Usage: aegis keys sign --id <id> --message <text|@file> [--alg RsaPssSha256]"
+  private val keysVerifyHelp: String =
+    "Usage: aegis keys verify --id <id> --message <text|@file> --signature <b64> [--alg RsaPssSha256]"

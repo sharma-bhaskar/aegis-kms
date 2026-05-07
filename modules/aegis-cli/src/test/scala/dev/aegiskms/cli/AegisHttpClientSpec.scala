@@ -104,6 +104,31 @@ final class AegisHttpClientSpec extends AnyFunSuite with Matchers:
     seenUrl shouldBe "http://localhost:8443/v1/keys/abc"
   }
 
+  test("signKey POSTs to /v1/keys/{id}/sign with Content-Type and decodes the response") {
+    var seen: Option[HttpPort.Request] = None
+    val port = new RecordingPort(req => {
+      seen = Some(req)
+      HttpPort.Response(200, SignResponse("abcd==", "RsaPssSha256").asJson.noSpaces)
+    })
+    val client = new AegisHttpClient(port, baseUrl, principal)
+    val res    = client.signKey(sampleKey.id, SignRequest("aGVsbG8=", "RsaPssSha256"))
+
+    res shouldBe Right(SignResponse("abcd==", "RsaPssSha256"))
+    seen.get.method shouldBe "POST"
+    seen.get.url shouldBe s"$baseUrl/v1/keys/${sampleKey.id}/sign"
+    seen.get.headers.get("Content-Type") shouldBe Some("application/json")
+    seen.get.body.get should include("RsaPssSha256")
+  }
+
+  test("verifyKey POSTs to /v1/keys/{id}/verify and decodes valid:true|false") {
+    val port =
+      new RecordingPort(_ => HttpPort.Response(200, VerifyResponse(true, "RsaPssSha256").asJson.noSpaces))
+    val client = new AegisHttpClient(port, baseUrl, principal)
+    client.verifyKey(sampleKey.id, VerifyRequest("m", "s", "RsaPssSha256")) shouldBe Right(
+      VerifyResponse(true, "RsaPssSha256")
+    )
+  }
+
   // ── Stub ────────────────────────────────────────────────────────────────────
 
   final private class RecordingPort(handler: HttpPort.Request => HttpPort.Response) extends HttpPort:

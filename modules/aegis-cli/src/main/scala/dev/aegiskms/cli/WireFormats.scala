@@ -33,3 +33,23 @@ object WireFormats:
   object KmsErrorDto:
     given Encoder[KmsErrorDto] = deriveEncoder
     given Decoder[KmsErrorDto] = deriveDecoder
+
+  final case class SignRequest(messageBase64: String, algorithm: String)
+  object SignRequest:
+    given Encoder[SignRequest] = deriveEncoder
+    given Decoder[SignRequest] = deriveDecoder
+
+  final case class SignResponse(signatureBase64: String, algorithm: String)
+  object SignResponse:
+    given Encoder[SignResponse] = deriveEncoder
+    given Decoder[SignResponse] = deriveDecoder
+
+  final case class VerifyRequest(messageBase64: String, signatureBase64: String, algorithm: String)
+  object VerifyRequest:
+    given Encoder[VerifyRequest] = deriveEncoder
+    given Decoder[VerifyRequest] = deriveDecoder
+
+  final case class VerifyResponse(valid: Boolean, algorithm: String)
+  object VerifyResponse:
+    given Encoder[VerifyResponse] = deriveEncoder
+    given Decoder[VerifyResponse] = deriveDecoder

@@ -52,3 +52,43 @@ final class AuthorizingKeyServiceSpec extends AnyFunSuite with Matchers:
     res.swap.toOption.get.code shouldBe ErrorCode.PermissionDenied
     res.swap.toOption.get.message should include("blocked by parent")
   }
+
+  test("agent without Sign in allowedOps is denied even if the parent is permissive") {
+    val engine = RoleBasedPolicyEngine.adminsOnly("admins") // alice IS in admins
+    val svc    = fixture(engine)
+    val agent = Principal.Agent(
+      subject = "claude-session-7a3",
+      operator = alice,
+      purpose = "invoice-signing",
+      issuedAt = Instant.now(),
+      ttl = 1.hour,
+      allowedOps = Set(Operation.Get), // no Sign
+      parent = None
+    )
+    val res = svc.sign(KeyId.generate(), "msg".getBytes, SigAlgorithm.RsaPssSha256, agent).unsafeRunSync()
+    res.isLeft shouldBe true
+    res.swap.toOption.get.code shouldBe ErrorCode.PermissionDenied
+  }
+
+  test("agent with Sign in allowedOps and a permissive parent is allowed through") {
+    val engine = RoleBasedPolicyEngine.adminsOnly("admins")
+    val svc    = fixture(engine)
+
+    // First create + activate as alice so the inner store has a key to sign with.
+    val created = svc.create(KeySpec.rsa2048("agent-sign"), alice).unsafeRunSync()
+    created.isRight shouldBe true
+    val id = created.toOption.get.id
+    svc.activate(id, alice).unsafeRunSync()
+
+    val agent = Principal.Agent(
+      subject = "claude-session-7a3",
+      operator = alice,
+      purpose = "invoice-signing",
+      issuedAt = Instant.now(),
+      ttl = 1.hour,
+      allowedOps = Set(Operation.Get, Operation.Sign, Operation.Verify),
+      parent = None
+    )
+    val res = svc.sign(id, "msg".getBytes, SigAlgorithm.RsaPssSha256, agent).unsafeRunSync()
+    res.isRight shouldBe true
+  }

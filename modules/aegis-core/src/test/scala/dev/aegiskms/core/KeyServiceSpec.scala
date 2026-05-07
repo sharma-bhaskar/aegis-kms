@@ -55,3 +55,65 @@ final class KeyServiceSpec extends AnyFunSuite with Matchers:
     after.isLeft shouldBe true
     after.swap.toOption.get.code shouldBe ErrorCode.ItemNotFound
   }
+
+  test("sign then verify round-trips for any byte payload (deterministic dev impl)") {
+    val payloads = List(
+      Array.emptyByteArray,
+      "hello".getBytes("UTF-8"),
+      Array.tabulate(1024)(i => (i % 256).toByte),
+      "🔐 unicode 🔑".getBytes("UTF-8")
+    )
+
+    payloads.foreach { msg =>
+      val ok = (for
+        svc     <- KeyService.inMemory
+        created <- svc.create(KeySpec.rsa2048("sig-key"), alice)
+        id = created.toOption.get.id
+        _      <- svc.activate(id, alice)
+        signed <- svc.sign(id, msg, SigAlgorithm.RsaPssSha256, alice)
+        sig = signed.toOption.get
+        valid <- svc.verify(id, msg, sig, alice)
+      yield valid).unsafeRunSync()
+
+      ok.isRight shouldBe true
+      ok.toOption.get shouldBe true
+    }
+  }
+
+  test("verify returns Right(false) when the message is tampered with") {
+    val result = (for
+      svc     <- KeyService.inMemory
+      created <- svc.create(KeySpec.rsa2048("tamper-test"), alice)
+      id = created.toOption.get.id
+      _      <- svc.activate(id, alice)
+      signed <- svc.sign(id, "original".getBytes, SigAlgorithm.RsaPssSha256, alice)
+      sig = signed.toOption.get
+      tampered <- svc.verify(id, "tampered".getBytes, sig, alice)
+    yield tampered).unsafeRunSync()
+
+    result.isRight shouldBe true
+    result.toOption.get shouldBe false
+  }
+
+  test("sign on a PreActive key returns IllegalOperation") {
+    val result = (for
+      svc     <- KeyService.inMemory
+      created <- svc.create(KeySpec.rsa2048("not-yet-active"), alice)
+      id = created.toOption.get.id
+      // Deliberately do NOT activate.
+      signed <- svc.sign(id, "data".getBytes, SigAlgorithm.RsaPssSha256, alice)
+    yield signed).unsafeRunSync()
+
+    result.isLeft shouldBe true
+    result.swap.toOption.get.code shouldBe ErrorCode.IllegalOperation
+  }
+
+  test("sign on an unknown key returns ItemNotFound") {
+    val result = (for
+      svc    <- KeyService.inMemory
+      signed <- svc.sign(KeyId.generate(), "data".getBytes, SigAlgorithm.RsaPssSha256, alice)
+    yield signed).unsafeRunSync()
+
+    result.isLeft shouldBe true
+    result.swap.toOption.get.code shouldBe ErrorCode.ItemNotFound
+  }

@@ -121,3 +121,89 @@ final class HttpRoutesSpec extends AnyFunSuite with Matchers with ScalatestRoute
       status shouldBe StatusCodes.Created
     }
   }
+
+  test("POST /v1/keys/{id}/sign + /verify round-trip succeeds for an Active key") {
+    val route = freshRoute()
+    var id    = ""
+
+    Post("/v1/keys", jsonEntity(createBody)) ~> route ~> check {
+      id = extractField(responseAs[String], "id")
+    }
+    Post(s"/v1/keys/$id/activate") ~> route ~> check {
+      status shouldBe StatusCodes.OK
+    }
+
+    val msgB64   = java.util.Base64.getEncoder.encodeToString("hello".getBytes("UTF-8"))
+    val signBody = s"""{"messageBase64":"$msgB64","algorithm":"RsaPssSha256"}"""
+
+    var sigB64 = ""
+    Post(s"/v1/keys/$id/sign", jsonEntity(signBody)) ~> route ~> check {
+      status shouldBe StatusCodes.OK
+      val body = responseAs[String]
+      body should include(""""algorithm":"RsaPssSha256"""")
+      sigB64 = extractField(body, "signatureBase64")
+      sigB64.nonEmpty shouldBe true
+    }
+
+    val verifyBody =
+      s"""{"messageBase64":"$msgB64","signatureBase64":"$sigB64","algorithm":"RsaPssSha256"}"""
+    Post(s"/v1/keys/$id/verify", jsonEntity(verifyBody)) ~> route ~> check {
+      status shouldBe StatusCodes.OK
+      responseAs[String] should include(""""valid":true""")
+    }
+  }
+
+  test("POST /v1/keys/{id}/verify with a tampered message returns valid:false") {
+    val route = freshRoute()
+    var id    = ""
+
+    Post("/v1/keys", jsonEntity(createBody)) ~> route ~> check {
+      id = extractField(responseAs[String], "id")
+    }
+    Post(s"/v1/keys/$id/activate") ~> route ~> check(status shouldBe StatusCodes.OK)
+
+    val msgB64      = java.util.Base64.getEncoder.encodeToString("original".getBytes)
+    val tamperedB64 = java.util.Base64.getEncoder.encodeToString("tampered".getBytes)
+    val signBody    = s"""{"messageBase64":"$msgB64","algorithm":"RsaPssSha256"}"""
+
+    var sigB64 = ""
+    Post(s"/v1/keys/$id/sign", jsonEntity(signBody)) ~> route ~> check {
+      sigB64 = extractField(responseAs[String], "signatureBase64")
+    }
+
+    val verifyBody =
+      s"""{"messageBase64":"$tamperedB64","signatureBase64":"$sigB64","algorithm":"RsaPssSha256"}"""
+    Post(s"/v1/keys/$id/verify", jsonEntity(verifyBody)) ~> route ~> check {
+      status shouldBe StatusCodes.OK
+      responseAs[String] should include(""""valid":false""")
+    }
+  }
+
+  test("POST /v1/keys/{id}/sign on a PreActive key returns 500 IllegalOperation") {
+    // The current errorOut maps IllegalOperation to 500 (not enumerated explicitly). We assert the
+    // server-side error code shows up in the body so callers can branch on it.
+    val route = freshRoute()
+    var id    = ""
+
+    Post("/v1/keys", jsonEntity(createBody)) ~> route ~> check {
+      id = extractField(responseAs[String], "id")
+    }
+    // Skip activate.
+
+    val msgB64 = java.util.Base64.getEncoder.encodeToString("data".getBytes)
+    val body   = s"""{"messageBase64":"$msgB64","algorithm":"RsaPssSha256"}"""
+    Post(s"/v1/keys/$id/sign", jsonEntity(body)) ~> route ~> check {
+      val raw = responseAs[String]
+      raw should include(""""code":"IllegalOperation"""")
+    }
+  }
+
+  test("POST /v1/keys/{id}/sign with bogus algorithm returns 400 InvalidField") {
+    val route  = freshRoute()
+    val msgB64 = java.util.Base64.getEncoder.encodeToString("data".getBytes)
+    val body   = s"""{"messageBase64":"$msgB64","algorithm":"NopeSha999"}"""
+    Post("/v1/keys/any-id/sign", jsonEntity(body)) ~> route ~> check {
+      status shouldBe StatusCodes.BadRequest
+      responseAs[String] should include(""""code":"InvalidField"""")
+    }
+  }

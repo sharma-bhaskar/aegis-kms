@@ -45,6 +45,22 @@ final class AegisHttpClient(http: HttpPort, baseUrl: String, principal: Option[S
       case 204    => Right(())
       case status => Left(toError(status, res.body))
 
+  def signKey(id: String, req: SignRequest): Either[ClientError, SignResponse] =
+    val body    = req.asJson.noSpaces
+    val headers = baseHeaders + ("Content-Type" -> "application/json")
+    val res     = http.execute(HttpPort.Request("POST", url(s"/v1/keys/$id/sign"), headers, Some(body)))
+    res.status match
+      case 200    => decodeBody[SignResponse](res.body)
+      case status => Left(toError(status, res.body))
+
+  def verifyKey(id: String, req: VerifyRequest): Either[ClientError, VerifyResponse] =
+    val body    = req.asJson.noSpaces
+    val headers = baseHeaders + ("Content-Type" -> "application/json")
+    val res     = http.execute(HttpPort.Request("POST", url(s"/v1/keys/$id/verify"), headers, Some(body)))
+    res.status match
+      case 200    => decodeBody[VerifyResponse](res.body)
+      case status => Left(toError(status, res.body))
+
   // ── Helpers ────────────────────────────────────────────────────────────────
 
   private def url(path: String): String =

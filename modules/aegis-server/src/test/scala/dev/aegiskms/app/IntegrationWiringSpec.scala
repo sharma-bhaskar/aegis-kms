@@ -115,4 +115,46 @@ final class IntegrationWiringSpec extends ScalaTestWithActorTestKit with AnyWord
       after.isRight shouldBe true
       after.toOption.get.state shouldBe KeyState.Active
     }
+
+    "sign/verify round-trips end-to-end through the full stack and produces audit records" in {
+      val (svc, audit, _) = freshStack()
+
+      val created = svc.create(KeySpec.rsa2048("invoice-2026"), alice).unsafeRunSync()
+      created.isRight shouldBe true
+      val id = created.toOption.get.id
+      svc.activate(id, alice).unsafeRunSync()
+
+      val msg    = "approve invoice 0042".getBytes("UTF-8")
+      val signed = svc.sign(id, msg, SigAlgorithm.RsaPssSha256, alice).unsafeRunSync()
+      signed.isRight shouldBe true
+      val sig      = signed.toOption.get
+      val verified = svc.verify(id, msg, sig, alice).unsafeRunSync()
+      verified shouldBe Right(true)
+
+      val tampered = svc.verify(id, "different".getBytes, sig, alice).unsafeRunSync()
+      tampered shouldBe Right(false)
+
+      val records = audit.all.unsafeRunSync()
+      records.exists(r => r.operation == Operation.Sign && r.outcome.contains("Success")) shouldBe true
+      records.exists(r =>
+        r.operation == Operation.Verify && r.outcome.contains("valid=true")
+      ) shouldBe true
+      records.exists(r =>
+        r.operation == Operation.Verify && r.outcome.contains("valid=false")
+      ) shouldBe true
+    }
+
+    "sign on a PreActive key fails with IllegalOperation and is recorded as a denied audit entry" in {
+      val (svc, audit, _) = freshStack()
+
+      val created = svc.create(KeySpec.rsa2048("not-active"), alice).unsafeRunSync()
+      val id      = created.toOption.get.id
+      // Skip activate.
+      val res = svc.sign(id, "data".getBytes, SigAlgorithm.RsaPssSha256, alice).unsafeRunSync()
+      res.isLeft shouldBe true
+      res.swap.toOption.get.code shouldBe ErrorCode.IllegalOperation
+
+      val signRecord = audit.all.unsafeRunSync().find(_.operation == Operation.Sign).get
+      signRecord.outcome should startWith("Failed")
+    }
   }

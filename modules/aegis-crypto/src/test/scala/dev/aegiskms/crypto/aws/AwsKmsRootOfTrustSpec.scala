@@ -1,11 +1,11 @@
 package dev.aegiskms.crypto.aws
 
 import cats.effect.unsafe.implicits.global
-import dev.aegiskms.core.{Algorithm, ErrorCode, KeyId, KeyObjectType, KeySpec}
+import dev.aegiskms.core.{Algorithm, ErrorCode, KeyId, KeyObjectType, KeySpec, SigAlgorithm, Signature}
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatest.matchers.should.Matchers
 import software.amazon.awssdk.awscore.exception.AwsErrorDetails
-import software.amazon.awssdk.services.kms.model.{DataKeySpec, KmsException}
+import software.amazon.awssdk.services.kms.model.{DataKeySpec, KmsException, SigningAlgorithmSpec}
 
 /** Unit tests for `AwsKmsRootOfTrust` using a hand-rolled stub of `AwsKmsPort`.
   *
@@ -122,6 +122,57 @@ final class AwsKmsRootOfTrustSpec extends AnyFunSuite with Matchers:
     calledWith shouldBe Some(kekArn)
   }
 
+  test("sign delegates to the port with the mapped SigningAlgorithmSpec and wraps the bytes") {
+    val sigBytes                                                  = "STUB-SIG".getBytes
+    var seen: Option[(String, Array[Byte], SigningAlgorithmSpec)] = None
+    val port = new StubAwsKmsPort(
+      signFn = (arn, msg, alg) => {
+        seen = Some((arn, msg, alg))
+        sigBytes
+      }
+    )
+    val rot = AwsKmsRootOfTrust.withPort(port, kekArn)
+    val res = rot.sign(KeyId.generate(), "hello".getBytes, SigAlgorithm.RsaPssSha256).unsafeRunSync()
+
+    res.isRight shouldBe true
+    val sig = res.toOption.get
+    sig.algorithm shouldBe SigAlgorithm.RsaPssSha256
+    sig.bytes.toSeq shouldBe sigBytes.toSeq
+    seen.map(_._1) shouldBe Some(kekArn)
+    seen.map(_._3) shouldBe Some(SigningAlgorithmSpec.RSASSA_PSS_SHA_256)
+  }
+
+  test("verify returns Right(true|false) based on the port's boolean answer") {
+    val port = new StubAwsKmsPort(verifyFn = (_, _, _, _) => true)
+    val rot  = AwsKmsRootOfTrust.withPort(port, kekArn)
+    val sig  = Signature("any".getBytes, SigAlgorithm.EcdsaSha256)
+    val res  = rot.verify(KeyId.generate(), "msg".getBytes, sig).unsafeRunSync()
+    res shouldBe Right(true)
+
+    val portFalse = new StubAwsKmsPort(verifyFn = (_, _, _, _) => false)
+    val rotFalse  = AwsKmsRootOfTrust.withPort(portFalse, kekArn)
+    val resFalse  = rotFalse.verify(KeyId.generate(), "msg".getBytes, sig).unsafeRunSync()
+    resFalse shouldBe Right(false)
+  }
+
+  test("AWS KmsException on Sign translates to KmsError(CryptographicFailure, ...)") {
+    val port = new StubAwsKmsPort(
+      signFn = (_, _, _) =>
+        throw KmsException.builder()
+          .awsErrorDetails(
+            AwsErrorDetails.builder().errorMessage("BadKey").errorCode("InvalidKey").build()
+          )
+          .message("BadKey")
+          .build()
+    )
+    val rot = AwsKmsRootOfTrust.withPort(port, kekArn)
+    val res = rot.sign(KeyId.generate(), "msg".getBytes, SigAlgorithm.EcdsaSha256).unsafeRunSync()
+
+    res.isLeft shouldBe true
+    res.swap.toOption.get.code shouldBe ErrorCode.CryptographicFailure
+    res.swap.toOption.get.message should include("Sign")
+  }
+
   // ── Stub ────────────────────────────────────────────────────────────────────
 
   /** Minimal stub of `AwsKmsPort`. Each operation defaults to throwing so a test only has to override the
@@ -135,7 +186,11 @@ final class AwsKmsRootOfTrustSpec extends AnyFunSuite with Matchers:
       decryptFn: (String, Array[Byte]) => Array[Byte] = (_, _) =>
         throw new UnsupportedOperationException("decrypt not stubbed"),
       enableRotationFn: String => Unit = _ =>
-        throw new UnsupportedOperationException("enableRotation not stubbed")
+        throw new UnsupportedOperationException("enableRotation not stubbed"),
+      signFn: (String, Array[Byte], SigningAlgorithmSpec) => Array[Byte] = (_, _, _) =>
+        throw new UnsupportedOperationException("sign not stubbed"),
+      verifyFn: (String, Array[Byte], Array[Byte], SigningAlgorithmSpec) => Boolean = (_, _, _, _) =>
+        throw new UnsupportedOperationException("verify not stubbed")
   ) extends AwsKmsPort:
     def generateDataKey(kekArn: String, spec: DataKeySpec): AwsKmsPort.GenerateResult =
       generate(kekArn, spec)
@@ -143,3 +198,12 @@ final class AwsKmsRootOfTrustSpec extends AnyFunSuite with Matchers:
       decryptFn(kekArn, ciphertext)
     def enableRotation(kekArn: String): Unit =
       enableRotationFn(kekArn)
+    def sign(keyArn: String, message: Array[Byte], alg: SigningAlgorithmSpec): Array[Byte] =
+      signFn(keyArn, message, alg)
+    def verify(
+        keyArn: String,
+        message: Array[Byte],
+        signature: Array[Byte],
+        alg: SigningAlgorithmSpec
+    ): Boolean =
+      verifyFn(keyArn, message, signature, alg)

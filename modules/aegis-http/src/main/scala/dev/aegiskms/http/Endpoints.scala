@@ -91,5 +91,33 @@ object Endpoints:
       .out(statusCode(StatusCode.NoContent))
       .summary("Destroy a key")
 
+  /** `POST /v1/keys/{id}/sign` — sign a base64-encoded message with the named key. Key must be `Active`. */
+  val signKey: PublicEndpoint[
+    (Option[String], Option[String], String, SignRequest),
+    (StatusCode, KmsErrorDto),
+    SignResponse,
+    Any
+  ] =
+    keysBase.post
+      .in(path[String]("id") / "sign")
+      .in(jsonBody[SignRequest])
+      .out(jsonBody[SignResponse])
+      .summary("Sign a message")
+      .description("Signs the supplied (base64) message with the key. Key must be in Active state.")
+
+  /** `POST /v1/keys/{id}/verify` — verify a signature over a message. */
+  val verifyKey: PublicEndpoint[
+    (Option[String], Option[String], String, VerifyRequest),
+    (StatusCode, KmsErrorDto),
+    VerifyResponse,
+    Any
+  ] =
+    keysBase.post
+      .in(path[String]("id") / "verify")
+      .in(jsonBody[VerifyRequest])
+      .out(jsonBody[VerifyResponse])
+      .summary("Verify a signature")
+      .description("Returns `valid: true` when the signature checks out, `valid: false` otherwise.")
+
   /** All endpoint definitions. Used by the OpenAPI generator and tests. */
-  val all: List[AnyEndpoint] = List(createKey, getKey, activateKey, destroyKey)
+  val all: List[AnyEndpoint] = List(createKey, getKey, activateKey, destroyKey, signKey, verifyKey)

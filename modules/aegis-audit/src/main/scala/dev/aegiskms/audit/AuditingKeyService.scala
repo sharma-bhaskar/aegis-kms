@@ -79,6 +79,37 @@ final class AuditingKeyService(inner: KeyService[IO], sink: AuditSink[IO]) exten
       AuditRecord(now, by, Operation.Destroy, id.value, outcome, corr)
     }
 
+  def sign(
+      id: KeyId,
+      message: Array[Byte],
+      alg: SigAlgorithm,
+      by: Principal
+  ): IO[Either[KmsError, Signature]] =
+    instrument {
+      inner.sign(id, message, alg, by)
+    } { (now, corr, result) =>
+      val outcome = result match
+        case Right(_) => s"Success alg=$alg msgLen=${message.length}"
+        case Left(e)  => s"Failed code=${e.code}"
+      AuditRecord(now, by, Operation.Sign, id.value, outcome, corr)
+    }
+
+  def verify(
+      id: KeyId,
+      message: Array[Byte],
+      signature: Signature,
+      by: Principal
+  ): IO[Either[KmsError, Boolean]] =
+    instrument {
+      inner.verify(id, message, signature, by)
+    } { (now, corr, result) =>
+      val outcome = result match
+        case Right(true)  => s"Success valid=true alg=${signature.algorithm}"
+        case Right(false) => s"Success valid=false alg=${signature.algorithm}"
+        case Left(e)      => s"Failed code=${e.code}"
+      AuditRecord(now, by, Operation.Verify, id.value, outcome, corr)
+    }
+
   // ── Helpers ────────────────────────────────────────────────────────────────
 
   /** Threads a fresh correlation id and a wall-clock timestamp through the action and writes the resulting

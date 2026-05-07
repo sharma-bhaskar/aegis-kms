@@ -66,3 +66,36 @@ object JsonCodecs:
 
     given Encoder[KmsErrorDto] = deriveEncoder
     given Decoder[KmsErrorDto] = deriveDecoder
+
+  // ── Sign / verify DTOs ──────────────────────────────────────────────────────
+
+  /** Sign request body. `messageBase64` is the base64-encoded message bytes; `algorithm` is one of the
+    * `SigAlgorithm` enum values rendered as a string (e.g. `"RsaPssSha256"`).
+    */
+  final case class SignRequest(messageBase64: String, algorithm: String)
+  object SignRequest:
+    given Encoder[SignRequest] = deriveEncoder
+    given Decoder[SignRequest] = deriveDecoder
+
+  /** Sign response body. `signatureBase64` is the base64-encoded signature; `algorithm` echoes the request.
+    */
+  final case class SignResponse(signatureBase64: String, algorithm: String)
+  object SignResponse:
+    def fromCore(sig: Signature): SignResponse = SignResponse(sig.toBase64, sig.algorithm.toString)
+
+    given Encoder[SignResponse] = deriveEncoder
+    given Decoder[SignResponse] = deriveDecoder
+
+  /** Verify request body. */
+  final case class VerifyRequest(messageBase64: String, signatureBase64: String, algorithm: String)
+  object VerifyRequest:
+    given Encoder[VerifyRequest] = deriveEncoder
+    given Decoder[VerifyRequest] = deriveDecoder
+
+  /** Verify response body. `valid=true` means signature checked out; `valid=false` means it didn't (and is a
+    * 200 response, not a 4xx — the verifier ran successfully and produced a negative answer).
+    */
+  final case class VerifyResponse(valid: Boolean, algorithm: String)
+  object VerifyResponse:
+    given Encoder[VerifyResponse] = deriveEncoder
+    given Decoder[VerifyResponse] = deriveDecoder

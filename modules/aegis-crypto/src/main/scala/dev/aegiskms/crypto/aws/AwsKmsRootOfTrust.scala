@@ -1,10 +1,10 @@
 package dev.aegiskms.crypto.aws
 
 import cats.effect.IO
-import dev.aegiskms.core.{Algorithm, ErrorCode, KeyId, KeySpec, KmsError}
+import dev.aegiskms.core.{Algorithm, ErrorCode, KeyId, KeySpec, KmsError, SigAlgorithm, Signature}
 import dev.aegiskms.crypto.{RawKey, RootOfTrust, WrappedKey}
 import software.amazon.awssdk.services.kms.KmsClient
-import software.amazon.awssdk.services.kms.model.{DataKeySpec, KmsException}
+import software.amazon.awssdk.services.kms.model.{DataKeySpec, KmsException, SigningAlgorithmSpec}
 
 /** A `RootOfTrust` backed by AWS KMS, implementing the **layered-mode** key generation flow.
   *
@@ -46,7 +46,37 @@ final class AwsKmsRootOfTrust(port: AwsKmsPort, kekArn: String) extends RootOfTr
       Right(id)
     }.handleError(translate("EnableKeyRotation"))
 
+  /** Sign `message` against an AWS KMS asymmetric CMK.
+    *
+    * Note: `keyArn` here is the KMS CMK ARN, not the Aegis KeyId. In v0.1.1 we use the configured `kekArn` —
+    * v0.2.0 introduces the per-Aegis-key-to-CMK mapping (PR L2) so each managed key resolves to its own CMK.
+    */
+  def sign(id: KeyId, message: Array[Byte], alg: SigAlgorithm): IO[Either[KmsError, Signature]] =
+    IO.blocking {
+      val sigBytes = port.sign(kekArn, message, toAwsSigSpec(alg))
+      Right(Signature(sigBytes, alg))
+    }.handleError(translate("Sign"))
+
+  def verify(
+      id: KeyId,
+      message: Array[Byte],
+      signature: Signature
+  ): IO[Either[KmsError, Boolean]] =
+    IO.blocking {
+      val ok = port.verify(
+        kekArn,
+        message,
+        signature.bytes,
+        toAwsSigSpec(signature.algorithm)
+      )
+      Right(ok)
+    }.handleError(translate("Verify"))
+
   // ── Helpers ────────────────────────────────────────────────────────────────
+
+  private def toAwsSigSpec(alg: SigAlgorithm): SigningAlgorithmSpec = alg match
+    case SigAlgorithm.RsaPssSha256 => SigningAlgorithmSpec.RSASSA_PSS_SHA_256
+    case SigAlgorithm.EcdsaSha256  => SigningAlgorithmSpec.ECDSA_SHA_256
 
   private def awsDataKeySpec(spec: KeySpec): DataKeySpec =
     spec.algorithm match

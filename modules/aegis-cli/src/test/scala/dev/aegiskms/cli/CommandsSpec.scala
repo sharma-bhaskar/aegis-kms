@@ -115,3 +115,41 @@ final class CommandsSpec extends AnyFunSuite with Matchers:
     Commands.auditTail.stderr should include("PR F2.b")
     Commands.advisorScan.stderr should include("PR W4")
   }
+
+  test("keys sign prints the base64 signature and algorithm on success") {
+    val responseBody = SignResponse("c2lnLWJ5dGVz", "RsaPssSha256").asJson.noSpaces
+    val client       = clientReturning(200, responseBody)
+    val r            = Commands.keysSign(client, sampleKey.id, "hello", "RsaPssSha256")
+    r.exitCode shouldBe 0
+    r.stdout should include("signature: c2lnLWJ5dGVz")
+    r.stdout should include("algorithm: RsaPssSha256")
+  }
+
+  test("keys verify on a valid signature emits 'valid: true' with exit 0") {
+    val responseBody = VerifyResponse(true, "RsaPssSha256").asJson.noSpaces
+    val client       = clientReturning(200, responseBody)
+    val r            = Commands.keysVerify(client, sampleKey.id, "hello", "c2ln", "RsaPssSha256")
+    r.exitCode shouldBe 0
+    r.stdout should include("valid: true")
+  }
+
+  test("keys verify on an invalid signature exits 3 with 'valid: false'") {
+    val responseBody = VerifyResponse(false, "RsaPssSha256").asJson.noSpaces
+    val client       = clientReturning(200, responseBody)
+    val r            = Commands.keysVerify(client, sampleKey.id, "hello", "c2ln", "RsaPssSha256")
+    r.exitCode shouldBe 3
+    r.stderr should include("valid: false")
+  }
+
+  test("keys sign --message @file reads the bytes off disk") {
+    val tmp = Files.createTempFile("aegis-msg-", ".bin")
+    try
+      Files.write(tmp, "from-file".getBytes("UTF-8"))
+      val responseBody = SignResponse("c2ln", "RsaPssSha256").asJson.noSpaces
+      val client       = clientReturning(200, responseBody)
+      val r            = Commands.keysSign(client, sampleKey.id, s"@${tmp.toAbsolutePath}", "RsaPssSha256")
+      r.exitCode shouldBe 0
+      r.stdout should include("signature:")
+    finally
+      val _ = Files.deleteIfExists(tmp)
+  }
