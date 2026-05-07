@@ -89,12 +89,19 @@ object Cli:
       case other =>
         CommandResult.err(s"unknown keys subcommand: $other\n\n${keysHelp}")
 
-  /** Parse `aegis login --server <url> [--user <subject>]`. */
-  private def parseLogin(args: List[String]): Either[String, (String, Option[String])] =
+  /** Parse `aegis login --server <url> [--principal <subject>]`. `--user` is accepted as a deprecated alias
+    * for `--principal` so any scripts that grew up against the older help text still work.
+    *
+    * Visibility is package-private rather than `private` so [[CliSpec]] can pin the contract without routing
+    * the test through `CliConfig.save` and the user's real home directory.
+    */
+  private[cli] def parseLogin(args: List[String]): Either[String, (String, Option[String])] =
     val flags = parseFlags(args)
     flags.get("--server") match
-      case None      => Left("login: --server <url> is required")
-      case Some(url) => Right((url, flags.get("--user")))
+      case None => Left("login: --server <url> is required")
+      case Some(url) =>
+        val principal = flags.get("--principal").orElse(flags.get("--user"))
+        Right((url, principal))
 
   /** Parse `aegis keys create --alg AES-256 --name <name>` (also accepts `--alg AES --size 256`). */
   private def parseKeysCreate(args: List[String]): Either[String, (String, Int, String)] =
@@ -156,7 +163,7 @@ object Cli:
       |
       |Usage:
       |  aegis version
-      |  aegis login --server <url> [--user <subject>]
+      |  aegis login --server <url> [--principal <subject>]
       |  aegis keys create --alg AES-256 --name <name>
       |  aegis keys get <id>
       |  aegis keys activate <id>
@@ -171,7 +178,7 @@ object Cli:
       |Env:    AEGIS_SERVER, AEGIS_USER override the saved config""".stripMargin
   )
 
-  private val loginHelp: String = "Usage: aegis login --server <url> [--user <subject>]"
+  private val loginHelp: String = "Usage: aegis login --server <url> [--principal <subject>]"
   private val keysHelp: String =
     """Usage:
       |  aegis keys create --alg <ALG> --name <NAME>

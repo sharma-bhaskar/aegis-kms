@@ -174,6 +174,32 @@ final class CliSpec extends AnyFunSuite with Matchers:
     r.stderr should include("Usage:")
   }
 
+  test("login parser: '--principal alice' is the canonical form documented in the README") {
+    // Regression for the bug where the parser only read `--user` and silently saved a None
+    // principal even though the README documented `--principal`.
+    val r = Cli.parseLogin(List("--server", "http://localhost:9999", "--principal", "alice"))
+    r shouldBe Right(("http://localhost:9999", Some("alice")))
+  }
+
+  test("login parser: '--user alice' still works as a deprecated alias") {
+    // Back-compat: scripts written against the old help text continue working.
+    val r = Cli.parseLogin(List("--server", "http://localhost:9999", "--user", "alice"))
+    r shouldBe Right(("http://localhost:9999", Some("alice")))
+  }
+
+  test("login parser: '--principal' wins when both flags are supplied") {
+    val r = Cli.parseLogin(
+      List("--server", "http://localhost:9999", "--principal", "alice", "--user", "bob")
+    )
+    r shouldBe Right(("http://localhost:9999", Some("alice")))
+  }
+
+  test("login parser: missing --server is a clear error") {
+    val r = Cli.parseLogin(List("--principal", "alice"))
+    r.isLeft shouldBe true
+    r.left.toOption.get should include("--server")
+  }
+
   test("'keys sign' missing --message reports a usage error and exits 1") {
     val r = Cli.run(
       List("keys", "sign", "--id", "abc"),
