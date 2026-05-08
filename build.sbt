@@ -111,7 +111,7 @@ lazy val server = (project in file("modules/aegis-server"))
   .settings(
     commonSettings,
     name := "aegis-server",
-    libraryDependencies ++= pekkoHttp ++ Dependencies.tapir,
+    libraryDependencies ++= pekkoHttp ++ Dependencies.tapir ++ Dependencies.metrics,
     Docker / packageName := "aegis-server",
     dockerBaseImage      := "eclipse-temurin:21-jre",
     // Fork `sbt 'server/run'` into its own JVM. Without this, sbt's in-process classloader and

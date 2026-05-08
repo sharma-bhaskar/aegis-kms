@@ -15,6 +15,7 @@ object Dependencies {
     val slf4j          = "2.0.16"
     val scalatest      = "3.2.19"
     val testcontainers = "0.41.4"
+    val micrometer     = "1.13.6"
   }
 
   val core: Seq[ModuleID] = Seq(
@@ -62,6 +63,16 @@ object Dependencies {
 
   val crypto: Seq[ModuleID] = Seq(
     "software.amazon.awssdk" % "kms" % V.aws
+  )
+
+  /** Micrometer + Prometheus exposition. Server-tier only — wired into `aegis-server` by the metrics
+    * decorator + `/metrics` route. The library-safe modules (`aegis-core`, `aegis-iam`, `aegis-audit`,
+    * `aegis-persistence`, SDKs) MUST NOT pull this in: that would force any embedder to ship a metrics
+    * library they may not want.
+    */
+  val metrics: Seq[ModuleID] = Seq(
+    "io.micrometer" % "micrometer-core"                % V.micrometer,
+    "io.micrometer" % "micrometer-registry-prometheus" % V.micrometer
   )
 
   /** JJWT (Java JWT) suite for issuing and verifying JWS tokens. Used by `aegis-iam` for the JWT bearer

@@ -11,6 +11,7 @@ import dev.aegiskms.iam.{AuthorizingKeyService, JwtVerifier, PrincipalResolver}
 import dev.aegiskms.persistence.{EventJournal, PostgresEventJournal, PostgresJournalConfig}
 import org.apache.pekko.actor.typed.{ActorSystem, Scheduler}
 import org.apache.pekko.http.scaladsl.Http
+import org.apache.pekko.http.scaladsl.server.Directives.concat
 import org.apache.pekko.util.Timeout
 import org.slf4j.LoggerFactory
 
@@ -21,13 +22,15 @@ import scala.concurrent.duration.*
   * The wiring stack from outermost to innermost is:
   *   - `HttpRoutes` — extracts `Principal` from `X-Aegis-User`, parses path params
   *   - `AuditingKeyService` — writes one `AuditRecord` per call (incl. denies + errors)
+  *   - `MeteredKeyService` — records counter + latency timer + error counter per operation
   *   - `AuthorizingKeyService` — consults the [[DevPolicyEngine]] before delegating
   *   - `ActorBackedKeyService` — adapts ask-pattern → `KeyService[IO]`
   *   - `KeyOpsActor` — the single actor that owns the live state map
   *   - `EventJournal` — append-only log; replayed on boot to rebuild state
   *
   * Decorator order matters: audit OUTSIDE auth so denied calls still produce audit records. Audit OUTSIDE the
-  * actor so audit writes never block on the actor's mailbox.
+  * actor so audit writes never block on the actor's mailbox. Metrics sit between audit and auth so the
+  * per-operation error counter surfaces denies tagged `code=PermissionDenied`.
   *
   * The audit sink is composed: every record is fanned out to `StdoutAuditSink` (so `aegis-server` produces
   * the README's demo transcript on stdout) and through a `TappedAuditSink` to drive the W1 anomaly detector.
@@ -68,10 +71,15 @@ object Server:
       ActorSystem(KeyOpsActor.fromJournal(journal), "aegis-server", rootConfig)
     given Scheduler = system.scheduler
 
-    // 3. Decorate the actor-backed service with auth then audit. See the class docstring above for why this
-    //    order matters.
+    // 3. Build the meter registry up front so the application + JVM binders share one sink. Bound metrics
+    //    are exposed via the `GET /metrics` route alongside the application routes.
+    val metricsRegistry = MetricsRegistry.make()
+
+    // 4. Decorate the actor-backed service with auth, then metrics, then audit. See the class docstring
+    //    above for why this order matters.
     val actorBacked: KeyService[IO] = new ActorBackedKeyService(system)
     val authorizing: KeyService[IO] = new AuthorizingKeyService(actorBacked, new DevPolicyEngine)
+    val metered: KeyService[IO]     = new MeteredKeyService(authorizing, metricsRegistry)
 
     val resolver = buildResolver(rootConfig)
 
@@ -82,16 +90,18 @@ object Server:
         // Demo wiring: the inner sink is stdout (visible to whoever boots `aegis-server`); the tap drives
         // the W1 anomaly detector and publishes recommendations into the in-memory sink.
         sink     = TappedAuditSink(StdoutAuditSink(), detector, recSink)
-        auditing = new AuditingKeyService(authorizing, sink)
+        auditing = new AuditingKeyService(metered, sink)
         _ <- IO {
           logger.warn(
             "aegis-server starting in DEV MODE — DevPolicyEngine grants every Human full access. " +
               "Replace with OIDC + RoleBasedPolicyEngine before exposing this beyond a workstation."
           )
         }
-        _ <- IO.fromFuture(IO(Http().newServerAt(host, port).bind(HttpRoutes(auditing, resolver).routes)))
+        appRoute = concat(HttpRoutes(auditing, resolver).routes, MetricsRoutes.route(metricsRegistry))
+        _ <- IO.fromFuture(IO(Http().newServerAt(host, port).bind(appRoute)))
         _ <- IO {
           logger.info(s"aegis-server listening on http://$host:$port (try POST /v1/keys)")
+          logger.info(s"metrics: GET http://$host:$port/metrics (Prometheus exposition format)")
           logger.info("audit feed → stdout; recommendations → in-memory sink (visible via /admin in PR W1.b)")
         }
         _ <- IO.never[Unit]
