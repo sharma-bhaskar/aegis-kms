@@ -6,6 +6,23 @@ All notable changes to Aegis will be documented here. This project follows
 
 ## Unreleased
 
+### Added
+
+- **Prometheus `/metrics` endpoint (closes #10).** New `MeteredKeyService` decorator slots between
+  `AuditingKeyService` and `AuthorizingKeyService` in the boot wiring and records three series per
+  `KeyService` operation: `aegis_keys_op_total{operation}` (counter),
+  `aegis_keys_op_duration_seconds{operation, outcome}` (timer with percentile histogram so dashboards
+  can compute p50/p95/p99), and `aegis_keys_op_errors_total{operation, code}` (counter tagged by the
+  `KmsError.code`, so denies surface as `code="PermissionDenied"`). The metrics layer sits **outside**
+  auth so denies are countable; audit stays the outermost decorator so the audit row still reflects the
+  true outcome. New `MetricsRegistry.make()` builds a `PrometheusMeterRegistry` and binds the standard
+  JVM/GC/threads/classloader/processor/uptime collectors. New `MetricsRoutes.route` exposes
+  `GET /metrics` in Prometheus exposition format (`text/plain; version=0.0.4`) on the same pekko-http
+  port as the application routes — it lives in `aegis-server` rather than `aegis-http` so the Tapir
+  API module stays Micrometer-free. `Server.scala` builds the registry once at boot and stitches the
+  metrics route into the application route via `concat(...)`. Adds the `micrometer-core` +
+  `micrometer-registry-prometheus` deps (server-tier only — library modules unaffected).
+
 ### Fixed
 
 - **Server boot hung on first launch.** `aegis-server` used a Pekko user-guardian + Promise pattern
