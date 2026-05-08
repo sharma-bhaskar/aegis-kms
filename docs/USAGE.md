@@ -2,7 +2,11 @@
 
 End-to-end walkthroughs for the four audiences Aegis-KMS is built for. Pick the one that matches how you'll consume the KMS. Architecture context lives in [ARCHITECTURE.md](ARCHITECTURE.md); this document is about *using* the system.
 
-> **Status note.** Aegis-KMS is pre-alpha. Some commands and SDK methods below describe the system as designed; see [ARCHITECTURE.md §11 Status](ARCHITECTURE.md#11-status) for what's implemented today.
+> **Status note.** Aegis-KMS is pre-alpha. As of v0.1.1 the full key-lifecycle + crypto surface is real:
+> create / activate / destroy, sign / verify, encrypt / decrypt, wrap / unwrap, rotate, compromise — all
+> wired through REST and the `aegis` CLI. Sections marked 🚧 below describe v0.2.0+ design previews
+> (`aegis policy`, `aegis audit tail`, `aegis agent issue`, KMIP, MCP, backup/restore, JWK publication).
+> See [ARCHITECTURE.md §11 Status](ARCHITECTURE.md#11-status) for the canonical status table.
 
 ---
 
@@ -75,32 +79,54 @@ curl -X POST $AEGIS_URL/v1/keys/<id>/activate \
 
 ### 1.4 Use
 
-Sign:
+The seven cryptographic operations on `/v1/keys/{id}/{op}` all share the auth + error shape; only the
+request/response bodies differ. State gates: `sign` / `encrypt` / `wrap` require `Active`; `verify` /
+`decrypt` / `unwrap` are permitted on `Active` and `Deactivated` (so material produced before a rotation
+remains readable); `Compromised` and `Destroyed` refuse every op.
+
+**Sign / verify** — `RsaPssSha256` and `EcdsaSha256` ship in v0.1.1.
 
 ```bash
 curl -X POST $AEGIS_URL/v1/keys/<id>/sign \
-  -H "Authorization: Bearer $AEGIS_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"message":"<base64>","algorithm":"ECDSA-SHA256"}'
+  -H "Authorization: Bearer $AEGIS_TOKEN" -H "Content-Type: application/json" \
+  -d '{"messageBase64":"<base64>","algorithm":"RsaPssSha256"}'
+# → {"signatureBase64":"...","algorithm":"RsaPssSha256"}
+
+curl -X POST $AEGIS_URL/v1/keys/<id>/verify \
+  -H "Authorization: Bearer $AEGIS_TOKEN" -H "Content-Type: application/json" \
+  -d '{"messageBase64":"...","signatureBase64":"...","algorithm":"RsaPssSha256"}'
+# → {"valid":true,"algorithm":"RsaPssSha256"}     (200 even when valid:false)
 ```
 
-Encrypt:
+**Encrypt / decrypt** — the `context` map is bound as additional authenticated data (AAD), mirroring AWS
+KMS's `EncryptionContext`. The same context must be supplied to `decrypt`; a mismatch returns
+`CryptographicFailure`.
 
 ```bash
 curl -X POST $AEGIS_URL/v1/keys/<id>/encrypt \
-  -H "Authorization: Bearer $AEGIS_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"plaintext":"<base64>","aad":"<base64-optional>"}'
+  -H "Authorization: Bearer $AEGIS_TOKEN" -H "Content-Type: application/json" \
+  -d '{"plaintextBase64":"<base64>","context":{"dataset":"q2","tenant":"acme"}}'
+# → {"ciphertextBase64":"...","context":{...}}
+
+curl -X POST $AEGIS_URL/v1/keys/<id>/decrypt \
+  -H "Authorization: Bearer $AEGIS_TOKEN" -H "Content-Type: application/json" \
+  -d '{"ciphertextBase64":"...","context":{"dataset":"q2","tenant":"acme"}}'
+# → {"plaintextBase64":"...","context":{...}}
 ```
 
-Generate a data key (envelope encryption — see §5.1):
+**Wrap / unwrap** — KMIP-style envelope encryption of a Data Encryption Key (DEK). No AAD; see §5.1 for the
+typical pattern.
 
 ```bash
-curl -X POST $AEGIS_URL/v1/keys/<id>/generate-data-key \
-  -H "Authorization: Bearer $AEGIS_TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"keySpec":"AES_256"}'
-# returns both plaintext and ciphertext of a fresh DEK
+curl -X POST $AEGIS_URL/v1/keys/<id>/wrap \
+  -H "Authorization: Bearer $AEGIS_TOKEN" -H "Content-Type: application/json" \
+  -d '{"dekBase64":"<base64>"}'
+# → {"wrappedDekBase64":"..."}
+
+curl -X POST $AEGIS_URL/v1/keys/<id>/unwrap \
+  -H "Authorization: Bearer $AEGIS_TOKEN" -H "Content-Type: application/json" \
+  -d '{"wrappedDekBase64":"..."}'
+# → {"dekBase64":"..."}
 ```
 
 ### 1.5 SDK — Scala
@@ -149,16 +175,39 @@ byte[] signature = client.keys().sign(key.id(), payload).join();
 
 ### 1.7 Rotation
 
-Rotation is a server-side concern. Once a `RotationPolicy` is set, Aegis-KMS creates a new version of the key on schedule. Old versions stay legal for `Verify` and `Decrypt` so existing ciphertexts and signatures keep working. Your application code does not change.
-
-You can also rotate manually:
+Rotation is a server-side concern. Old versions stay legal for `Verify` and `Decrypt` so existing
+ciphertexts and signatures keep working — your application code does not change. The legal source state
+is `Active` only. Manual rotation:
 
 ```bash
 curl -X POST $AEGIS_URL/v1/keys/<id>/rotate \
-  -H "Authorization: Bearer $AEGIS_TOKEN"
+  -H "Authorization: Bearer $AEGIS_TOKEN" -H "Content-Type: application/json" \
+  -d '{"policy":"Manual"}'
+# → ManagedKey with currentVersion bumped by one
 ```
 
-### 1.8 Decommission
+The `policy` value is recorded on the rotation event and audit row. Accepted shapes: `"Manual"`,
+`"TimeBased:7days"`, `"OpCountBased:10000"`. The auto-scheduler driven by the `TimeBased` /
+`OpCountBased` variants lands in v0.2.0 — explicit calls today should pass `"Manual"`.
+
+### 1.8 Compromise (operator override)
+
+A discovered key compromise needs to be locked down faster than the normal deactivate flow. `compromise`
+is a one-way transition that refuses every cryptographic operation thereafter — `sign`, `verify`,
+`encrypt`, `decrypt`, `wrap`, and `unwrap` all return `IllegalOperation`. Legal from `PreActive`,
+`Active`, or `Deactivated`; `Destroyed` is refused.
+
+```bash
+curl -X POST $AEGIS_URL/v1/keys/<id>/compromise \
+  -H "Authorization: Bearer $AEGIS_TOKEN" -H "Content-Type: application/json" \
+  -d '{"reason":"discovered in S3 audit leak 2026-05-08"}'
+# → ManagedKey with state=Compromised
+```
+
+The `reason` is mandatory and non-empty (a blank justification is rejected with `400 InvalidField`); it
+ends up on the audit row at `severity=Critical` so SIEM ingestion can route on it.
+
+### 1.9 Decommission
 
 ```bash
 # stop accepting new ops (verify/decrypt still work)
@@ -198,17 +247,37 @@ client_id = "aegis-cli-dev"
 
 ### 2.2 Key lifecycle
 
+The verbs that ship today (v0.1.1) — note `aegis keys` is plural:
+
 ```bash
-aegis key create invoice-signing --spec ec-p256 --usage sign,verify --rotate-every 90d
-aegis key activate <id>
-aegis key list --state Active
-aegis key get <id>                    # full detail incl. version history
-aegis key rotate <id>
-aegis key deactivate <id>
-aegis key destroy <id>
+aegis keys create --alg AES-256 --name invoice-signing
+aegis keys get <id>
+aegis keys activate <id>
+aegis keys rotate --id <id>                                 # bumps currentVersion
+aegis keys rotate --id <id> --policy TimeBased:7days        # records the policy
+aegis keys compromise --id <id> --reason "leaked in S3"     # lockdown override
+aegis keys destroy <id>
 ```
 
-### 2.3 Policy
+### 2.3 Crypto operations
+
+```bash
+aegis keys sign     --id <id> --message "hello"   [--alg RsaPssSha256]
+aegis keys sign     --id <id> --message @file.bin                       # @-prefix reads from disk
+aegis keys verify   --id <id> --message "hello" --signature <b64>  [--alg RsaPssSha256]
+aegis keys encrypt  --id <id> --plaintext "secret"  [--context dataset=q2,tenant=acme]
+aegis keys decrypt  --id <id> --ciphertext <b64>    [--context dataset=q2,tenant=acme]
+aegis keys wrap     --id <id> --dek @raw-dek.bin
+aegis keys unwrap   --id <id> --wrapped <b64>
+```
+
+Exit codes follow `kubectl` conventions: `0` success, `3` `valid:false` from `verify`, `4`
+`ItemNotFound`, `5` `PermissionDenied`, `1` everything else.
+
+### 2.4 Policy 🚧
+
+> **Design preview.** The `aegis policy` verbs are planned for v0.2.0. Today policy is configured at boot
+> via the IAM allowlist — see `RoleBasedPolicyEngine` and the role mapping in `aegis-server`.
 
 ```bash
 aegis policy show <role>
@@ -216,7 +285,10 @@ aegis policy attach <role> --key <id> --ops sign,verify
 aegis policy detach <role> --key <id>
 ```
 
-### 2.4 Audit
+### 2.5 Audit 🚧
+
+> **Design preview.** `aegis audit tail` and the query API land in v0.2.0 (PR F2.b). Until then the audit
+> feed is whatever the configured `AuditSink` writes — stdout in v0.1.1.
 
 ```bash
 aegis audit --actor alice@org --since 24h
@@ -226,7 +298,10 @@ aegis audit --agent <agent-sub> --include-parent       # all of an agent's actio
 aegis audit --outcome Denied --since 24h               # who tried what they shouldn't have
 ```
 
-### 2.5 Agent credentials
+### 2.6 Agent credentials 🚧
+
+> **Design preview.** `aegis agent issue` lands in v0.2.0 (PR A1) when the issuance HTTP endpoint exists.
+> v0.1.1 ships the `JwtIssuer` plumbing but not the operator surface.
 
 ```bash
 aegis agent issue \
@@ -238,7 +313,7 @@ aegis agent issue \
 
 Issued JWTs are minted by the IAM module, signed with a dedicated agent-signing key (separate from any managed key), and tied to `alice@org` as parent. Revocation is immediate via `aegis agent revoke <jti>`.
 
-### 2.6 Backup and disaster recovery
+### 2.7 Backup and disaster recovery 🚧
 
 ```bash
 aegis backup create --output kms-backup-$(date +%F).enc      # wraps DB + audit log
@@ -316,7 +391,10 @@ The MCP server publishes a curated tool set. Each tool is annotated with the per
 | `verify`    | Crypto op + audit | `key:<id>:verify` |
 | `encrypt`   | Crypto op + audit | `key:<id>:encrypt` |
 | `decrypt`   | Crypto op + audit | `key:<id>:decrypt` |
+| `wrap`      | Crypto op + audit | `key:<id>:wrap` |
+| `unwrap`    | Crypto op + audit | `key:<id>:unwrap` |
 | `rotate`    | State change + audit | `key:<id>:rotate` (typically operator-only) |
+| `compromise` | State change + Critical-severity audit | `key:<id>:compromise` (operator-only — agents should never have this) |
 | `audit_query` | Read audit log | `audit:read` (often denied to agents) |
 
 Calls outside the agent's scope return a hard `403 AccessDenied`. The LLM sees a structured error; the audit log records `outcome=Denied`.
@@ -404,23 +482,30 @@ aegis kmip stats                                 # request rate, version negotia
 
 ### 5.1 Envelope encryption
 
-Encrypt large data with a per-message DEK; encrypt the DEK with a long-lived KEK in Aegis-KMS. Cheap to rotate KEKs; cheap to encrypt large payloads.
+Encrypt large data with a per-message DEK; wrap the DEK under a long-lived KEK in Aegis-KMS. Cheap to
+rotate KEKs; cheap to encrypt large payloads. The `wrap` / `unwrap` operations shipped in v0.1.1 are the
+primitive — generate the DEK on the client side (any CSPRNG), use it inline for the bulk encryption, then
+`wrap` it for storage. (A server-side `generateDataKey` that returns plaintext + wrapped form together is
+a v0.2.0 follow-up — until then, generating the DEK locally is one extra call.)
 
 ```scala
 for
-  // ask Aegis for a fresh DEK, returns plaintext + ciphertext form
-  dek      <- client.keys.generateDataKey(kekId, KeySpec.aes256)
-  cipher   =  AesGcm.encrypt(dek.plaintext, payload)
-  // store cipher + dek.ciphertext side by side; throw away dek.plaintext
-  _        <- IO(zero(dek.plaintext))
-yield (cipher, dek.ciphertext)
+  dek      <- IO(SecureRandom.getInstanceStrong.generateSeed(32))   // fresh 256-bit DEK
+  cipher    = AesGcm.encrypt(dek, payload)
+  wrapped  <- client.keys.wrap(kekId, dek)                          // KEK protects the DEK
+  _         = java.util.Arrays.fill(dek, 0.toByte)                  // wipe plaintext DEK
+yield (cipher, wrapped)
 
 // later, to read:
 for
-  plain    <- client.keys.decrypt(kekId, dek.ciphertext)   // unwrap DEK
-  payload  =  AesGcm.decrypt(plain, cipher)
+  dek      <- client.keys.unwrap(kekId, wrapped)
+  payload   = AesGcm.decrypt(dek, cipher)
+  _         = java.util.Arrays.fill(dek, 0.toByte)
 yield payload
 ```
+
+If your data is small (≤4 KB on the AWS-backed deployment), skip the envelope and use `encrypt` /
+`decrypt` directly with an `EncryptionContext`-bound AAD — see §1.4.
 
 ### 5.2 JWT signing with HS*/RS*/EdDSA keys
 
@@ -480,6 +565,8 @@ The wrapping key pair is generated inside the Root of Trust; only the public hal
 | KMIP client sees `Permission Denied` on `Encrypt` | Cert's `role` claim doesn't allow this operation | `aegis cert get <fingerprint>`; reissue with the right role |
 | MCP agent gets `Tool denied` | Scope on the agent JWT doesn't include the requested op | `aegis agent inspect <jti>`; reissue with broader scope or narrower task |
 | `KeyState: Deactivated` rejecting `sign` | Key is verify-only after a rotation or manual deactivate | Use the new active version, or reactivate (if policy allows) |
+| `IllegalOperation: Key is Compromised` on **any** crypto op | Operator ran `aegis keys compromise --id <id>` | One-way state. Check the audit row at `severity=Critical` for the reason; rotate the upstream consumers off this key. |
+| `CryptographicFailure: encryption-context mismatch` on `decrypt` | Different `context` map than the one used at `encrypt` time | The map values must match exactly; this is AAD, not advisory metadata. |
 | `aegis backup restore` fails with `RootOfTrustMismatch` | Target deployment's RoT differs from backup's | Configure the target with the same RoT, or use a recovery KEK pre-shared at backup time |
 | Audit log missing recent entries | Audit sink unavailable; events queued as `PendingAuditDelivery` | Check `aegis audit health`; the sweeper will deliver once the sink is reachable |
 
