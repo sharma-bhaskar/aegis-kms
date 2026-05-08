@@ -59,6 +59,22 @@ final class AuthorizingKeyService(
   ): IO[Either[KmsError, Boolean]] =
     guard(by, Operation.Verify, id.value)(inner.verify(id, message, signature, by))
 
+  def encrypt(
+      id: KeyId,
+      plaintext: Array[Byte],
+      context: Map[String, String],
+      by: Principal
+  ): IO[Either[KmsError, Ciphertext]] =
+    guard(by, Operation.Encrypt, id.value)(inner.encrypt(id, plaintext, context, by))
+
+  def decrypt(
+      id: KeyId,
+      ciphertext: Ciphertext,
+      context: Map[String, String],
+      by: Principal
+  ): IO[Either[KmsError, Array[Byte]]] =
+    guard(by, Operation.Decrypt, id.value)(inner.decrypt(id, ciphertext, context, by))
+
   private def guard[A](by: Principal, op: Operation, resource: String)(
       action: => IO[Either[KmsError, A]]
   ): IO[Either[KmsError, A]] =

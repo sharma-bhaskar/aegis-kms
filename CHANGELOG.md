@@ -41,6 +41,27 @@ All notable changes to Aegis will be documented here. This project follows
 - **`ReadmeQuickstartSpec` in `aegis-core`.** Compiles + runs the embedded-library example from
   `README.md` so that snippet can never silently bitrot. If you change the README's
   "Quickstart — embedding as a library" Scala block, mirror the change in this test.
+- **Encrypt / decrypt across the whole stack (closes #6).** New
+  `encrypt(id, plaintext, context, by)` and `decrypt(id, ciphertext, context, by)` methods on
+  `KeyService[F[_]]`, with `Operation.Encrypt` / `Operation.Decrypt` added to the IAM allowlist
+  enum and a new `Ciphertext` value type. Encryption context (the `Map[String, String]` AAD) is
+  carried as a separate parameter — not embedded in the ciphertext — so the same context must be
+  supplied to both sides, mirroring AWS KMS semantics. A context mismatch on decrypt returns
+  `KmsError(CryptographicFailure, ...)`. The `RootOfTrust` SPI gained the same operations;
+  `AwsKmsRootOfTrust` implements them via the AWS KMS `Encrypt` / `Decrypt` APIs with
+  `EncryptionContext` plumbed through `AwsKmsPort`. On the wire: `POST /v1/keys/{id}/encrypt`
+  (request: `{plaintextBase64, context}`, response: `{ciphertextBase64, context}`) and
+  `POST /v1/keys/{id}/decrypt` (request: `{ciphertextBase64, context}`, response:
+  `{plaintextBase64, context}`). The CLI gained `aegis keys encrypt --id <id> --plaintext
+  <text|@file> [--context k=v,k2=v2]` and `aegis keys decrypt --id <id> --ciphertext <b64>
+  [--context k=v,k2=v2]`. The in-memory `KeyService` uses a deterministic HMAC-keyed
+  XOR-keystream layout (`HMAC(id, ctx) || pt XOR keystream(id, ctx)`) so the dev REST surface
+  has a working round-trip without a real KMS. Encrypt requires the key to be in
+  `KeyState.Active`; decrypt is permitted on `Active` and `Deactivated` keys (so existing
+  ciphertexts remain readable after a future rotation lands), but refused on `Compromised` /
+  `Destroyed`. The `AuditingKeyService` decorator records the **context keys (not values)** and
+  the plaintext length on success, so audit logs surface what was protected without leaking the
+  AAD's payload.
 
 ### Documentation
 

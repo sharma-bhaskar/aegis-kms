@@ -5,12 +5,15 @@ import software.amazon.awssdk.services.kms.model.{
   DataKeySpec,
   DecryptRequest,
   EnableKeyRotationRequest,
+  EncryptRequest,
   GenerateDataKeyRequest,
   MessageType,
   SignRequest,
   SigningAlgorithmSpec,
   VerifyRequest
 }
+
+import scala.jdk.CollectionConverters.*
 
 /** A minimal seam over `software.amazon.awssdk.services.kms.KmsClient` covering only the operations the Aegis
   * RoT calls. Two reasons it exists:
@@ -31,6 +34,12 @@ trait AwsKmsPort:
       signature: Array[Byte],
       alg: SigningAlgorithmSpec
   ): Boolean
+  def encrypt(keyArn: String, plaintext: Array[Byte], context: Map[String, String]): Array[Byte]
+  def decryptWithContext(
+      keyArn: String,
+      ciphertext: Array[Byte],
+      context: Map[String, String]
+  ): Array[Byte]
 
 object AwsKmsPort:
 
@@ -96,3 +105,23 @@ object AwsKmsPort:
         res.signatureValid().booleanValue()
       catch
         case _: software.amazon.awssdk.services.kms.model.KmsInvalidSignatureException => false
+
+    def encrypt(keyArn: String, plaintext: Array[Byte], context: Map[String, String]): Array[Byte] =
+      val builder = EncryptRequest.builder()
+        .keyId(keyArn)
+        .plaintext(software.amazon.awssdk.core.SdkBytes.fromByteArray(plaintext))
+      val withCtx = if context.nonEmpty then builder.encryptionContext(context.asJava) else builder
+      val res     = client.encrypt(withCtx.build())
+      res.ciphertextBlob().asByteArray()
+
+    def decryptWithContext(
+        keyArn: String,
+        ciphertext: Array[Byte],
+        context: Map[String, String]
+    ): Array[Byte] =
+      val builder = DecryptRequest.builder()
+        .keyId(keyArn)
+        .ciphertextBlob(software.amazon.awssdk.core.SdkBytes.fromByteArray(ciphertext))
+      val withCtx = if context.nonEmpty then builder.encryptionContext(context.asJava) else builder
+      val res     = client.decrypt(withCtx.build())
+      res.plaintext().asByteArray()

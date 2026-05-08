@@ -112,3 +112,34 @@ final class AuditingKeyServiceSpec extends AnyFunSuite with Matchers:
     verifyRecords.head.outcome should include("valid=true")
     verifyRecords(1).outcome should include("valid=false")
   }
+
+  test("encrypt emits a Success record carrying the context keys (not values) and plaintext length") {
+    val (svc, sink) = fixture()
+
+    val created = svc.create(KeySpec.aes256("audit-enc"), alice).unsafeRunSync().toOption.get
+    svc.activate(created.id, alice).unsafeRunSync()
+    svc.encrypt(created.id, "hello".getBytes, Map("dataset" -> "q2", "tenant" -> "acme"), alice)
+      .unsafeRunSync()
+
+    val encRecord = sink.all.unsafeRunSync().find(_.operation == Operation.Encrypt).get
+    encRecord.outcome should startWith("Success")
+    encRecord.outcome should include("ctxKeys=dataset,tenant")
+    encRecord.outcome should include("ptLen=5")
+    // Critically, the audit must NOT leak the values — only the keys are recorded.
+    encRecord.outcome should not include "q2"
+    encRecord.outcome should not include "acme"
+  }
+
+  test("decrypt with a wrong context emits a Failed record with CryptographicFailure") {
+    val (svc, sink) = fixture()
+
+    val created = svc.create(KeySpec.aes256("audit-dec"), alice).unsafeRunSync().toOption.get
+    svc.activate(created.id, alice).unsafeRunSync()
+    val ct = svc.encrypt(created.id, "hi".getBytes, Map("a" -> "1"), alice)
+      .unsafeRunSync().toOption.get
+    svc.decrypt(created.id, ct, Map("a" -> "2"), alice).unsafeRunSync()
+
+    val decRecord = sink.all.unsafeRunSync().find(_.operation == Operation.Decrypt).get
+    decRecord.outcome should startWith("Failed")
+    decRecord.outcome should include("CryptographicFailure")
+  }

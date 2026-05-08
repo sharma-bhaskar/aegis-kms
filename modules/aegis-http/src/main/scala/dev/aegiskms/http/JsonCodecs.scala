@@ -99,3 +99,32 @@ object JsonCodecs:
   object VerifyResponse:
     given Encoder[VerifyResponse] = deriveEncoder
     given Decoder[VerifyResponse] = deriveDecoder
+
+  // ── Encrypt / decrypt DTOs ─────────────────────────────────────────────────
+
+  /** Encrypt request body. `plaintextBase64` is the base64-encoded message bytes; `context` is the optional
+    * encryption-context map (additional authenticated data). Both encrypt and decrypt must supply the same
+    * context — a mismatch on decrypt returns a 400 with `CryptographicFailure`.
+    */
+  final case class EncryptRequest(plaintextBase64: String, context: Map[String, String] = Map.empty)
+  object EncryptRequest:
+    given Encoder[EncryptRequest] = deriveEncoder
+    given Decoder[EncryptRequest] = deriveDecoder
+
+  final case class EncryptResponse(ciphertextBase64: String, context: Map[String, String])
+  object EncryptResponse:
+    def of(ct: Ciphertext, context: Map[String, String]): EncryptResponse =
+      EncryptResponse(ct.toBase64, context)
+
+    given Encoder[EncryptResponse] = deriveEncoder
+    given Decoder[EncryptResponse] = deriveDecoder
+
+  final case class DecryptRequest(ciphertextBase64: String, context: Map[String, String] = Map.empty)
+  object DecryptRequest:
+    given Encoder[DecryptRequest] = deriveEncoder
+    given Decoder[DecryptRequest] = deriveDecoder
+
+  final case class DecryptResponse(plaintextBase64: String, context: Map[String, String])
+  object DecryptResponse:
+    given Encoder[DecryptResponse] = deriveEncoder
+    given Decoder[DecryptResponse] = deriveDecoder

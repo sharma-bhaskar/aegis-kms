@@ -119,5 +119,38 @@ object Endpoints:
       .summary("Verify a signature")
       .description("Returns `valid: true` when the signature checks out, `valid: false` otherwise.")
 
+  /** `POST /v1/keys/{id}/encrypt` — encrypt a base64-encoded plaintext. Key must be `Active`. The encryption
+    * context is bound as AAD; the same context must be supplied at decrypt time.
+    */
+  val encryptKey: PublicEndpoint[
+    (Option[String], Option[String], String, EncryptRequest),
+    (StatusCode, KmsErrorDto),
+    EncryptResponse,
+    Any
+  ] =
+    keysBase.post
+      .in(path[String]("id") / "encrypt")
+      .in(jsonBody[EncryptRequest])
+      .out(jsonBody[EncryptResponse])
+      .summary("Encrypt a plaintext")
+      .description(
+        "Encrypts the supplied (base64) plaintext with the key. Encryption context is bound as AAD."
+      )
+
+  /** `POST /v1/keys/{id}/decrypt` — decrypt a ciphertext produced by /encrypt. Same context required. */
+  val decryptKey: PublicEndpoint[
+    (Option[String], Option[String], String, DecryptRequest),
+    (StatusCode, KmsErrorDto),
+    DecryptResponse,
+    Any
+  ] =
+    keysBase.post
+      .in(path[String]("id") / "decrypt")
+      .in(jsonBody[DecryptRequest])
+      .out(jsonBody[DecryptResponse])
+      .summary("Decrypt a ciphertext")
+      .description("Decrypts a ciphertext produced by `/encrypt`. The context must match or the call fails.")
+
   /** All endpoint definitions. Used by the OpenAPI generator and tests. */
-  val all: List[AnyEndpoint] = List(createKey, getKey, activateKey, destroyKey, signKey, verifyKey)
+  val all: List[AnyEndpoint] =
+    List(createKey, getKey, activateKey, destroyKey, signKey, verifyKey, encryptKey, decryptKey)

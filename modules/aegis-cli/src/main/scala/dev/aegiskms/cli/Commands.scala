@@ -2,6 +2,10 @@ package dev.aegiskms.cli
 
 import dev.aegiskms.cli.AegisHttpClient.{ClientError, renderError}
 import dev.aegiskms.cli.WireFormats.{
+  DecryptRequest,
+  DecryptResponse,
+  EncryptRequest,
+  EncryptResponse,
   KeySpecDto,
   ManagedKeyDto,
   SignRequest,
@@ -119,6 +123,47 @@ object Commands:
       try Right(Files.readAllBytes(path))
       catch case e: Exception => Left(s"could not read $path: ${e.getMessage}")
     else Right(arg.getBytes("UTF-8"))
+
+  // ── keys encrypt ───────────────────────────────────────────────────────────
+
+  /** `aegis keys encrypt --id <id> --plaintext <text|@file> [--context k=v,k2=v2]`. The plaintext can be
+    * supplied inline (UTF-8) or read from a file path prefixed with `@`. The ciphertext is printed as base64.
+    */
+  def keysEncrypt(
+      client: AegisHttpClient,
+      id: String,
+      plaintext: String,
+      context: Map[String, String]
+  ): CommandResult =
+    readMessage(plaintext) match
+      case Left(msg) => CommandResult.err(s"keys encrypt: $msg")
+      case Right(bytes) =>
+        val req = EncryptRequest(Base64.getEncoder.encodeToString(bytes), context)
+        client.encryptKey(id, req) match
+          case Right(EncryptResponse(ctB64, ctx)) =>
+            val ctxLine = if ctx.isEmpty then "" else s"\ncontext: ${formatContext(ctx)}"
+            CommandResult.out(s"ciphertext: $ctB64$ctxLine")
+          case Left(err) => CommandResult.err(renderError(err), exitCodeFor(err))
+
+  // ── keys decrypt ───────────────────────────────────────────────────────────
+
+  /** `aegis keys decrypt --id <id> --ciphertext <base64> [--context k=v,k2=v2]`. The plaintext is printed as
+    * base64 (it may not be valid UTF-8) plus a best-effort UTF-8 rendering when it decodes cleanly.
+    */
+  def keysDecrypt(
+      client: AegisHttpClient,
+      id: String,
+      ciphertextB64: String,
+      context: Map[String, String]
+  ): CommandResult =
+    val req = DecryptRequest(ciphertextB64, context)
+    client.decryptKey(id, req) match
+      case Right(DecryptResponse(ptB64, _)) =>
+        CommandResult.out(s"plaintext: $ptB64")
+      case Left(err) => CommandResult.err(renderError(err), exitCodeFor(err))
+
+  private def formatContext(ctx: Map[String, String]): String =
+    ctx.toSeq.sortBy(_._1).map((k, v) => s"$k=$v").mkString(",")
 
   // ── placeholders for agent-native commands (backends arrive in later PRs) ──
 

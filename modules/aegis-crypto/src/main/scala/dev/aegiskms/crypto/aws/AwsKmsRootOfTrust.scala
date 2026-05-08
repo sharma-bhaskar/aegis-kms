@@ -1,7 +1,7 @@
 package dev.aegiskms.crypto.aws
 
 import cats.effect.IO
-import dev.aegiskms.core.{Algorithm, ErrorCode, KeyId, KeySpec, KmsError, SigAlgorithm, Signature}
+import dev.aegiskms.core.{Algorithm, Ciphertext, ErrorCode, KeyId, KeySpec, KmsError, SigAlgorithm, Signature}
 import dev.aegiskms.crypto.{RawKey, RootOfTrust, WrappedKey}
 import software.amazon.awssdk.services.kms.KmsClient
 import software.amazon.awssdk.services.kms.model.{DataKeySpec, KmsException, SigningAlgorithmSpec}
@@ -71,6 +71,27 @@ final class AwsKmsRootOfTrust(port: AwsKmsPort, kekArn: String) extends RootOfTr
       )
       Right(ok)
     }.handleError(translate("Verify"))
+
+  /** Encrypt under the configured AWS KMS CMK with `EncryptionContext` bound as AAD. v0.1.1 uses the global
+    * `kekArn`; v0.2.0's per-Aegis-key-to-CMK mapping (PR L2) will resolve the ARN per `KeyId`.
+    */
+  def encrypt(
+      id: KeyId,
+      plaintext: Array[Byte],
+      context: Map[String, String]
+  ): IO[Either[KmsError, Ciphertext]] =
+    IO.blocking {
+      Right(Ciphertext(port.encrypt(kekArn, plaintext, context)))
+    }.handleError(translate("Encrypt"))
+
+  def decrypt(
+      id: KeyId,
+      ciphertext: Ciphertext,
+      context: Map[String, String]
+  ): IO[Either[KmsError, Array[Byte]]] =
+    IO.blocking {
+      Right(port.decryptWithContext(kekArn, ciphertext.bytes, context))
+    }.handleError(translate("Decrypt"))
 
   // ── Helpers ────────────────────────────────────────────────────────────────
 

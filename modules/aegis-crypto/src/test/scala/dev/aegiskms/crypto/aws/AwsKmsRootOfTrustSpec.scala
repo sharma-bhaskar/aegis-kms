@@ -1,7 +1,16 @@
 package dev.aegiskms.crypto.aws
 
 import cats.effect.unsafe.implicits.global
-import dev.aegiskms.core.{Algorithm, ErrorCode, KeyId, KeyObjectType, KeySpec, SigAlgorithm, Signature}
+import dev.aegiskms.core.{
+  Algorithm,
+  Ciphertext,
+  ErrorCode,
+  KeyId,
+  KeyObjectType,
+  KeySpec,
+  SigAlgorithm,
+  Signature
+}
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatest.matchers.should.Matchers
 import software.amazon.awssdk.awscore.exception.AwsErrorDetails
@@ -155,6 +164,60 @@ final class AwsKmsRootOfTrustSpec extends AnyFunSuite with Matchers:
     resFalse shouldBe Right(false)
   }
 
+  test("encrypt delegates to the port with the supplied context and wraps the bytes") {
+    var seenContext: Map[String, String] = Map.empty
+    val port = new StubAwsKmsPort(
+      encryptFn = (arn, pt, ctx) => {
+        arn shouldBe kekArn
+        seenContext = ctx
+        pt ++ Array[Byte](0xff.toByte)
+      }
+    )
+    val rot = AwsKmsRootOfTrust.withPort(port, kekArn)
+    val res = rot.encrypt(KeyId.generate(), "hi".getBytes, Map("a" -> "1")).unsafeRunSync()
+
+    res.isRight shouldBe true
+    res.toOption.get.bytes.last shouldBe 0xff.toByte
+    seenContext shouldBe Map("a" -> "1")
+  }
+
+  test("decrypt delegates to the port with the supplied context") {
+    var seenContext: Map[String, String] = Map.empty
+    val port = new StubAwsKmsPort(
+      decryptCtxFn = (arn, ct, ctx) => {
+        arn shouldBe kekArn
+        seenContext = ctx
+        "hi".getBytes
+      }
+    )
+    val rot = AwsKmsRootOfTrust.withPort(port, kekArn)
+    val res = rot
+      .decrypt(KeyId.generate(), Ciphertext("anything".getBytes), Map("a" -> "1"))
+      .unsafeRunSync()
+
+    res.isRight shouldBe true
+    new String(res.toOption.get, "UTF-8") shouldBe "hi"
+    seenContext shouldBe Map("a" -> "1")
+  }
+
+  test("AWS KmsException on Encrypt translates to KmsError(CryptographicFailure, ...)") {
+    val port = new StubAwsKmsPort(
+      encryptFn = (_, _, _) =>
+        throw KmsException.builder()
+          .awsErrorDetails(
+            AwsErrorDetails.builder().errorMessage("Disabled").errorCode("KeyDisabled").build()
+          )
+          .message("Disabled")
+          .build()
+    )
+    val rot = AwsKmsRootOfTrust.withPort(port, kekArn)
+    val res = rot.encrypt(KeyId.generate(), "x".getBytes, Map.empty).unsafeRunSync()
+
+    res.isLeft shouldBe true
+    res.swap.toOption.get.code shouldBe ErrorCode.CryptographicFailure
+    res.swap.toOption.get.message should include("Encrypt")
+  }
+
   test("AWS KmsException on Sign translates to KmsError(CryptographicFailure, ...)") {
     val port = new StubAwsKmsPort(
       signFn = (_, _, _) =>
@@ -190,7 +253,11 @@ final class AwsKmsRootOfTrustSpec extends AnyFunSuite with Matchers:
       signFn: (String, Array[Byte], SigningAlgorithmSpec) => Array[Byte] = (_, _, _) =>
         throw new UnsupportedOperationException("sign not stubbed"),
       verifyFn: (String, Array[Byte], Array[Byte], SigningAlgorithmSpec) => Boolean = (_, _, _, _) =>
-        throw new UnsupportedOperationException("verify not stubbed")
+        throw new UnsupportedOperationException("verify not stubbed"),
+      encryptFn: (String, Array[Byte], Map[String, String]) => Array[Byte] = (_, _, _) =>
+        throw new UnsupportedOperationException("encrypt not stubbed"),
+      decryptCtxFn: (String, Array[Byte], Map[String, String]) => Array[Byte] = (_, _, _) =>
+        throw new UnsupportedOperationException("decryptWithContext not stubbed")
   ) extends AwsKmsPort:
     def generateDataKey(kekArn: String, spec: DataKeySpec): AwsKmsPort.GenerateResult =
       generate(kekArn, spec)
@@ -207,3 +274,11 @@ final class AwsKmsRootOfTrustSpec extends AnyFunSuite with Matchers:
         alg: SigningAlgorithmSpec
     ): Boolean =
       verifyFn(keyArn, message, signature, alg)
+    def encrypt(keyArn: String, plaintext: Array[Byte], context: Map[String, String]): Array[Byte] =
+      encryptFn(keyArn, plaintext, context)
+    def decryptWithContext(
+        keyArn: String,
+        ciphertext: Array[Byte],
+        context: Map[String, String]
+    ): Array[Byte] =
+      decryptCtxFn(keyArn, ciphertext, context)

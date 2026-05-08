@@ -92,3 +92,37 @@ final class AuthorizingKeyServiceSpec extends AnyFunSuite with Matchers:
     val res = svc.sign(id, "msg".getBytes, SigAlgorithm.RsaPssSha256, agent).unsafeRunSync()
     res.isRight shouldBe true
   }
+
+  test("encrypt is denied when the agent's allowedOps doesn't include Encrypt") {
+    val engine = RoleBasedPolicyEngine.adminsOnly("admins")
+    val svc    = fixture(engine)
+    val agent = Principal.Agent(
+      subject = "claude-session-7a3",
+      operator = alice,
+      purpose = "verify-only",
+      issuedAt = Instant.now(),
+      ttl = 1.hour,
+      allowedOps = Set(Operation.Get), // no Encrypt
+      parent = None
+    )
+    val res = svc.encrypt(KeyId.generate(), "x".getBytes, Map.empty, agent).unsafeRunSync()
+    res.isLeft shouldBe true
+    res.swap.toOption.get.code shouldBe ErrorCode.PermissionDenied
+  }
+
+  test("encrypt + decrypt pass through when the principal has the role and the ops") {
+    val engine = RoleBasedPolicyEngine.adminsOnly("admins")
+    val svc    = fixture(engine)
+
+    val created = svc.create(KeySpec.aes256("enc-key"), alice).unsafeRunSync()
+    created.isRight shouldBe true
+    val id = created.toOption.get.id
+    svc.activate(id, alice).unsafeRunSync()
+
+    val ct = svc.encrypt(id, "secret".getBytes, Map("a" -> "1"), alice).unsafeRunSync()
+    ct.isRight shouldBe true
+
+    val pt = svc.decrypt(id, ct.toOption.get, Map("a" -> "1"), alice).unsafeRunSync()
+    pt.isRight shouldBe true
+    new String(pt.toOption.get, "UTF-8") shouldBe "secret"
+  }

@@ -110,6 +110,37 @@ final class AuditingKeyService(inner: KeyService[IO], sink: AuditSink[IO]) exten
       AuditRecord(now, by, Operation.Verify, id.value, outcome, corr)
     }
 
+  def encrypt(
+      id: KeyId,
+      plaintext: Array[Byte],
+      context: Map[String, String],
+      by: Principal
+  ): IO[Either[KmsError, Ciphertext]] =
+    instrument {
+      inner.encrypt(id, plaintext, context, by)
+    } { (now, corr, result) =>
+      val outcome = result match
+        case Right(_) =>
+          s"Success ctxKeys=${context.keys.toSeq.sorted.mkString(",")} ptLen=${plaintext.length}"
+        case Left(e) => s"Failed code=${e.code}"
+      AuditRecord(now, by, Operation.Encrypt, id.value, outcome, corr)
+    }
+
+  def decrypt(
+      id: KeyId,
+      ciphertext: Ciphertext,
+      context: Map[String, String],
+      by: Principal
+  ): IO[Either[KmsError, Array[Byte]]] =
+    instrument {
+      inner.decrypt(id, ciphertext, context, by)
+    } { (now, corr, result) =>
+      val outcome = result match
+        case Right(pt) => s"Success ctxKeys=${context.keys.toSeq.sorted.mkString(",")} ptLen=${pt.length}"
+        case Left(e)   => s"Failed code=${e.code}"
+      AuditRecord(now, by, Operation.Decrypt, id.value, outcome, corr)
+    }
+
   // ── Helpers ────────────────────────────────────────────────────────────────
 
   /** Threads a fresh correlation id and a wall-clock timestamp through the action and writes the resulting

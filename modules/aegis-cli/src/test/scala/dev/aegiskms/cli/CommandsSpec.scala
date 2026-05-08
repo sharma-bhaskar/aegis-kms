@@ -153,3 +153,35 @@ final class CommandsSpec extends AnyFunSuite with Matchers:
     finally
       val _ = Files.deleteIfExists(tmp)
   }
+
+  test("keys encrypt prints the base64 ciphertext and the context that was supplied") {
+    val responseBody =
+      EncryptResponse("Y2lwaGVy", Map("dataset" -> "q2", "tenant" -> "acme")).asJson.noSpaces
+    val client = clientReturning(200, responseBody)
+    val r = Commands.keysEncrypt(
+      client,
+      sampleKey.id,
+      "hello",
+      Map("dataset" -> "q2", "tenant" -> "acme")
+    )
+    r.exitCode shouldBe 0
+    r.stdout should include("ciphertext: Y2lwaGVy")
+    r.stdout should include("context: dataset=q2,tenant=acme")
+  }
+
+  test("keys decrypt on success prints the plaintext as base64") {
+    val ptB64        = java.util.Base64.getEncoder.encodeToString("hello".getBytes("UTF-8"))
+    val responseBody = DecryptResponse(ptB64, Map.empty).asJson.noSpaces
+    val client       = clientReturning(200, responseBody)
+    val r            = Commands.keysDecrypt(client, sampleKey.id, "Y2lwaGVy", Map.empty)
+    r.exitCode shouldBe 0
+    r.stdout should include(s"plaintext: $ptB64")
+  }
+
+  test("keys decrypt on a CryptographicFailure exits 1 with the server's reason") {
+    val errBody = """{"code":"CryptographicFailure","message":"context mismatch"}"""
+    val client  = clientReturning(500, errBody)
+    val r       = Commands.keysDecrypt(client, sampleKey.id, "Y2lwaGVy", Map("a" -> "wrong"))
+    r.exitCode shouldBe 1
+    r.stderr should include("CryptographicFailure")
+  }

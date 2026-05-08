@@ -53,3 +53,23 @@ object WireFormats:
   object VerifyResponse:
     given Encoder[VerifyResponse] = deriveEncoder
     given Decoder[VerifyResponse] = deriveDecoder
+
+  final case class EncryptRequest(plaintextBase64: String, context: Map[String, String] = Map.empty)
+  object EncryptRequest:
+    given Encoder[EncryptRequest] = deriveEncoder
+    given Decoder[EncryptRequest] = deriveDecoder
+
+  final case class EncryptResponse(ciphertextBase64: String, context: Map[String, String])
+  object EncryptResponse:
+    given Encoder[EncryptResponse] = deriveEncoder
+    given Decoder[EncryptResponse] = deriveDecoder
+
+  final case class DecryptRequest(ciphertextBase64: String, context: Map[String, String] = Map.empty)
+  object DecryptRequest:
+    given Encoder[DecryptRequest] = deriveEncoder
+    given Decoder[DecryptRequest] = deriveDecoder
+
+  final case class DecryptResponse(plaintextBase64: String, context: Map[String, String])
+  object DecryptResponse:
+    given Encoder[DecryptResponse] = deriveEncoder
+    given Decoder[DecryptResponse] = deriveDecoder

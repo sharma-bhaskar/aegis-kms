@@ -129,6 +129,39 @@ final class AegisHttpClientSpec extends AnyFunSuite with Matchers:
     )
   }
 
+  test("encryptKey POSTs to /v1/keys/{id}/encrypt with the context map and Content-Type") {
+    var seen: Option[HttpPort.Request] = None
+    val port = new RecordingPort(req => {
+      seen = Some(req)
+      HttpPort.Response(200, EncryptResponse("Y2lwaGVy", Map("dataset" -> "q2")).asJson.noSpaces)
+    })
+    val client = new AegisHttpClient(port, baseUrl, principal)
+    val res    = client.encryptKey(sampleKey.id, EncryptRequest("aGVsbG8=", Map("dataset" -> "q2")))
+
+    res shouldBe Right(EncryptResponse("Y2lwaGVy", Map("dataset" -> "q2")))
+    seen.get.method shouldBe "POST"
+    seen.get.url shouldBe s"$baseUrl/v1/keys/${sampleKey.id}/encrypt"
+    seen.get.headers.get("Content-Type") shouldBe Some("application/json")
+    seen.get.body.get should include("\"dataset\":\"q2\"")
+  }
+
+  test("decryptKey POSTs to /v1/keys/{id}/decrypt and decodes the plaintext") {
+    val port =
+      new RecordingPort(_ => HttpPort.Response(200, DecryptResponse("aGVsbG8=", Map.empty).asJson.noSpaces))
+    val client = new AegisHttpClient(port, baseUrl, principal)
+    client.decryptKey(sampleKey.id, DecryptRequest("Y2lwaGVy", Map.empty)) shouldBe Right(
+      DecryptResponse("aGVsbG8=", Map.empty)
+    )
+  }
+
+  test("encryptKey decodes a server-side CryptographicFailure into ClientError.Server") {
+    val errBody = """{"code":"CryptographicFailure","message":"context mismatch"}"""
+    val port    = new RecordingPort(_ => HttpPort.Response(500, errBody))
+    val client  = new AegisHttpClient(port, baseUrl, principal)
+    val res     = client.encryptKey(sampleKey.id, EncryptRequest("aGVsbG8=", Map.empty))
+    res shouldBe Left(ClientError.Server(500, "CryptographicFailure", "context mismatch"))
+  }
+
   // ── Stub ────────────────────────────────────────────────────────────────────
 
   final private class RecordingPort(handler: HttpPort.Request => HttpPort.Response) extends HttpPort:

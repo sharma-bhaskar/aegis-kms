@@ -46,6 +46,28 @@ trait KeyService[F[_]]:
       by: Principal
   ): F[Either[KmsError, Boolean]]
 
+  /** Encrypt `plaintext` under the key identified by `id`. The key must be in `KeyState.Active`. The supplied
+    * `context` is bound into the ciphertext as additional authenticated data (AAD); the same context must be
+    * supplied to `decrypt` or the operation fails. Mirrors AWS KMS `Encrypt` with `EncryptionContext`.
+    */
+  def encrypt(
+      id: KeyId,
+      plaintext: Array[Byte],
+      context: Map[String, String],
+      by: Principal
+  ): F[Either[KmsError, Ciphertext]]
+
+  /** Decrypt `ciphertext` produced by [[encrypt]] under the same key and context. A context mismatch returns
+    * `Left(KmsError(CryptographicFailure, ...))`. Decrypt is permitted on `Active` and `Deactivated` keys so
+    * existing ciphertexts can still be read after rotation; `Compromised` and `Destroyed` are refused.
+    */
+  def decrypt(
+      id: KeyId,
+      ciphertext: Ciphertext,
+      context: Map[String, String],
+      by: Principal
+  ): F[Either[KmsError, Array[Byte]]]
+
 object KeyService:
 
   /** An in-memory reference implementation. Not durable, not safe for production — useful for tests, smoke
@@ -113,6 +135,38 @@ object KeyService:
                 Right(java.util.Arrays.equals(expected, signature.bytes))
           }
 
+        def encrypt(
+            id: KeyId,
+            plaintext: Array[Byte],
+            context: Map[String, String],
+            by: Principal
+        ): IO[Either[KmsError, Ciphertext]] =
+          ref.get.map { m =>
+            m.get(id) match
+              case None =>
+                Left(KmsError(ErrorCode.ItemNotFound, s"No key with id ${id.value}"))
+              case Some(k) if k.state != KeyState.Active =>
+                Left(KmsError(ErrorCode.IllegalOperation, s"Key ${id.value} is ${k.state}, must be Active"))
+              case Some(_) =>
+                Right(Ciphertext(deterministicSeal(id, context, plaintext)))
+          }
+
+        def decrypt(
+            id: KeyId,
+            ciphertext: Ciphertext,
+            context: Map[String, String],
+            by: Principal
+        ): IO[Either[KmsError, Array[Byte]]] =
+          ref.get.map { m =>
+            m.get(id) match
+              case None =>
+                Left(KmsError(ErrorCode.ItemNotFound, s"No key with id ${id.value}"))
+              case Some(k) if k.state == KeyState.Compromised || k.state == KeyState.Destroyed =>
+                Left(KmsError(ErrorCode.IllegalOperation, s"Key ${id.value} is ${k.state}"))
+              case Some(_) =>
+                deterministicOpen(id, context, ciphertext.bytes)
+          }
+
         private def transition(id: KeyId, to: KeyState): IO[Either[KmsError, ManagedKey]] =
           ref.modify { m =>
             m.get(id) match
@@ -132,3 +186,57 @@ object KeyService:
     val mac = javax.crypto.Mac.getInstance("HmacSHA256")
     mac.init(new javax.crypto.spec.SecretKeySpec(id.value.getBytes("UTF-8"), "HmacSHA256"))
     mac.doFinal(message)
+
+  /** Deterministic in-memory "encryption" used by the dev `KeyService`. Layout: HMAC(id, ctx) || plaintext
+    * XOR keystream(id, ctx). Round-trips correctly and detects context mismatch via the HMAC prefix; not real
+    * confidentiality. Real encryption lives in `AwsKmsRootOfTrust`.
+    */
+  private def deterministicSeal(
+      id: KeyId,
+      context: Map[String, String],
+      plaintext: Array[Byte]
+  ): Array[Byte] =
+    contextTag(id, context) ++ xorKeystream(id, context, plaintext)
+
+  private def deterministicOpen(
+      id: KeyId,
+      context: Map[String, String],
+      ciphertext: Array[Byte]
+  ): Either[KmsError, Array[Byte]] =
+    if ciphertext.length < 32 then
+      Left(KmsError(ErrorCode.CryptographicFailure, "ciphertext too short"))
+    else
+      val (tag, masked) = ciphertext.splitAt(32)
+      val expected      = contextTag(id, context)
+      if !java.util.Arrays.equals(tag, expected) then
+        Left(KmsError(ErrorCode.CryptographicFailure, "encryption-context mismatch"))
+      else Right(xorKeystream(id, context, masked))
+
+  private def contextTag(id: KeyId, context: Map[String, String]): Array[Byte] =
+    val mac = javax.crypto.Mac.getInstance("HmacSHA256")
+    mac.init(new javax.crypto.spec.SecretKeySpec(id.value.getBytes("UTF-8"), "HmacSHA256"))
+    mac.doFinal(serializeContext(context))
+
+  private def xorKeystream(
+      id: KeyId,
+      context: Map[String, String],
+      data: Array[Byte]
+  ): Array[Byte] =
+    val mac     = javax.crypto.Mac.getInstance("HmacSHA256")
+    val keyBase = id.value.getBytes("UTF-8") ++ serializeContext(context)
+    mac.init(new javax.crypto.spec.SecretKeySpec(keyBase, "HmacSHA256"))
+    val out = new Array[Byte](data.length)
+    var i   = 0
+    var ctr = 0
+    while i < data.length do
+      val block = mac.doFinal(java.nio.ByteBuffer.allocate(4).putInt(ctr).array())
+      var j     = 0
+      while j < block.length && i + j < data.length do
+        out(i + j) = (data(i + j) ^ block(j)).toByte
+        j += 1
+      i += block.length
+      ctr += 1
+    out
+
+  private def serializeContext(context: Map[String, String]): Array[Byte] =
+    context.toSeq.sortBy(_._1).map((k, v) => s"$k=$v").mkString(" ").getBytes("UTF-8")

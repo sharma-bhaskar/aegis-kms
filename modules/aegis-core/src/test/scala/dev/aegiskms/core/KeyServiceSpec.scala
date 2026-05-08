@@ -117,3 +117,64 @@ final class KeyServiceSpec extends AnyFunSuite with Matchers:
     result.isLeft shouldBe true
     result.swap.toOption.get.code shouldBe ErrorCode.ItemNotFound
   }
+
+  test("encrypt then decrypt round-trips with the same context") {
+    val ctx       = Map("dataset" -> "invoices-q2", "tenant" -> "acme")
+    val plaintext = "secret invoice payload".getBytes("UTF-8")
+
+    val opened = (for
+      svc     <- KeyService.inMemory
+      created <- svc.create(KeySpec.aes256("enc-key"), alice)
+      id = created.toOption.get.id
+      _  <- svc.activate(id, alice)
+      ct <- svc.encrypt(id, plaintext, ctx, alice)
+      ctv = ct.toOption.get
+      pt <- svc.decrypt(id, ctv, ctx, alice)
+    yield pt).unsafeRunSync()
+
+    opened.isRight shouldBe true
+    opened.toOption.get shouldBe plaintext
+  }
+
+  test("decrypt with a different context returns CryptographicFailure") {
+    val opened = (for
+      svc     <- KeyService.inMemory
+      created <- svc.create(KeySpec.aes256("enc-key"), alice)
+      id = created.toOption.get.id
+      _  <- svc.activate(id, alice)
+      ct <- svc.encrypt(id, "hi".getBytes, Map("a" -> "1"), alice)
+      ctv = ct.toOption.get
+      pt <- svc.decrypt(id, ctv, Map("a" -> "2"), alice)
+    yield pt).unsafeRunSync()
+
+    opened.isLeft shouldBe true
+    opened.swap.toOption.get.code shouldBe ErrorCode.CryptographicFailure
+  }
+
+  test("encrypt on a PreActive key returns IllegalOperation") {
+    val result = (for
+      svc     <- KeyService.inMemory
+      created <- svc.create(KeySpec.aes256("not-yet-active"), alice)
+      id = created.toOption.get.id
+      ct <- svc.encrypt(id, "data".getBytes, Map.empty, alice)
+    yield ct).unsafeRunSync()
+
+    result.isLeft shouldBe true
+    result.swap.toOption.get.code shouldBe ErrorCode.IllegalOperation
+  }
+
+  test("decrypt is permitted on a Deactivated key (existing ciphertexts stay readable)") {
+    val opened = (for
+      svc     <- KeyService.inMemory
+      created <- svc.create(KeySpec.aes256("deact"), alice)
+      id = created.toOption.get.id
+      _  <- svc.activate(id, alice)
+      ct <- svc.encrypt(id, "rev".getBytes, Map.empty, alice)
+      ctv = ct.toOption.get
+      _  <- svc.revoke(id, alice)
+      pt <- svc.decrypt(id, ctv, Map.empty, alice)
+    yield pt).unsafeRunSync()
+
+    opened.isRight shouldBe true
+    new String(opened.toOption.get, "UTF-8") shouldBe "rev"
+  }
