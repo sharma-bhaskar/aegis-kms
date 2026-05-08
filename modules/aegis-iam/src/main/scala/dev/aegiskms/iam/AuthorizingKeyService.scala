@@ -85,6 +85,9 @@ final class AuthorizingKeyService(
   ): IO[Either[KmsError, Array[Byte]]] =
     guard(by, Operation.Unwrap, id.value)(inner.unwrap(id, wrapped, by))
 
+  def compromise(id: KeyId, reason: String, by: Principal): IO[Either[KmsError, ManagedKey]] =
+    guard(by, Operation.Compromise, id.value)(inner.compromise(id, reason, by))
+
   private def guard[A](by: Principal, op: Operation, resource: String)(
       action: => IO[Either[KmsError, A]]
   ): IO[Either[KmsError, A]] =

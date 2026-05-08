@@ -69,6 +69,14 @@ object KeyOpsActor:
       replyTo: ActorRef[Either[KmsError, Unit]]
   ) extends Command
 
+  /** Operator-issued compromise. Locks the key out of every cryptographic operation. */
+  final case class Compromise(
+      id: KeyId,
+      reason: String,
+      by: Principal,
+      replyTo: ActorRef[Either[KmsError, ManagedKey]]
+  ) extends Command
+
   // ── Boot ─────────────────────────────────────────────────────────────────────
 
   /** Build a behavior that has already replayed `replayed` into its state map. The supplied `clock` and
@@ -188,6 +196,28 @@ object KeyOpsActor:
                 ))
                 Behaviors.same
               }
+
+        case Compromise(id, reason, by, replyTo) =>
+          state.get(id) match
+            case None =>
+              replyTo ! Left(KmsError(ErrorCode.ItemNotFound, s"No key with id ${id.value}"))
+              Behaviors.same
+            case Some(k) if k.state == KeyState.Destroyed =>
+              replyTo ! Left(KmsError(ErrorCode.IllegalOperation, s"Key ${id.value} is Destroyed"))
+              Behaviors.same
+            case Some(k) =>
+              val event   = KeyEvent.Compromised(KeyEvent.freshId(), now, id, by.subject, reason)
+              val updated = k.copy(state = KeyState.Compromised)
+              appendOr(journal, event, ctx) {
+                replyTo ! Right(updated)
+                running(journal, state + (id -> updated), clock, idGen)
+              } { err =>
+                replyTo ! Left(KmsError(
+                  ErrorCode.GeneralFailure,
+                  s"journal append failed: ${err.getMessage}"
+                ))
+                Behaviors.same
+              }
     }
 
   /** Synchronously append `event` to the journal. On success: run `onOk`. On failure: log and run `onErr`.
@@ -226,3 +256,5 @@ object KeyOpsActor:
         state.get(id).fold(state)(k => state + (id -> k.copy(state = KeyState.Deactivated)))
       case KeyEvent.Destroyed(_, _, id, _) =>
         state - id
+      case KeyEvent.Compromised(_, _, id, _, _) =>
+        state.get(id).fold(state)(k => state + (id -> k.copy(state = KeyState.Compromised)))

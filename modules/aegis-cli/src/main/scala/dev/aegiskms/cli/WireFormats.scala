@@ -93,3 +93,8 @@ object WireFormats:
   object UnwrapResponse:
     given Encoder[UnwrapResponse] = deriveEncoder
     given Decoder[UnwrapResponse] = deriveDecoder
+
+  final case class CompromiseRequest(reason: String)
+  object CompromiseRequest:
+    given Encoder[CompromiseRequest] = deriveEncoder
+    given Decoder[CompromiseRequest] = deriveDecoder

@@ -335,3 +335,42 @@ final class HttpRoutesSpec extends AnyFunSuite with Matchers with ScalatestRoute
       responseAs[String] should include(""""code":"InvalidField"""")
     }
   }
+
+  test("POST /v1/keys/{id}/compromise transitions the key to Compromised and locks crypto ops") {
+    val route = freshRoute()
+    var id    = ""
+
+    Post("/v1/keys", jsonEntity(createBody)) ~> route ~> check {
+      id = extractField(responseAs[String], "id")
+    }
+    Post(s"/v1/keys/$id/activate") ~> route ~> check(status shouldBe StatusCodes.OK)
+
+    Post(
+      s"/v1/keys/$id/compromise",
+      jsonEntity("""{"reason":"leaked in S3 audit"}""")
+    ) ~> route ~> check {
+      status shouldBe StatusCodes.OK
+      responseAs[String] should include(""""state":"Compromised"""")
+    }
+
+    // Subsequent /sign refuses with IllegalOperation.
+    val msgB64   = java.util.Base64.getEncoder.encodeToString("data".getBytes)
+    val signBody = s"""{"messageBase64":"$msgB64","algorithm":"RsaPssSha256"}"""
+    Post(s"/v1/keys/$id/sign", jsonEntity(signBody)) ~> route ~> check {
+      status shouldBe StatusCodes.InternalServerError
+      responseAs[String] should include(""""code":"IllegalOperation"""")
+    }
+  }
+
+  test("POST /v1/keys/{id}/compromise with a blank reason returns 400 InvalidField") {
+    val route = freshRoute()
+    var id    = ""
+
+    Post("/v1/keys", jsonEntity(createBody)) ~> route ~> check {
+      id = extractField(responseAs[String], "id")
+    }
+    Post(s"/v1/keys/$id/compromise", jsonEntity("""{"reason":"   "}""")) ~> route ~> check {
+      status shouldBe StatusCodes.BadRequest
+      responseAs[String] should include(""""code":"InvalidField"""")
+    }
+  }

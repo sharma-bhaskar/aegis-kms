@@ -181,6 +181,25 @@ object Endpoints:
       .summary("Unwrap a DEK")
       .description("Recovers the original DEK bytes. Permitted on Active and Deactivated keys.")
 
+  /** `POST /v1/keys/{id}/compromise` — operator-issued lockdown. The key transitions to `Compromised` and
+    * refuses every cryptographic operation thereafter.
+    */
+  val compromiseKey: PublicEndpoint[
+    (Option[String], Option[String], String, CompromiseRequest),
+    (StatusCode, KmsErrorDto),
+    ManagedKeyDto,
+    Any
+  ] =
+    keysBase.post
+      .in(path[String]("id") / "compromise")
+      .in(jsonBody[CompromiseRequest])
+      .out(jsonBody[ManagedKeyDto])
+      .summary("Compromise a key (operator override)")
+      .description(
+        "Marks the key as Compromised. From this state every cryptographic operation refuses with " +
+          "IllegalOperation. The supplied `reason` is recorded on the audit row at severity=Critical."
+      )
+
   /** All endpoint definitions. Used by the OpenAPI generator and tests. */
   val all: List[AnyEndpoint] =
     List(
@@ -193,5 +212,6 @@ object Endpoints:
       encryptKey,
       decryptKey,
       wrapKey,
-      unwrapKey
+      unwrapKey,
+      compromiseKey
     )

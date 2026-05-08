@@ -228,6 +228,28 @@ final class HttpRoutes(
                   }
     }
 
+  private val compromiseSE: ServerEndpoint[Any, Future] =
+    Endpoints.compromiseKey.serverLogic { case (auth, devHdr, idStr, req) =>
+      principalOf(auth, devHdr) match
+        case Left(e) => Future.successful(Left(e))
+        case Right(principal) =>
+          parseId(idStr) match
+            case Left(e) => Future.successful(Left(e))
+            case Right(id) =>
+              if req.reason.trim.isEmpty then
+                Future.successful(
+                  Left(StatusCode.BadRequest -> KmsErrorDto.of(
+                    ErrorCode.InvalidField,
+                    "reason must be non-empty"
+                  ))
+                )
+              else
+                runIO(svc.compromise(id, req.reason, principal)).map {
+                  case Left(err) => Left(errorOut(err))
+                  case Right(k)  => Right(ManagedKeyDto.fromCore(k))
+                }
+    }
+
   private def decodeSignRequest(
       req: SignRequest
   ): Either[(StatusCode, KmsErrorDto), (Array[Byte], SigAlgorithm)] =
@@ -272,7 +294,8 @@ final class HttpRoutes(
       encryptSE,
       decryptSE,
       wrapSE,
-      unwrapSE
+      unwrapSE,
+      compromiseSE
     )
 
   /** A pekko-http `Route` that mounts every endpoint. */

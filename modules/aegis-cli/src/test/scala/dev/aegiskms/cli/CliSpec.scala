@@ -342,3 +342,39 @@ final class CliSpec extends AnyFunSuite with Matchers:
     captured.get.url should endWith("/v1/keys/abc/unwrap")
     r.stdout should include(s"dek: $dekB64")
   }
+
+  test("'keys compromise' missing --reason reports a usage error and exits 1") {
+    val r = Cli.run(
+      List("keys", "compromise", "--id", "abc"),
+      cfg,
+      fakeClientFactory(200, sampleKey.asJson.noSpaces)
+    )
+    r.exitCode shouldBe 1
+    r.stderr should include("--reason")
+  }
+
+  test("'keys compromise' empty --reason is rejected (audit trail must have a justification)") {
+    val r = Cli.run(
+      List("keys", "compromise", "--id", "abc", "--reason", ""),
+      cfg,
+      fakeClientFactory(200, sampleKey.asJson.noSpaces)
+    )
+    r.exitCode shouldBe 1
+    r.stderr should include("--reason")
+  }
+
+  test("'keys compromise --id <id> --reason <text>' POSTs to /compromise with the reason in the body") {
+    var captured: Option[HttpPort.Request] = None
+    val compromisedKey                     = sampleKey.copy(state = "Compromised")
+    val r = Cli.run(
+      List("keys", "compromise", "--id", "abc", "--reason", "leaked in S3 audit"),
+      cfg,
+      captureFactory(req => captured = Some(req), compromisedKey.asJson.noSpaces, status = 200)
+    )
+    r.exitCode shouldBe 0
+    captured.get.method shouldBe "POST"
+    captured.get.url should endWith("/v1/keys/abc/compromise")
+    captured.get.body.get should include("\"reason\":\"leaked in S3 audit\"")
+    r.stdout should include("compromised abc")
+    r.stdout should include("state:  Compromised")
+  }

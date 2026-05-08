@@ -106,6 +106,11 @@ object Cli:
           case Right((id, wrapped)) => Commands.keysUnwrap(makeClient(cfg), id, wrapped)
           case Left(msg)            => CommandResult.err(s"$msg\n\n${keysUnwrapHelp}")
 
+      case "compromise" =>
+        parseKeysCompromise(rest) match
+          case Right((id, reason)) => Commands.keysCompromise(makeClient(cfg), id, reason)
+          case Left(msg)           => CommandResult.err(s"$msg\n\n${keysCompromiseHelp}")
+
       case other =>
         CommandResult.err(s"unknown keys subcommand: $other\n\n${keysHelp}")
 
@@ -207,6 +212,18 @@ object Cli:
       wrapped <- flags.get("--wrapped").toRight("keys unwrap: --wrapped <base64> is required")
     yield (id, wrapped)
 
+  /** Parse `aegis keys compromise --id <id> --reason "..."`. The reason must be non-empty — the audit row
+    * carries this string at severity=Critical, and a blank justification undermines the post-incident report.
+    */
+  private[cli] def parseKeysCompromise(args: List[String]): Either[String, (String, String)] =
+    val flags = parseFlags(args)
+    for
+      id <- flags.get("--id").toRight("keys compromise: --id <id> is required")
+      reason <- flags.get("--reason").filter(_.nonEmpty).toRight(
+        "keys compromise: --reason <text> is required (non-empty)"
+      )
+    yield (id, reason)
+
   /** Parse `--context k=v,k2=v2` into a map. Empty / missing → empty map. */
   private def parseContext(raw: Option[String]): Either[String, Map[String, String]] =
     raw.filter(_.nonEmpty) match
@@ -246,6 +263,7 @@ object Cli:
       |  aegis keys decrypt --id <id> --ciphertext <b64> [--context k=v,k2=v2]
       |  aegis keys wrap --id <id> --dek <text|@file>
       |  aegis keys unwrap --id <id> --wrapped <b64>
+      |  aegis keys compromise --id <id> --reason "<text>"
       |  aegis agent issue        (planned — PR A1)
       |  aegis audit tail         (planned — PR F2.b)
       |  aegis advisor scan       (planned — PR W4)
@@ -266,7 +284,8 @@ object Cli:
       |  aegis keys encrypt --id <id> --plaintext <text|@file> [--context k=v,k2=v2]
       |  aegis keys decrypt --id <id> --ciphertext <b64> [--context k=v,k2=v2]
       |  aegis keys wrap --id <id> --dek <text|@file>
-      |  aegis keys unwrap --id <id> --wrapped <b64>""".stripMargin
+      |  aegis keys unwrap --id <id> --wrapped <b64>
+      |  aegis keys compromise --id <id> --reason "<text>"""".stripMargin
   private val keysCreateHelp: String = "Usage: aegis keys create --alg AES-256 --name <name>"
   private val keysSignHelp: String =
     "Usage: aegis keys sign --id <id> --message <text|@file> [--alg RsaPssSha256]"
@@ -278,3 +297,5 @@ object Cli:
     "Usage: aegis keys decrypt --id <id> --ciphertext <b64> [--context k=v,k2=v2]"
   private val keysWrapHelp: String   = "Usage: aegis keys wrap --id <id> --dek <text|@file>"
   private val keysUnwrapHelp: String = "Usage: aegis keys unwrap --id <id> --wrapped <b64>"
+  private val keysCompromiseHelp: String =
+    "Usage: aegis keys compromise --id <id> --reason \"<text>\""

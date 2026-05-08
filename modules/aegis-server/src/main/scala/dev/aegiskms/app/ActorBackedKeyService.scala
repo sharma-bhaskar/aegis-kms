@@ -113,3 +113,11 @@ final class ActorBackedKeyService(
         IO.pure(Left(KmsError(ErrorCode.IllegalOperation, s"Key ${id.value} is ${k.state}")))
       case Right(_) => rootOfTrust.unwrapDek(id, wrapped)
     }
+
+  /** State-mutating: routes through the actor mailbox so the journal append + state transition are serialized
+    * with the rest of the lifecycle.
+    */
+  def compromise(id: KeyId, reason: String, by: Principal): IO[Either[KmsError, ManagedKey]] =
+    IO.fromFuture(IO(actor.ask[Either[KmsError, ManagedKey]](ref =>
+      KeyOpsActor.Compromise(id, reason, by, ref)
+    )))

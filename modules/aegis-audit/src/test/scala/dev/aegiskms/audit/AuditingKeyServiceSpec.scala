@@ -170,3 +170,16 @@ final class AuditingKeyServiceSpec extends AnyFunSuite with Matchers:
     unwrapRecord.outcome should startWith("Success")
     unwrapRecord.outcome should include("dekLen=9")
   }
+
+  test("compromise emits a Critical-severity audit record carrying the reason") {
+    val (svc, sink) = fixture()
+
+    val created = svc.create(KeySpec.aes256("audit-compromise"), alice).unsafeRunSync().toOption.get
+    svc.activate(created.id, alice).unsafeRunSync()
+    svc.compromise(created.id, "leaked in S3 audit 2026-05-08", alice).unsafeRunSync()
+
+    val rec = sink.all.unsafeRunSync().find(_.operation == Operation.Compromise).get
+    rec.outcome should startWith("severity=Critical")
+    rec.outcome should include("Success")
+    rec.outcome should include("reason=leaked in S3 audit 2026-05-08")
+  }

@@ -160,3 +160,34 @@ final class AuthorizingKeyServiceSpec extends AnyFunSuite with Matchers:
     out.isRight shouldBe true
     new String(out.toOption.get, "UTF-8") shouldBe "dek-bytes"
   }
+
+  test("compromise is denied when the agent's allowedOps doesn't include Compromise") {
+    val engine = RoleBasedPolicyEngine.adminsOnly("admins")
+    val svc    = fixture(engine)
+    val agent = Principal.Agent(
+      subject = "claude-session-7a3",
+      operator = alice,
+      purpose = "ordinary",
+      issuedAt = Instant.now(),
+      ttl = 1.hour,
+      allowedOps = Set(Operation.Get, Operation.Sign), // no Compromise — agents shouldn't be able
+      parent = None
+    )
+    val res = svc.compromise(KeyId.generate(), "no-go", agent).unsafeRunSync()
+    res.isLeft shouldBe true
+    res.swap.toOption.get.code shouldBe ErrorCode.PermissionDenied
+  }
+
+  test("compromise passes through when the principal has the role and the op") {
+    val engine = RoleBasedPolicyEngine.adminsOnly("admins")
+    val svc    = fixture(engine)
+
+    val created = svc.create(KeySpec.aes256("incident"), alice).unsafeRunSync()
+    created.isRight shouldBe true
+    val id = created.toOption.get.id
+    svc.activate(id, alice).unsafeRunSync()
+
+    val res = svc.compromise(id, "leaked in S3", alice).unsafeRunSync()
+    res.isRight shouldBe true
+    res.toOption.get.state shouldBe KeyState.Compromised
+  }

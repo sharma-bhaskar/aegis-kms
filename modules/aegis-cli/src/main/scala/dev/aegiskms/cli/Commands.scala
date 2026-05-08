@@ -2,6 +2,7 @@ package dev.aegiskms.cli
 
 import dev.aegiskms.cli.AegisHttpClient.{ClientError, renderError}
 import dev.aegiskms.cli.WireFormats.{
+  CompromiseRequest,
   DecryptRequest,
   DecryptResponse,
   EncryptRequest,
@@ -195,6 +196,18 @@ object Commands:
     client.unwrapKey(id, req) match
       case Right(UnwrapResponse(dekB64)) =>
         CommandResult.out(s"dek: $dekB64")
+      case Left(err) => CommandResult.err(renderError(err), exitCodeFor(err))
+
+  // ── keys compromise ────────────────────────────────────────────────────────
+
+  /** `aegis keys compromise --id <id> --reason "..."`. Marks a key as compromised — irreversible. The reason
+    * is mandatory and ends up on the audit row at `severity=Critical`.
+    */
+  def keysCompromise(client: AegisHttpClient, id: String, reason: String): CommandResult =
+    val req = CompromiseRequest(reason)
+    client.compromiseKey(id, req) match
+      case Right(key) =>
+        CommandResult.out(s"compromised ${key.id}\nreason: $reason\nstate:  ${key.state}")
       case Left(err) => CommandResult.err(renderError(err), exitCodeFor(err))
 
   // ── placeholders for agent-native commands (backends arrive in later PRs) ──

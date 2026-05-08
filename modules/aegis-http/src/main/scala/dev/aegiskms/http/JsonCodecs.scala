@@ -153,3 +153,13 @@ object JsonCodecs:
   object UnwrapResponse:
     given Encoder[UnwrapResponse] = deriveEncoder
     given Decoder[UnwrapResponse] = deriveDecoder
+
+  // ── Compromise DTO ─────────────────────────────────────────────────────────
+
+  /** Compromise request body. The mandatory `reason` is the human-readable justification recorded in the
+    * audit row. Empty strings are rejected at the route layer.
+    */
+  final case class CompromiseRequest(reason: String)
+  object CompromiseRequest:
+    given Encoder[CompromiseRequest] = deriveEncoder
+    given Decoder[CompromiseRequest] = deriveDecoder

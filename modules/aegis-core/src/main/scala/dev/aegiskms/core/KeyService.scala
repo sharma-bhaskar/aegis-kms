@@ -79,6 +79,13 @@ trait KeyService[F[_]]:
     */
   def unwrap(id: KeyId, wrapped: WrappedDek, by: Principal): F[Either[KmsError, Array[Byte]]]
 
+  /** Operator-issued compromise: marks the key as `Compromised` so it can no longer perform any cryptographic
+    * operation. The `reason` is the mandatory human-readable justification (e.g. "discovered in S3 audit leak
+    * 2026-05-08"). Compromise is one-way: from `{PreActive, Active, Deactivated}` → `Compromised` and is
+    * idempotent on an already-`Compromised` key. `Destroyed` keys cannot be compromised.
+    */
+  def compromise(id: KeyId, reason: String, by: Principal): F[Either[KmsError, ManagedKey]]
+
 object KeyService:
 
   /** An in-memory reference implementation. Not durable, not safe for production — useful for tests, smoke
@@ -141,6 +148,8 @@ object KeyService:
             m.get(id) match
               case None =>
                 Left(KmsError(ErrorCode.ItemNotFound, s"No key with id ${id.value}"))
+              case Some(k) if k.state == KeyState.Compromised || k.state == KeyState.Destroyed =>
+                Left(KmsError(ErrorCode.IllegalOperation, s"Key ${id.value} is ${k.state}"))
               case Some(_) =>
                 val expected = deterministicMac(id, message)
                 Right(java.util.Arrays.equals(expected, signature.bytes))
@@ -202,6 +211,22 @@ object KeyService:
                 Left(KmsError(ErrorCode.IllegalOperation, s"Key ${id.value} is ${k.state}"))
               case Some(_) =>
                 deterministicOpen(id, Map.empty, wrapped.bytes)
+          }
+
+        def compromise(
+            id: KeyId,
+            reason: String,
+            by: Principal
+        ): IO[Either[KmsError, ManagedKey]] =
+          ref.modify { m =>
+            m.get(id) match
+              case None =>
+                (m, Left(KmsError(ErrorCode.ItemNotFound, s"No key with id ${id.value}")))
+              case Some(k) if k.state == KeyState.Destroyed =>
+                (m, Left(KmsError(ErrorCode.IllegalOperation, s"Key ${id.value} is Destroyed")))
+              case Some(k) =>
+                val updated = k.copy(state = KeyState.Compromised)
+                (m + (id -> updated), Right(updated))
           }
 
         private def transition(id: KeyId, to: KeyState): IO[Either[KmsError, ManagedKey]] =

@@ -41,6 +41,21 @@ All notable changes to Aegis will be documented here. This project follows
 - **`ReadmeQuickstartSpec` in `aegis-core`.** Compiles + runs the embedded-library example from
   `README.md` so that snippet can never silently bitrot. If you change the README's
   "Quickstart — embedding as a library" Scala block, mirror the change in this test.
+- **Compromise operator override across the whole stack (closes #9).** New
+  `compromise(id, reason, by)` method on `KeyService[F[_]]`. Marks the key as `Compromised`;
+  from this state every cryptographic operation — including `verify` — refuses with
+  `KmsError(IllegalOperation, ...)`. (Note: `verify` was previously permitted on any state;
+  this PR tightens it to refuse `Compromised` and `Destroyed`, matching the lock-down
+  semantics described in `docs/ARCHITECTURE.md` §3.) Compromise is one-way: from
+  `{PreActive, Active, Deactivated}` → `Compromised`; `Destroyed` keys cannot be compromised.
+  The mandatory `reason` is a non-empty human-readable justification (e.g. "discovered in S3
+  audit leak 2026-05-08") and ends up on the audit row at `severity=Critical`. Added
+  `Operation.Compromise` to the IAM allowlist enum and a new `KeyEvent.Compromised` journal
+  event with circe codec so the journal replays the state transition deterministically. The
+  state-mutating call routes through `KeyOpsActor` so the journal append + state transition
+  are serialized with the rest of the lifecycle. On the wire: `POST /v1/keys/{id}/compromise`
+  (request: `{reason}`, response: full `ManagedKeyDto`); blank reasons are rejected with 400
+  `InvalidField`. The CLI gained `aegis keys compromise --id <id> --reason "<text>"`.
 - **Wrap / unwrap across the whole stack (closes #7).** New `wrap(id, dek, by)` and
   `unwrap(id, wrappedDek, by)` methods on `KeyService[F[_]]` for KMIP-style envelope
   encryption, with `Operation.Wrap` / `Operation.Unwrap` added to the IAM allowlist enum and

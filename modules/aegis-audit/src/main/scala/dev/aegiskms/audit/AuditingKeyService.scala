@@ -165,6 +165,19 @@ final class AuditingKeyService(inner: KeyService[IO], sink: AuditSink[IO]) exten
       AuditRecord(now, by, Operation.Unwrap, id.value, outcome, corr)
     }
 
+  def compromise(id: KeyId, reason: String, by: Principal): IO[Either[KmsError, ManagedKey]] =
+    instrument {
+      inner.compromise(id, reason, by)
+    } { (now, corr, result) =>
+      // Compromise is the highest-severity event in the system. Mark the audit row with the
+      // `severity=Critical` prefix so SIEM ingestion can route on it without re-deriving from
+      // the operation type alone.
+      val outcome = result match
+        case Right(_) => s"severity=Critical Success reason=$reason"
+        case Left(e)  => s"severity=Critical Failed code=${e.code} reason=$reason"
+      AuditRecord(now, by, Operation.Compromise, id.value, outcome, corr)
+    }
+
   // ── Helpers ────────────────────────────────────────────────────────────────
 
   /** Threads a fresh correlation id and a wall-clock timestamp through the action and writes the resulting

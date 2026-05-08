@@ -210,3 +210,21 @@ final class CommandsSpec extends AnyFunSuite with Matchers:
     r.exitCode shouldBe 5
     r.stderr should include("PermissionDenied")
   }
+
+  test("keys compromise prints the resulting state and the reason on success") {
+    val compromisedKey = sampleKey.copy(state = "Compromised")
+    val client         = clientReturning(200, compromisedKey.asJson.noSpaces)
+    val r              = Commands.keysCompromise(client, sampleKey.id, "leaked in S3 audit")
+    r.exitCode shouldBe 0
+    r.stdout should include(s"compromised ${sampleKey.id}")
+    r.stdout should include("reason: leaked in S3 audit")
+    r.stdout should include("state:  Compromised")
+  }
+
+  test("keys compromise on an already-Destroyed key exits non-zero with IllegalOperation") {
+    val errBody = KmsErrorDto("IllegalOperation", "Key is Destroyed").asJson.noSpaces
+    val client  = clientReturning(500, errBody)
+    val r       = Commands.keysCompromise(client, sampleKey.id, "too late")
+    r.exitCode shouldBe 1
+    r.stderr should include("IllegalOperation")
+  }

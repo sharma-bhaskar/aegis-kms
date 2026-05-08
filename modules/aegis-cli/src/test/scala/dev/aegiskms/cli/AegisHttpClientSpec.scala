@@ -187,6 +187,23 @@ final class AegisHttpClientSpec extends AnyFunSuite with Matchers:
     )
   }
 
+  test("compromiseKey POSTs to /v1/keys/{id}/compromise with the reason and decodes the key") {
+    var seen: Option[HttpPort.Request] = None
+    val compromisedKey                 = sampleKey.copy(state = "Compromised")
+    val port = new RecordingPort(req => {
+      seen = Some(req)
+      HttpPort.Response(200, compromisedKey.asJson.noSpaces)
+    })
+    val client = new AegisHttpClient(port, baseUrl, principal)
+    val res    = client.compromiseKey(sampleKey.id, CompromiseRequest("leaked in S3"))
+
+    res shouldBe Right(compromisedKey)
+    seen.get.method shouldBe "POST"
+    seen.get.url shouldBe s"$baseUrl/v1/keys/${sampleKey.id}/compromise"
+    seen.get.headers.get("Content-Type") shouldBe Some("application/json")
+    seen.get.body.get should include("\"reason\":\"leaked in S3\"")
+  }
+
   // ── Stub ────────────────────────────────────────────────────────────────────
 
   final private class RecordingPort(handler: HttpPort.Request => HttpPort.Response) extends HttpPort:

@@ -223,3 +223,69 @@ final class KeyServiceSpec extends AnyFunSuite with Matchers:
     recovered.isRight shouldBe true
     new String(recovered.toOption.get, "UTF-8") shouldBe "dek-bytes"
   }
+
+  test("compromise transitions an Active key to Compromised") {
+    val state = (for
+      svc     <- KeyService.inMemory
+      created <- svc.create(KeySpec.aes256("incident"), alice)
+      id = created.toOption.get.id
+      _   <- svc.activate(id, alice)
+      _   <- svc.compromise(id, "leaked in S3 audit", alice)
+      got <- svc.get(id, alice)
+    yield got.toOption.get.state).unsafeRunSync()
+
+    state shouldBe KeyState.Compromised
+  }
+
+  test("after compromise every cryptographic operation refuses with IllegalOperation") {
+    val results = (for
+      svc     <- KeyService.inMemory
+      created <- svc.create(KeySpec.rsa2048("locked-down"), alice)
+      id = created.toOption.get.id
+      _ <- svc.activate(id, alice)
+      // capture a signature + ciphertext while still Active to attempt verify/decrypt later
+      signed <- svc.sign(id, "m".getBytes, SigAlgorithm.RsaPssSha256, alice)
+      ct     <- svc.encrypt(id, "p".getBytes, Map.empty, alice)
+      w      <- svc.wrap(id, "d".getBytes, alice)
+      _      <- svc.compromise(id, "test", alice)
+      sigErr <- svc.sign(id, "m".getBytes, SigAlgorithm.RsaPssSha256, alice)
+      verErr <- svc.verify(id, "m".getBytes, signed.toOption.get, alice)
+      encErr <- svc.encrypt(id, "p".getBytes, Map.empty, alice)
+      decErr <- svc.decrypt(id, ct.toOption.get, Map.empty, alice)
+      wrErr  <- svc.wrap(id, "d".getBytes, alice)
+      unErr  <- svc.unwrap(id, w.toOption.get, alice)
+    yield List(sigErr, verErr, encErr, decErr, wrErr, unErr)).unsafeRunSync()
+
+    results.foreach { r =>
+      r.isLeft shouldBe true
+      r.swap.toOption.get.code shouldBe ErrorCode.IllegalOperation
+    }
+  }
+
+  test("compromise on a Destroyed key returns IllegalOperation") {
+    val result = (for
+      svc     <- KeyService.inMemory
+      created <- svc.create(KeySpec.aes256("gone"), alice)
+      id = created.toOption.get.id
+      _   <- svc.destroy(id, alice)
+      res <- svc.compromise(id, "too late", alice)
+    yield res).unsafeRunSync()
+
+    result.isLeft shouldBe true
+    // In-memory destroy removes the entry, so we observe ItemNotFound; with the actor backend the
+    // key row survives and we'd see IllegalOperation. Either is acceptable from the contract — the
+    // operator can't compromise something that's already gone.
+    result.swap.toOption.get.code should (be(ErrorCode.IllegalOperation) or be(ErrorCode.ItemNotFound))
+  }
+
+  test("compromise on a PreActive key is allowed (operator catches it before activation)") {
+    val state = (for
+      svc     <- KeyService.inMemory
+      created <- svc.create(KeySpec.aes256("never-activated"), alice)
+      id = created.toOption.get.id
+      _   <- svc.compromise(id, "discovered during pre-prod scan", alice)
+      got <- svc.get(id, alice)
+    yield got.toOption.get.state).unsafeRunSync()
+
+    state shouldBe KeyState.Compromised
+  }

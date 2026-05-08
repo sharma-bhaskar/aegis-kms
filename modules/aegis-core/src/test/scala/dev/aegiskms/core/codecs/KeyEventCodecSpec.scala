@@ -49,6 +49,14 @@ final class KeyEventCodecSpec extends AnyFunSuite:
     roundTrip(KeyEvent.Destroyed("e4", now, keyId, "alice@org"))
   }
 
+  test("KeyEvent.Compromised round-trips, preserving reason") {
+    val event: KeyEvent =
+      KeyEvent.Compromised("e6", now, keyId, "alice@org", "leaked in S3 audit 2026-05-08")
+    roundTrip(event)
+    assert(event.asJson.hcursor.get[String]("type").contains("Compromised"))
+    assert(event.asJson.hcursor.get[String]("reason").contains("leaked in S3 audit 2026-05-08"))
+  }
+
   test("decode rejects an unknown discriminator with a clear message") {
     val bogus =
       parse(
