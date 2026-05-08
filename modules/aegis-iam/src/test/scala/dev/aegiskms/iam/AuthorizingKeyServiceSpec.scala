@@ -92,3 +92,133 @@ final class AuthorizingKeyServiceSpec extends AnyFunSuite with Matchers:
     val res = svc.sign(id, "msg".getBytes, SigAlgorithm.RsaPssSha256, agent).unsafeRunSync()
     res.isRight shouldBe true
   }
+
+  test("encrypt is denied when the agent's allowedOps doesn't include Encrypt") {
+    val engine = RoleBasedPolicyEngine.adminsOnly("admins")
+    val svc    = fixture(engine)
+    val agent = Principal.Agent(
+      subject = "claude-session-7a3",
+      operator = alice,
+      purpose = "verify-only",
+      issuedAt = Instant.now(),
+      ttl = 1.hour,
+      allowedOps = Set(Operation.Get), // no Encrypt
+      parent = None
+    )
+    val res = svc.encrypt(KeyId.generate(), "x".getBytes, Map.empty, agent).unsafeRunSync()
+    res.isLeft shouldBe true
+    res.swap.toOption.get.code shouldBe ErrorCode.PermissionDenied
+  }
+
+  test("encrypt + decrypt pass through when the principal has the role and the ops") {
+    val engine = RoleBasedPolicyEngine.adminsOnly("admins")
+    val svc    = fixture(engine)
+
+    val created = svc.create(KeySpec.aes256("enc-key"), alice).unsafeRunSync()
+    created.isRight shouldBe true
+    val id = created.toOption.get.id
+    svc.activate(id, alice).unsafeRunSync()
+
+    val ct = svc.encrypt(id, "secret".getBytes, Map("a" -> "1"), alice).unsafeRunSync()
+    ct.isRight shouldBe true
+
+    val pt = svc.decrypt(id, ct.toOption.get, Map("a" -> "1"), alice).unsafeRunSync()
+    pt.isRight shouldBe true
+    new String(pt.toOption.get, "UTF-8") shouldBe "secret"
+  }
+
+  test("wrap is denied when the agent's allowedOps doesn't include Wrap") {
+    val engine = RoleBasedPolicyEngine.adminsOnly("admins")
+    val svc    = fixture(engine)
+    val agent = Principal.Agent(
+      subject = "claude-session-7a3",
+      operator = alice,
+      purpose = "decrypt-only",
+      issuedAt = Instant.now(),
+      ttl = 1.hour,
+      allowedOps = Set(Operation.Get, Operation.Decrypt), // no Wrap
+      parent = None
+    )
+    val res = svc.wrap(KeyId.generate(), "dek".getBytes, agent).unsafeRunSync()
+    res.isLeft shouldBe true
+    res.swap.toOption.get.code shouldBe ErrorCode.PermissionDenied
+  }
+
+  test("wrap + unwrap pass through when the principal has the role and the ops") {
+    val engine = RoleBasedPolicyEngine.adminsOnly("admins")
+    val svc    = fixture(engine)
+
+    val created = svc.create(KeySpec.aes256("kek"), alice).unsafeRunSync()
+    created.isRight shouldBe true
+    val id = created.toOption.get.id
+    svc.activate(id, alice).unsafeRunSync()
+
+    val w = svc.wrap(id, "dek-bytes".getBytes, alice).unsafeRunSync()
+    w.isRight shouldBe true
+
+    val out = svc.unwrap(id, w.toOption.get, alice).unsafeRunSync()
+    out.isRight shouldBe true
+    new String(out.toOption.get, "UTF-8") shouldBe "dek-bytes"
+  }
+
+  test("compromise is denied when the agent's allowedOps doesn't include Compromise") {
+    val engine = RoleBasedPolicyEngine.adminsOnly("admins")
+    val svc    = fixture(engine)
+    val agent = Principal.Agent(
+      subject = "claude-session-7a3",
+      operator = alice,
+      purpose = "ordinary",
+      issuedAt = Instant.now(),
+      ttl = 1.hour,
+      allowedOps = Set(Operation.Get, Operation.Sign), // no Compromise — agents shouldn't be able
+      parent = None
+    )
+    val res = svc.compromise(KeyId.generate(), "no-go", agent).unsafeRunSync()
+    res.isLeft shouldBe true
+    res.swap.toOption.get.code shouldBe ErrorCode.PermissionDenied
+  }
+
+  test("compromise passes through when the principal has the role and the op") {
+    val engine = RoleBasedPolicyEngine.adminsOnly("admins")
+    val svc    = fixture(engine)
+
+    val created = svc.create(KeySpec.aes256("incident"), alice).unsafeRunSync()
+    created.isRight shouldBe true
+    val id = created.toOption.get.id
+    svc.activate(id, alice).unsafeRunSync()
+
+    val res = svc.compromise(id, "leaked in S3", alice).unsafeRunSync()
+    res.isRight shouldBe true
+    res.toOption.get.state shouldBe KeyState.Compromised
+  }
+
+  test("rotate is denied when the agent's allowedOps doesn't include Rotate") {
+    val engine = RoleBasedPolicyEngine.adminsOnly("admins")
+    val svc    = fixture(engine)
+    val agent = Principal.Agent(
+      subject = "claude-session-7a3",
+      operator = alice,
+      purpose = "ordinary",
+      issuedAt = Instant.now(),
+      ttl = 1.hour,
+      allowedOps = Set(Operation.Get, Operation.Sign), // no Rotate — agents shouldn't be able
+      parent = None
+    )
+    val res = svc.rotate(KeyId.generate(), RotationPolicy.Manual, agent).unsafeRunSync()
+    res.isLeft shouldBe true
+    res.swap.toOption.get.code shouldBe ErrorCode.PermissionDenied
+  }
+
+  test("rotate passes through and bumps currentVersion when the principal has the role and the op") {
+    val engine = RoleBasedPolicyEngine.adminsOnly("admins")
+    val svc    = fixture(engine)
+
+    val created = svc.create(KeySpec.aes256("rotate"), alice).unsafeRunSync()
+    created.isRight shouldBe true
+    val id = created.toOption.get.id
+    svc.activate(id, alice).unsafeRunSync()
+
+    val res = svc.rotate(id, RotationPolicy.Manual, alice).unsafeRunSync()
+    res.isRight shouldBe true
+    res.toOption.get.currentVersion shouldBe 2
+  }

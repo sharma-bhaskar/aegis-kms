@@ -24,7 +24,13 @@ object WireFormats:
     given Encoder[CreateKeyRequest] = deriveEncoder
     given Decoder[CreateKeyRequest] = deriveDecoder
 
-  final case class ManagedKeyDto(id: String, spec: KeySpecDto, createdAt: Instant, state: String)
+  final case class ManagedKeyDto(
+      id: String,
+      spec: KeySpecDto,
+      createdAt: Instant,
+      state: String,
+      currentVersion: Int = 1
+  )
   object ManagedKeyDto:
     given Encoder[ManagedKeyDto] = deriveEncoder
     given Decoder[ManagedKeyDto] = deriveDecoder
@@ -53,3 +59,53 @@ object WireFormats:
   object VerifyResponse:
     given Encoder[VerifyResponse] = deriveEncoder
     given Decoder[VerifyResponse] = deriveDecoder
+
+  final case class EncryptRequest(plaintextBase64: String, context: Map[String, String] = Map.empty)
+  object EncryptRequest:
+    given Encoder[EncryptRequest] = deriveEncoder
+    given Decoder[EncryptRequest] = deriveDecoder
+
+  final case class EncryptResponse(ciphertextBase64: String, context: Map[String, String])
+  object EncryptResponse:
+    given Encoder[EncryptResponse] = deriveEncoder
+    given Decoder[EncryptResponse] = deriveDecoder
+
+  final case class DecryptRequest(ciphertextBase64: String, context: Map[String, String] = Map.empty)
+  object DecryptRequest:
+    given Encoder[DecryptRequest] = deriveEncoder
+    given Decoder[DecryptRequest] = deriveDecoder
+
+  final case class DecryptResponse(plaintextBase64: String, context: Map[String, String])
+  object DecryptResponse:
+    given Encoder[DecryptResponse] = deriveEncoder
+    given Decoder[DecryptResponse] = deriveDecoder
+
+  final case class WrapRequest(dekBase64: String)
+  object WrapRequest:
+    given Encoder[WrapRequest] = deriveEncoder
+    given Decoder[WrapRequest] = deriveDecoder
+
+  final case class WrapResponse(wrappedDekBase64: String)
+  object WrapResponse:
+    given Encoder[WrapResponse] = deriveEncoder
+    given Decoder[WrapResponse] = deriveDecoder
+
+  final case class UnwrapRequest(wrappedDekBase64: String)
+  object UnwrapRequest:
+    given Encoder[UnwrapRequest] = deriveEncoder
+    given Decoder[UnwrapRequest] = deriveDecoder
+
+  final case class UnwrapResponse(dekBase64: String)
+  object UnwrapResponse:
+    given Encoder[UnwrapResponse] = deriveEncoder
+    given Decoder[UnwrapResponse] = deriveDecoder
+
+  final case class CompromiseRequest(reason: String)
+  object CompromiseRequest:
+    given Encoder[CompromiseRequest] = deriveEncoder
+    given Decoder[CompromiseRequest] = deriveDecoder
+
+  final case class RotateRequest(policy: String = "Manual")
+  object RotateRequest:
+    given Encoder[RotateRequest] = deriveEncoder
+    given Decoder[RotateRequest] = deriveDecoder

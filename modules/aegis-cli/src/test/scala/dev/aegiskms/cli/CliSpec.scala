@@ -244,3 +244,176 @@ final class CliSpec extends AnyFunSuite with Matchers:
     r.exitCode shouldBe 0
     r.stdout should include("valid: true")
   }
+
+  test("'keys encrypt' missing --plaintext reports a usage error and exits 1") {
+    val r = Cli.run(
+      List("keys", "encrypt", "--id", "abc"),
+      cfg,
+      fakeClientFactory(200, sampleKey.asJson.noSpaces)
+    )
+    r.exitCode shouldBe 1
+    r.stderr should include("--plaintext")
+  }
+
+  test("'keys encrypt --id <id> --plaintext <text> --context k=v' POSTs to /encrypt with the context map") {
+    var captured: Option[HttpPort.Request] = None
+    val responseBody =
+      EncryptResponse("Y2lwaGVy", Map("dataset" -> "q2")).asJson.noSpaces
+    val r = Cli.run(
+      List(
+        "keys",
+        "encrypt",
+        "--id",
+        "abc",
+        "--plaintext",
+        "hello",
+        "--context",
+        "dataset=q2"
+      ),
+      cfg,
+      captureFactory(req => captured = Some(req), responseBody, status = 200)
+    )
+    r.exitCode shouldBe 0
+    captured.get.method shouldBe "POST"
+    captured.get.url should endWith("/v1/keys/abc/encrypt")
+    captured.get.body.get should include("\"context\":{\"dataset\":\"q2\"}")
+    r.stdout should include("ciphertext: Y2lwaGVy")
+  }
+
+  test("'keys encrypt' rejects malformed --context entries with a clear error") {
+    val r = Cli.run(
+      List("keys", "encrypt", "--id", "abc", "--plaintext", "x", "--context", "no-equals"),
+      cfg,
+      fakeClientFactory(200, sampleKey.asJson.noSpaces)
+    )
+    r.exitCode shouldBe 1
+    r.stderr should include("--context")
+  }
+
+  test("'keys decrypt --id <id> --ciphertext <b64>' POSTs to /decrypt and renders the plaintext") {
+    var captured: Option[HttpPort.Request] = None
+    val ptB64                              = java.util.Base64.getEncoder.encodeToString("hello".getBytes)
+    val responseBody                       = DecryptResponse(ptB64, Map.empty).asJson.noSpaces
+    val r = Cli.run(
+      List("keys", "decrypt", "--id", "abc", "--ciphertext", "Y2lwaGVy"),
+      cfg,
+      captureFactory(req => captured = Some(req), responseBody, status = 200)
+    )
+    r.exitCode shouldBe 0
+    captured.get.url should endWith("/v1/keys/abc/decrypt")
+    r.stdout should include(s"plaintext: $ptB64")
+  }
+
+  test("'keys wrap' missing --dek reports a usage error and exits 1") {
+    val r = Cli.run(
+      List("keys", "wrap", "--id", "abc"),
+      cfg,
+      fakeClientFactory(200, sampleKey.asJson.noSpaces)
+    )
+    r.exitCode shouldBe 1
+    r.stderr should include("--dek")
+  }
+
+  test("'keys wrap --id <id> --dek <text>' POSTs to /wrap and prints the wrapped blob") {
+    var captured: Option[HttpPort.Request] = None
+    val responseBody                       = WrapResponse("d3JhcHBlZA==").asJson.noSpaces
+    val r = Cli.run(
+      List("keys", "wrap", "--id", "abc", "--dek", "secret-dek"),
+      cfg,
+      captureFactory(req => captured = Some(req), responseBody, status = 200)
+    )
+    r.exitCode shouldBe 0
+    captured.get.method shouldBe "POST"
+    captured.get.url should endWith("/v1/keys/abc/wrap")
+    captured.get.body.get should include("\"dekBase64\":")
+    r.stdout should include("wrapped: d3JhcHBlZA==")
+  }
+
+  test("'keys unwrap --id <id> --wrapped <b64>' POSTs to /unwrap and renders the DEK as base64") {
+    var captured: Option[HttpPort.Request] = None
+    val dekB64                             = java.util.Base64.getEncoder.encodeToString("secret-dek".getBytes)
+    val responseBody                       = UnwrapResponse(dekB64).asJson.noSpaces
+    val r = Cli.run(
+      List("keys", "unwrap", "--id", "abc", "--wrapped", "d3JhcHBlZA=="),
+      cfg,
+      captureFactory(req => captured = Some(req), responseBody, status = 200)
+    )
+    r.exitCode shouldBe 0
+    captured.get.url should endWith("/v1/keys/abc/unwrap")
+    r.stdout should include(s"dek: $dekB64")
+  }
+
+  test("'keys compromise' missing --reason reports a usage error and exits 1") {
+    val r = Cli.run(
+      List("keys", "compromise", "--id", "abc"),
+      cfg,
+      fakeClientFactory(200, sampleKey.asJson.noSpaces)
+    )
+    r.exitCode shouldBe 1
+    r.stderr should include("--reason")
+  }
+
+  test("'keys compromise' empty --reason is rejected (audit trail must have a justification)") {
+    val r = Cli.run(
+      List("keys", "compromise", "--id", "abc", "--reason", ""),
+      cfg,
+      fakeClientFactory(200, sampleKey.asJson.noSpaces)
+    )
+    r.exitCode shouldBe 1
+    r.stderr should include("--reason")
+  }
+
+  test("'keys compromise --id <id> --reason <text>' POSTs to /compromise with the reason in the body") {
+    var captured: Option[HttpPort.Request] = None
+    val compromisedKey                     = sampleKey.copy(state = "Compromised")
+    val r = Cli.run(
+      List("keys", "compromise", "--id", "abc", "--reason", "leaked in S3 audit"),
+      cfg,
+      captureFactory(req => captured = Some(req), compromisedKey.asJson.noSpaces, status = 200)
+    )
+    r.exitCode shouldBe 0
+    captured.get.method shouldBe "POST"
+    captured.get.url should endWith("/v1/keys/abc/compromise")
+    captured.get.body.get should include("\"reason\":\"leaked in S3 audit\"")
+    r.stdout should include("compromised abc")
+    r.stdout should include("state:  Compromised")
+  }
+
+  test("'keys rotate' missing --id reports a usage error and exits 1") {
+    val r = Cli.run(
+      List("keys", "rotate"),
+      cfg,
+      fakeClientFactory(200, sampleKey.asJson.noSpaces)
+    )
+    r.exitCode shouldBe 1
+    r.stderr should include("--id")
+  }
+
+  test("'keys rotate --id <id>' defaults policy to Manual and POSTs to /rotate") {
+    var captured: Option[HttpPort.Request] = None
+    val rotatedKey                         = sampleKey.copy(state = "Active", currentVersion = 2)
+    val r = Cli.run(
+      List("keys", "rotate", "--id", "abc"),
+      cfg,
+      captureFactory(req => captured = Some(req), rotatedKey.asJson.noSpaces, status = 200)
+    )
+    r.exitCode shouldBe 0
+    captured.get.method shouldBe "POST"
+    captured.get.url should endWith("/v1/keys/abc/rotate")
+    captured.get.body.get should include("\"policy\":\"Manual\"")
+    r.stdout should include("rotated abc")
+    r.stdout should include("version: 2")
+    r.stdout should include("policy:  Manual")
+  }
+
+  test("'keys rotate --id <id> --policy TimeBased:7days' carries the policy on the wire") {
+    var captured: Option[HttpPort.Request] = None
+    val rotatedKey                         = sampleKey.copy(state = "Active", currentVersion = 2)
+    val r = Cli.run(
+      List("keys", "rotate", "--id", "abc", "--policy", "TimeBased:7days"),
+      cfg,
+      captureFactory(req => captured = Some(req), rotatedKey.asJson.noSpaces, status = 200)
+    )
+    r.exitCode shouldBe 0
+    captured.get.body.get should include("\"policy\":\"TimeBased:7days\"")
+  }

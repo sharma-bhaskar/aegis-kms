@@ -207,3 +207,215 @@ final class HttpRoutesSpec extends AnyFunSuite with Matchers with ScalatestRoute
       responseAs[String] should include(""""code":"InvalidField"""")
     }
   }
+
+  test("POST /v1/keys/{id}/encrypt + /decrypt round-trip with the same context") {
+    val route = freshRoute()
+    var id    = ""
+
+    Post("/v1/keys", jsonEntity(createBody)) ~> route ~> check {
+      id = extractField(responseAs[String], "id")
+    }
+    Post(s"/v1/keys/$id/activate") ~> route ~> check(status shouldBe StatusCodes.OK)
+
+    val plaintext = "secret-payload"
+    val ptB64     = java.util.Base64.getEncoder.encodeToString(plaintext.getBytes)
+    val encBody =
+      s"""{"plaintextBase64":"$ptB64","context":{"dataset":"q2","tenant":"acme"}}"""
+    var ctB64 = ""
+
+    Post(s"/v1/keys/$id/encrypt", jsonEntity(encBody)) ~> route ~> check {
+      status shouldBe StatusCodes.OK
+      val body = responseAs[String]
+      ctB64 = extractField(body, "ciphertextBase64")
+      body should include(""""context":{""")
+    }
+
+    val decBody =
+      s"""{"ciphertextBase64":"$ctB64","context":{"dataset":"q2","tenant":"acme"}}"""
+    Post(s"/v1/keys/$id/decrypt", jsonEntity(decBody)) ~> route ~> check {
+      status shouldBe StatusCodes.OK
+      val ptOut = extractField(responseAs[String], "plaintextBase64")
+      new String(java.util.Base64.getDecoder.decode(ptOut), "UTF-8") shouldBe plaintext
+    }
+  }
+
+  test("POST /v1/keys/{id}/decrypt with a mismatched context returns 500 CryptographicFailure") {
+    val route = freshRoute()
+    var id    = ""
+
+    Post("/v1/keys", jsonEntity(createBody)) ~> route ~> check {
+      id = extractField(responseAs[String], "id")
+    }
+    Post(s"/v1/keys/$id/activate") ~> route ~> check(status shouldBe StatusCodes.OK)
+
+    val ptB64   = java.util.Base64.getEncoder.encodeToString("hi".getBytes)
+    val encBody = s"""{"plaintextBase64":"$ptB64","context":{"a":"1"}}"""
+    var ctB64   = ""
+    Post(s"/v1/keys/$id/encrypt", jsonEntity(encBody)) ~> route ~> check {
+      ctB64 = extractField(responseAs[String], "ciphertextBase64")
+    }
+
+    val decBody = s"""{"ciphertextBase64":"$ctB64","context":{"a":"2"}}"""
+    Post(s"/v1/keys/$id/decrypt", jsonEntity(decBody)) ~> route ~> check {
+      status shouldBe StatusCodes.InternalServerError
+      responseAs[String] should include(""""code":"CryptographicFailure"""")
+    }
+  }
+
+  test("POST /v1/keys/{id}/encrypt on a PreActive key returns 500 IllegalOperation") {
+    val route = freshRoute()
+    var id    = ""
+
+    Post("/v1/keys", jsonEntity(createBody)) ~> route ~> check {
+      id = extractField(responseAs[String], "id")
+    }
+    val ptB64   = java.util.Base64.getEncoder.encodeToString("data".getBytes)
+    val encBody = s"""{"plaintextBase64":"$ptB64","context":{}}"""
+    Post(s"/v1/keys/$id/encrypt", jsonEntity(encBody)) ~> route ~> check {
+      status shouldBe StatusCodes.InternalServerError
+      responseAs[String] should include(""""code":"IllegalOperation"""")
+    }
+  }
+
+  test("POST /v1/keys/{id}/wrap + /unwrap round-trip recovers the DEK bytes") {
+    val route = freshRoute()
+    var id    = ""
+
+    Post("/v1/keys", jsonEntity(createBody)) ~> route ~> check {
+      id = extractField(responseAs[String], "id")
+    }
+    Post(s"/v1/keys/$id/activate") ~> route ~> check(status shouldBe StatusCodes.OK)
+
+    val dek        = "0123456789abcdef0123456789abcdef" // 32 bytes, representative DEK
+    val dekB64     = java.util.Base64.getEncoder.encodeToString(dek.getBytes)
+    var wrappedB64 = ""
+
+    Post(s"/v1/keys/$id/wrap", jsonEntity(s"""{"dekBase64":"$dekB64"}""")) ~> route ~> check {
+      status shouldBe StatusCodes.OK
+      wrappedB64 = extractField(responseAs[String], "wrappedDekBase64")
+      wrappedB64.nonEmpty shouldBe true
+    }
+
+    val unwrapBody = s"""{"wrappedDekBase64":"$wrappedB64"}"""
+    Post(s"/v1/keys/$id/unwrap", jsonEntity(unwrapBody)) ~> route ~> check {
+      status shouldBe StatusCodes.OK
+      val recoveredB64 = extractField(responseAs[String], "dekBase64")
+      new String(java.util.Base64.getDecoder.decode(recoveredB64), "UTF-8") shouldBe dek
+    }
+  }
+
+  test("POST /v1/keys/{id}/wrap on a PreActive key returns 500 IllegalOperation") {
+    val route = freshRoute()
+    var id    = ""
+
+    Post("/v1/keys", jsonEntity(createBody)) ~> route ~> check {
+      id = extractField(responseAs[String], "id")
+    }
+    val dekB64 = java.util.Base64.getEncoder.encodeToString("dek".getBytes)
+    Post(s"/v1/keys/$id/wrap", jsonEntity(s"""{"dekBase64":"$dekB64"}""")) ~> route ~> check {
+      status shouldBe StatusCodes.InternalServerError
+      responseAs[String] should include(""""code":"IllegalOperation"""")
+    }
+  }
+
+  test("POST /v1/keys/{id}/unwrap with a malformed base64 returns 400 InvalidField") {
+    val route = freshRoute()
+    var id    = ""
+
+    Post("/v1/keys", jsonEntity(createBody)) ~> route ~> check {
+      id = extractField(responseAs[String], "id")
+    }
+    Post(s"/v1/keys/$id/activate") ~> route ~> check(status shouldBe StatusCodes.OK)
+
+    Post(
+      s"/v1/keys/$id/unwrap",
+      jsonEntity("""{"wrappedDekBase64":"not-base-64-at-all!"}""")
+    ) ~> route ~> check {
+      status shouldBe StatusCodes.BadRequest
+      responseAs[String] should include(""""code":"InvalidField"""")
+    }
+  }
+
+  test("POST /v1/keys/{id}/compromise transitions the key to Compromised and locks crypto ops") {
+    val route = freshRoute()
+    var id    = ""
+
+    Post("/v1/keys", jsonEntity(createBody)) ~> route ~> check {
+      id = extractField(responseAs[String], "id")
+    }
+    Post(s"/v1/keys/$id/activate") ~> route ~> check(status shouldBe StatusCodes.OK)
+
+    Post(
+      s"/v1/keys/$id/compromise",
+      jsonEntity("""{"reason":"leaked in S3 audit"}""")
+    ) ~> route ~> check {
+      status shouldBe StatusCodes.OK
+      responseAs[String] should include(""""state":"Compromised"""")
+    }
+
+    // Subsequent /sign refuses with IllegalOperation.
+    val msgB64   = java.util.Base64.getEncoder.encodeToString("data".getBytes)
+    val signBody = s"""{"messageBase64":"$msgB64","algorithm":"RsaPssSha256"}"""
+    Post(s"/v1/keys/$id/sign", jsonEntity(signBody)) ~> route ~> check {
+      status shouldBe StatusCodes.InternalServerError
+      responseAs[String] should include(""""code":"IllegalOperation"""")
+    }
+  }
+
+  test("POST /v1/keys/{id}/compromise with a blank reason returns 400 InvalidField") {
+    val route = freshRoute()
+    var id    = ""
+
+    Post("/v1/keys", jsonEntity(createBody)) ~> route ~> check {
+      id = extractField(responseAs[String], "id")
+    }
+    Post(s"/v1/keys/$id/compromise", jsonEntity("""{"reason":"   "}""")) ~> route ~> check {
+      status shouldBe StatusCodes.BadRequest
+      responseAs[String] should include(""""code":"InvalidField"""")
+    }
+  }
+
+  test("POST /v1/keys/{id}/rotate bumps currentVersion and keeps state Active") {
+    val route = freshRoute()
+    var id    = ""
+
+    Post("/v1/keys", jsonEntity(createBody)) ~> route ~> check {
+      id = extractField(responseAs[String], "id")
+    }
+    Post(s"/v1/keys/$id/activate") ~> route ~> check(status shouldBe StatusCodes.OK)
+
+    Post(s"/v1/keys/$id/rotate", jsonEntity("""{"policy":"Manual"}""")) ~> route ~> check {
+      status shouldBe StatusCodes.OK
+      val body = responseAs[String]
+      body should include(""""state":"Active"""")
+      body should include(""""currentVersion":2""")
+    }
+  }
+
+  test("POST /v1/keys/{id}/rotate on a PreActive key returns 500 IllegalOperation") {
+    val route = freshRoute()
+    var id    = ""
+
+    Post("/v1/keys", jsonEntity(createBody)) ~> route ~> check {
+      id = extractField(responseAs[String], "id")
+    }
+    Post(s"/v1/keys/$id/rotate", jsonEntity("""{"policy":"Manual"}""")) ~> route ~> check {
+      status shouldBe StatusCodes.InternalServerError
+      responseAs[String] should include(""""code":"IllegalOperation"""")
+    }
+  }
+
+  test("POST /v1/keys/{id}/rotate with a malformed policy returns 400 InvalidField") {
+    val route = freshRoute()
+    var id    = ""
+
+    Post("/v1/keys", jsonEntity(createBody)) ~> route ~> check {
+      id = extractField(responseAs[String], "id")
+    }
+    Post(s"/v1/keys/$id/activate") ~> route ~> check(status shouldBe StatusCodes.OK)
+
+    Post(s"/v1/keys/$id/rotate", jsonEntity("""{"policy":"NopeBased"}""")) ~> route ~> check {
+      status shouldBe StatusCodes.BadRequest
+      responseAs[String] should include(""""code":"InvalidField"""")
+    }
+  }

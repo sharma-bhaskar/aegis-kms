@@ -52,5 +52,30 @@ object KeyEvent:
       actorSubject: String
   ) extends KeyEvent
 
+  /** Operator-issued compromise: locks the key out of every cryptographic operation. The `reason` is the
+    * mandatory human-readable justification — it ends up on the highest-severity audit row and in the
+    * post-incident report.
+    */
+  final case class Compromised(
+      eventId: String,
+      at: Instant,
+      keyId: KeyId,
+      actorSubject: String,
+      reason: String
+  ) extends KeyEvent
+
+  /** Rotation: the logical key's `currentVersion` advanced from `newVersion - 1` to `newVersion`. The
+    * `policy` records why — `Manual` for an explicit `aegis keys rotate` call, `TimeBased` / `OpCountBased`
+    * (rendered string) for the auto-scheduler that lands in v0.2.0.
+    */
+  final case class Rotated(
+      eventId: String,
+      at: Instant,
+      keyId: KeyId,
+      actorSubject: String,
+      newVersion: Int,
+      policy: String
+  ) extends KeyEvent
+
   /** Generate a fresh event id. UUIDv4 is fine — events are not ordered by id, only by `at`. */
   def freshId(): String = UUID.randomUUID().toString

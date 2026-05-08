@@ -110,6 +110,84 @@ final class AuditingKeyService(inner: KeyService[IO], sink: AuditSink[IO]) exten
       AuditRecord(now, by, Operation.Verify, id.value, outcome, corr)
     }
 
+  def encrypt(
+      id: KeyId,
+      plaintext: Array[Byte],
+      context: Map[String, String],
+      by: Principal
+  ): IO[Either[KmsError, Ciphertext]] =
+    instrument {
+      inner.encrypt(id, plaintext, context, by)
+    } { (now, corr, result) =>
+      val outcome = result match
+        case Right(_) =>
+          s"Success ctxKeys=${context.keys.toSeq.sorted.mkString(",")} ptLen=${plaintext.length}"
+        case Left(e) => s"Failed code=${e.code}"
+      AuditRecord(now, by, Operation.Encrypt, id.value, outcome, corr)
+    }
+
+  def decrypt(
+      id: KeyId,
+      ciphertext: Ciphertext,
+      context: Map[String, String],
+      by: Principal
+  ): IO[Either[KmsError, Array[Byte]]] =
+    instrument {
+      inner.decrypt(id, ciphertext, context, by)
+    } { (now, corr, result) =>
+      val outcome = result match
+        case Right(pt) => s"Success ctxKeys=${context.keys.toSeq.sorted.mkString(",")} ptLen=${pt.length}"
+        case Left(e)   => s"Failed code=${e.code}"
+      AuditRecord(now, by, Operation.Decrypt, id.value, outcome, corr)
+    }
+
+  def wrap(id: KeyId, dek: Array[Byte], by: Principal): IO[Either[KmsError, WrappedDek]] =
+    instrument {
+      inner.wrap(id, dek, by)
+    } { (now, corr, result) =>
+      val outcome = result match
+        case Right(_) => s"Success dekLen=${dek.length}"
+        case Left(e)  => s"Failed code=${e.code}"
+      AuditRecord(now, by, Operation.Wrap, id.value, outcome, corr)
+    }
+
+  def unwrap(
+      id: KeyId,
+      wrapped: WrappedDek,
+      by: Principal
+  ): IO[Either[KmsError, Array[Byte]]] =
+    instrument {
+      inner.unwrap(id, wrapped, by)
+    } { (now, corr, result) =>
+      val outcome = result match
+        case Right(dek) => s"Success dekLen=${dek.length}"
+        case Left(e)    => s"Failed code=${e.code}"
+      AuditRecord(now, by, Operation.Unwrap, id.value, outcome, corr)
+    }
+
+  def compromise(id: KeyId, reason: String, by: Principal): IO[Either[KmsError, ManagedKey]] =
+    instrument {
+      inner.compromise(id, reason, by)
+    } { (now, corr, result) =>
+      // Compromise is the highest-severity event in the system. Mark the audit row with the
+      // `severity=Critical` prefix so SIEM ingestion can route on it without re-deriving from
+      // the operation type alone.
+      val outcome = result match
+        case Right(_) => s"severity=Critical Success reason=$reason"
+        case Left(e)  => s"severity=Critical Failed code=${e.code} reason=$reason"
+      AuditRecord(now, by, Operation.Compromise, id.value, outcome, corr)
+    }
+
+  def rotate(id: KeyId, policy: RotationPolicy, by: Principal): IO[Either[KmsError, ManagedKey]] =
+    instrument {
+      inner.rotate(id, policy, by)
+    } { (now, corr, result) =>
+      val outcome = result match
+        case Right(k) => s"Success newVersion=${k.currentVersion} policy=${policy.render}"
+        case Left(e)  => s"Failed code=${e.code} policy=${policy.render}"
+      AuditRecord(now, by, Operation.Rotate, id.value, outcome, corr)
+    }
+
   // ── Helpers ────────────────────────────────────────────────────────────────
 
   /** Threads a fresh correlation id and a wall-clock timestamp through the action and writes the resulting

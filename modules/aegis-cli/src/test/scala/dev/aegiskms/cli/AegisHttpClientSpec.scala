@@ -129,6 +129,97 @@ final class AegisHttpClientSpec extends AnyFunSuite with Matchers:
     )
   }
 
+  test("encryptKey POSTs to /v1/keys/{id}/encrypt with the context map and Content-Type") {
+    var seen: Option[HttpPort.Request] = None
+    val port = new RecordingPort(req => {
+      seen = Some(req)
+      HttpPort.Response(200, EncryptResponse("Y2lwaGVy", Map("dataset" -> "q2")).asJson.noSpaces)
+    })
+    val client = new AegisHttpClient(port, baseUrl, principal)
+    val res    = client.encryptKey(sampleKey.id, EncryptRequest("aGVsbG8=", Map("dataset" -> "q2")))
+
+    res shouldBe Right(EncryptResponse("Y2lwaGVy", Map("dataset" -> "q2")))
+    seen.get.method shouldBe "POST"
+    seen.get.url shouldBe s"$baseUrl/v1/keys/${sampleKey.id}/encrypt"
+    seen.get.headers.get("Content-Type") shouldBe Some("application/json")
+    seen.get.body.get should include("\"dataset\":\"q2\"")
+  }
+
+  test("decryptKey POSTs to /v1/keys/{id}/decrypt and decodes the plaintext") {
+    val port =
+      new RecordingPort(_ => HttpPort.Response(200, DecryptResponse("aGVsbG8=", Map.empty).asJson.noSpaces))
+    val client = new AegisHttpClient(port, baseUrl, principal)
+    client.decryptKey(sampleKey.id, DecryptRequest("Y2lwaGVy", Map.empty)) shouldBe Right(
+      DecryptResponse("aGVsbG8=", Map.empty)
+    )
+  }
+
+  test("encryptKey decodes a server-side CryptographicFailure into ClientError.Server") {
+    val errBody = """{"code":"CryptographicFailure","message":"context mismatch"}"""
+    val port    = new RecordingPort(_ => HttpPort.Response(500, errBody))
+    val client  = new AegisHttpClient(port, baseUrl, principal)
+    val res     = client.encryptKey(sampleKey.id, EncryptRequest("aGVsbG8=", Map.empty))
+    res shouldBe Left(ClientError.Server(500, "CryptographicFailure", "context mismatch"))
+  }
+
+  test("wrapKey POSTs to /v1/keys/{id}/wrap with Content-Type and decodes the wrapped blob") {
+    var seen: Option[HttpPort.Request] = None
+    val port = new RecordingPort(req => {
+      seen = Some(req)
+      HttpPort.Response(200, WrapResponse("d3JhcHBlZA==").asJson.noSpaces)
+    })
+    val client = new AegisHttpClient(port, baseUrl, principal)
+    val res    = client.wrapKey(sampleKey.id, WrapRequest("aGVsbG8="))
+
+    res shouldBe Right(WrapResponse("d3JhcHBlZA=="))
+    seen.get.method shouldBe "POST"
+    seen.get.url shouldBe s"$baseUrl/v1/keys/${sampleKey.id}/wrap"
+    seen.get.headers.get("Content-Type") shouldBe Some("application/json")
+    seen.get.body.get should include("\"dekBase64\":\"aGVsbG8=\"")
+  }
+
+  test("unwrapKey POSTs to /v1/keys/{id}/unwrap and decodes the DEK") {
+    val port =
+      new RecordingPort(_ => HttpPort.Response(200, UnwrapResponse("aGVsbG8=").asJson.noSpaces))
+    val client = new AegisHttpClient(port, baseUrl, principal)
+    client.unwrapKey(sampleKey.id, UnwrapRequest("d3JhcHBlZA==")) shouldBe Right(
+      UnwrapResponse("aGVsbG8=")
+    )
+  }
+
+  test("compromiseKey POSTs to /v1/keys/{id}/compromise with the reason and decodes the key") {
+    var seen: Option[HttpPort.Request] = None
+    val compromisedKey                 = sampleKey.copy(state = "Compromised")
+    val port = new RecordingPort(req => {
+      seen = Some(req)
+      HttpPort.Response(200, compromisedKey.asJson.noSpaces)
+    })
+    val client = new AegisHttpClient(port, baseUrl, principal)
+    val res    = client.compromiseKey(sampleKey.id, CompromiseRequest("leaked in S3"))
+
+    res shouldBe Right(compromisedKey)
+    seen.get.method shouldBe "POST"
+    seen.get.url shouldBe s"$baseUrl/v1/keys/${sampleKey.id}/compromise"
+    seen.get.headers.get("Content-Type") shouldBe Some("application/json")
+    seen.get.body.get should include("\"reason\":\"leaked in S3\"")
+  }
+
+  test("rotateKey POSTs to /v1/keys/{id}/rotate with the policy and decodes the rotated key") {
+    var seen: Option[HttpPort.Request] = None
+    val rotatedKey                     = sampleKey.copy(state = "Active", currentVersion = 2)
+    val port = new RecordingPort(req => {
+      seen = Some(req)
+      HttpPort.Response(200, rotatedKey.asJson.noSpaces)
+    })
+    val client = new AegisHttpClient(port, baseUrl, principal)
+    val res    = client.rotateKey(sampleKey.id, RotateRequest("Manual"))
+
+    res shouldBe Right(rotatedKey)
+    seen.get.method shouldBe "POST"
+    seen.get.url shouldBe s"$baseUrl/v1/keys/${sampleKey.id}/rotate"
+    seen.get.body.get should include("\"policy\":\"Manual\"")
+  }
+
   // ── Stub ────────────────────────────────────────────────────────────────────
 
   final private class RecordingPort(handler: HttpPort.Request => HttpPort.Response) extends HttpPort:

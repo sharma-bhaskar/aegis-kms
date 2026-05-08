@@ -50,11 +50,18 @@ object JsonCodecs:
       id: String,
       spec: KeySpecDto,
       createdAt: Instant,
-      state: String
+      state: String,
+      currentVersion: Int = 1
   )
   object ManagedKeyDto:
     def fromCore(k: ManagedKey): ManagedKeyDto =
-      ManagedKeyDto(k.id.value, KeySpecDto.fromCore(k.spec), k.createdAt, k.state.toString)
+      ManagedKeyDto(
+        k.id.value,
+        KeySpecDto.fromCore(k.spec),
+        k.createdAt,
+        k.state.toString,
+        k.currentVersion
+      )
 
     given Encoder[ManagedKeyDto] = deriveEncoder
     given Decoder[ManagedKeyDto] = deriveDecoder
@@ -99,3 +106,77 @@ object JsonCodecs:
   object VerifyResponse:
     given Encoder[VerifyResponse] = deriveEncoder
     given Decoder[VerifyResponse] = deriveDecoder
+
+  // ── Encrypt / decrypt DTOs ─────────────────────────────────────────────────
+
+  /** Encrypt request body. `plaintextBase64` is the base64-encoded message bytes; `context` is the optional
+    * encryption-context map (additional authenticated data). Both encrypt and decrypt must supply the same
+    * context — a mismatch on decrypt returns a 400 with `CryptographicFailure`.
+    */
+  final case class EncryptRequest(plaintextBase64: String, context: Map[String, String] = Map.empty)
+  object EncryptRequest:
+    given Encoder[EncryptRequest] = deriveEncoder
+    given Decoder[EncryptRequest] = deriveDecoder
+
+  final case class EncryptResponse(ciphertextBase64: String, context: Map[String, String])
+  object EncryptResponse:
+    def of(ct: Ciphertext, context: Map[String, String]): EncryptResponse =
+      EncryptResponse(ct.toBase64, context)
+
+    given Encoder[EncryptResponse] = deriveEncoder
+    given Decoder[EncryptResponse] = deriveDecoder
+
+  final case class DecryptRequest(ciphertextBase64: String, context: Map[String, String] = Map.empty)
+  object DecryptRequest:
+    given Encoder[DecryptRequest] = deriveEncoder
+    given Decoder[DecryptRequest] = deriveDecoder
+
+  final case class DecryptResponse(plaintextBase64: String, context: Map[String, String])
+  object DecryptResponse:
+    given Encoder[DecryptResponse] = deriveEncoder
+    given Decoder[DecryptResponse] = deriveDecoder
+
+  // ── Wrap / unwrap DTOs ─────────────────────────────────────────────────────
+
+  /** Wrap request body. `dekBase64` is the base64-encoded DEK material to be wrapped under the named KEK. */
+  final case class WrapRequest(dekBase64: String)
+  object WrapRequest:
+    given Encoder[WrapRequest] = deriveEncoder
+    given Decoder[WrapRequest] = deriveDecoder
+
+  final case class WrapResponse(wrappedDekBase64: String)
+  object WrapResponse:
+    def of(w: WrappedDek): WrapResponse = WrapResponse(w.toBase64)
+
+    given Encoder[WrapResponse] = deriveEncoder
+    given Decoder[WrapResponse] = deriveDecoder
+
+  final case class UnwrapRequest(wrappedDekBase64: String)
+  object UnwrapRequest:
+    given Encoder[UnwrapRequest] = deriveEncoder
+    given Decoder[UnwrapRequest] = deriveDecoder
+
+  final case class UnwrapResponse(dekBase64: String)
+  object UnwrapResponse:
+    given Encoder[UnwrapResponse] = deriveEncoder
+    given Decoder[UnwrapResponse] = deriveDecoder
+
+  // ── Compromise DTO ─────────────────────────────────────────────────────────
+
+  /** Compromise request body. The mandatory `reason` is the human-readable justification recorded in the
+    * audit row. Empty strings are rejected at the route layer.
+    */
+  final case class CompromiseRequest(reason: String)
+  object CompromiseRequest:
+    given Encoder[CompromiseRequest] = deriveEncoder
+    given Decoder[CompromiseRequest] = deriveDecoder
+
+  // ── Rotate DTO ─────────────────────────────────────────────────────────────
+
+  /** Rotate request body. `policy` is the wire-format `RotationPolicy.render` string. Defaults to `"Manual"`
+    * when the field is absent.
+    */
+  final case class RotateRequest(policy: String = "Manual")
+  object RotateRequest:
+    given Encoder[RotateRequest] = deriveEncoder
+    given Decoder[RotateRequest] = deriveDecoder

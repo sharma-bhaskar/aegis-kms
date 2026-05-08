@@ -2,12 +2,22 @@ package dev.aegiskms.cli
 
 import dev.aegiskms.cli.AegisHttpClient.{ClientError, renderError}
 import dev.aegiskms.cli.WireFormats.{
+  CompromiseRequest,
+  DecryptRequest,
+  DecryptResponse,
+  EncryptRequest,
+  EncryptResponse,
   KeySpecDto,
   ManagedKeyDto,
+  RotateRequest,
   SignRequest,
   SignResponse,
+  UnwrapRequest,
+  UnwrapResponse,
   VerifyRequest,
-  VerifyResponse
+  VerifyResponse,
+  WrapRequest,
+  WrapResponse
 }
 
 import java.nio.file.{Files, Path}
@@ -120,6 +130,101 @@ object Commands:
       catch case e: Exception => Left(s"could not read $path: ${e.getMessage}")
     else Right(arg.getBytes("UTF-8"))
 
+  // ── keys encrypt ───────────────────────────────────────────────────────────
+
+  /** `aegis keys encrypt --id <id> --plaintext <text|@file> [--context k=v,k2=v2]`. The plaintext can be
+    * supplied inline (UTF-8) or read from a file path prefixed with `@`. The ciphertext is printed as base64.
+    */
+  def keysEncrypt(
+      client: AegisHttpClient,
+      id: String,
+      plaintext: String,
+      context: Map[String, String]
+  ): CommandResult =
+    readMessage(plaintext) match
+      case Left(msg) => CommandResult.err(s"keys encrypt: $msg")
+      case Right(bytes) =>
+        val req = EncryptRequest(Base64.getEncoder.encodeToString(bytes), context)
+        client.encryptKey(id, req) match
+          case Right(EncryptResponse(ctB64, ctx)) =>
+            val ctxLine = if ctx.isEmpty then "" else s"\ncontext: ${formatContext(ctx)}"
+            CommandResult.out(s"ciphertext: $ctB64$ctxLine")
+          case Left(err) => CommandResult.err(renderError(err), exitCodeFor(err))
+
+  // ── keys decrypt ───────────────────────────────────────────────────────────
+
+  /** `aegis keys decrypt --id <id> --ciphertext <base64> [--context k=v,k2=v2]`. The plaintext is printed as
+    * base64 (it may not be valid UTF-8) plus a best-effort UTF-8 rendering when it decodes cleanly.
+    */
+  def keysDecrypt(
+      client: AegisHttpClient,
+      id: String,
+      ciphertextB64: String,
+      context: Map[String, String]
+  ): CommandResult =
+    val req = DecryptRequest(ciphertextB64, context)
+    client.decryptKey(id, req) match
+      case Right(DecryptResponse(ptB64, _)) =>
+        CommandResult.out(s"plaintext: $ptB64")
+      case Left(err) => CommandResult.err(renderError(err), exitCodeFor(err))
+
+  private def formatContext(ctx: Map[String, String]): String =
+    ctx.toSeq.sortBy(_._1).map((k, v) => s"$k=$v").mkString(",")
+
+  // ── keys wrap ──────────────────────────────────────────────────────────────
+
+  /** `aegis keys wrap --id <id> --dek <text|@file>`. The DEK can be inline (UTF-8) or read from a file path
+    * prefixed with `@` (the common case — a 32-byte AES-256 DEK won't be valid UTF-8). The wrapped blob is
+    * printed as base64.
+    */
+  def keysWrap(client: AegisHttpClient, id: String, dek: String): CommandResult =
+    readMessage(dek) match
+      case Left(msg) => CommandResult.err(s"keys wrap: $msg")
+      case Right(bytes) =>
+        val req = WrapRequest(Base64.getEncoder.encodeToString(bytes))
+        client.wrapKey(id, req) match
+          case Right(WrapResponse(wrappedB64)) =>
+            CommandResult.out(s"wrapped: $wrappedB64")
+          case Left(err) => CommandResult.err(renderError(err), exitCodeFor(err))
+
+  // ── keys unwrap ────────────────────────────────────────────────────────────
+
+  /** `aegis keys unwrap --id <id> --wrapped <b64>`. Prints the recovered DEK as base64 (it may not be valid
+    * UTF-8 — DEKs are random bytes).
+    */
+  def keysUnwrap(client: AegisHttpClient, id: String, wrappedB64: String): CommandResult =
+    val req = UnwrapRequest(wrappedB64)
+    client.unwrapKey(id, req) match
+      case Right(UnwrapResponse(dekB64)) =>
+        CommandResult.out(s"dek: $dekB64")
+      case Left(err) => CommandResult.err(renderError(err), exitCodeFor(err))
+
+  // ── keys compromise ────────────────────────────────────────────────────────
+
+  /** `aegis keys compromise --id <id> --reason "..."`. Marks a key as compromised — irreversible. The reason
+    * is mandatory and ends up on the audit row at `severity=Critical`.
+    */
+  def keysCompromise(client: AegisHttpClient, id: String, reason: String): CommandResult =
+    val req = CompromiseRequest(reason)
+    client.compromiseKey(id, req) match
+      case Right(key) =>
+        CommandResult.out(s"compromised ${key.id}\nreason: $reason\nstate:  ${key.state}")
+      case Left(err) => CommandResult.err(renderError(err), exitCodeFor(err))
+
+  // ── keys rotate ────────────────────────────────────────────────────────────
+
+  /** `aegis keys rotate --id <id> [--policy <policy>]`. Bumps the key's currentVersion. Defaults to `Manual`;
+    * supply `TimeBased:7days` or `OpCountBased:10000` to record an automatic rotation.
+    */
+  def keysRotate(client: AegisHttpClient, id: String, policy: String): CommandResult =
+    val req = RotateRequest(policy)
+    client.rotateKey(id, req) match
+      case Right(key) =>
+        CommandResult.out(
+          s"rotated ${key.id}\nversion: ${key.currentVersion}\nstate:   ${key.state}\npolicy:  $policy"
+        )
+      case Left(err) => CommandResult.err(renderError(err), exitCodeFor(err))
+
   // ── placeholders for agent-native commands (backends arrive in later PRs) ──
 
   /** `aegis agent issue` — issues a scoped agent token. Real implementation lands once the agent-token
@@ -154,6 +259,7 @@ object Commands:
        |algorithm: ${key.spec.algorithm}-${key.spec.sizeBits}
        |type:      ${key.spec.objectType}
        |state:     ${key.state}
+       |version:   ${key.currentVersion}
        |createdAt: ${key.createdAt}""".stripMargin
 
   /** Map server errors to exit codes: 4 for not-found, 5 for permission, 1 for everything else. Mirrors the

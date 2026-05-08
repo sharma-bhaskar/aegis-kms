@@ -41,6 +41,79 @@ All notable changes to Aegis will be documented here. This project follows
 - **`ReadmeQuickstartSpec` in `aegis-core`.** Compiles + runs the embedded-library example from
   `README.md` so that snippet can never silently bitrot. If you change the README's
   "Quickstart — embedding as a library" Scala block, mirror the change in this test.
+- **Rotate(id, policy) across the whole stack (closes #8).** New
+  `rotate(id, policy, by)` method on `KeyService[F[_]]`. `ManagedKey` gains
+  `currentVersion: Int = 1` (additive — defaulted for back-compat); rotation increments it
+  by one. Legal source state is `Active` only; rotating from any other state returns
+  `KmsError(IllegalOperation, ...)`. The new value type `RotationPolicy` (`Manual |
+  TimeBased(FiniteDuration) | OpCountBased(Long)`) is recorded on the rotation event and
+  audit row — `Manual` for explicit calls today, the auto variants reserved for the v0.2.0
+  scheduler. New `KeyEvent.Rotated(newVersion, policy)` journal event with circe codec so
+  replays restore `currentVersion` deterministically. The "old version stays
+  verifiable/decryptable after rotation" contract from `docs/ARCHITECTURE.md` §3 is
+  preserved without per-version material storage: the in-memory dev backend keys its
+  deterministic MAC by `KeyId` only (so byte output is version-stable), and AWS KMS
+  handles per-version material internally — the same CMK decrypts both pre- and
+  post-rotation ciphertexts. Added `Operation.Rotate` to the IAM allowlist enum;
+  `AuthorizingKeyService` guards via the policy engine; `AuditingKeyService` records
+  `newVersion=N policy=...`; `ActorBackedKeyService.rotate` routes through the actor
+  mailbox for journal-serialized state changes; `PostgresEventJournal` learns the new event
+  kind. On the wire: `POST /v1/keys/{id}/rotate` (request `{policy?}`, response full
+  `ManagedKeyDto` with the bumped `currentVersion`). The CLI gained `aegis keys rotate
+  --id <id> [--policy Manual|TimeBased:7days|OpCountBased:N]`. `ManagedKeyDto` (HTTP +
+  CLI wire shapes) gained the `currentVersion` field; existing JSON without the field
+  decodes as `currentVersion=1` via the case-class default.
+- **Compromise operator override across the whole stack (closes #9).** New
+  `compromise(id, reason, by)` method on `KeyService[F[_]]`. Marks the key as `Compromised`;
+  from this state every cryptographic operation — including `verify` — refuses with
+  `KmsError(IllegalOperation, ...)`. (Note: `verify` was previously permitted on any state;
+  this PR tightens it to refuse `Compromised` and `Destroyed`, matching the lock-down
+  semantics described in `docs/ARCHITECTURE.md` §3.) Compromise is one-way: from
+  `{PreActive, Active, Deactivated}` → `Compromised`; `Destroyed` keys cannot be compromised.
+  The mandatory `reason` is a non-empty human-readable justification (e.g. "discovered in S3
+  audit leak 2026-05-08") and ends up on the audit row at `severity=Critical`. Added
+  `Operation.Compromise` to the IAM allowlist enum and a new `KeyEvent.Compromised` journal
+  event with circe codec so the journal replays the state transition deterministically. The
+  state-mutating call routes through `KeyOpsActor` so the journal append + state transition
+  are serialized with the rest of the lifecycle. On the wire: `POST /v1/keys/{id}/compromise`
+  (request: `{reason}`, response: full `ManagedKeyDto`); blank reasons are rejected with 400
+  `InvalidField`. The CLI gained `aegis keys compromise --id <id> --reason "<text>"`.
+- **Wrap / unwrap across the whole stack (closes #7).** New `wrap(id, dek, by)` and
+  `unwrap(id, wrappedDek, by)` methods on `KeyService[F[_]]` for KMIP-style envelope
+  encryption, with `Operation.Wrap` / `Operation.Unwrap` added to the IAM allowlist enum and
+  a new `WrappedDek` value type. The `RootOfTrust` SPI gained `wrap` / `unwrapDek`;
+  `AwsKmsRootOfTrust` implements them by delegating to the existing AWS KMS `Encrypt` /
+  `Decrypt` calls with an empty `EncryptionContext` (AWS doesn't expose separate Wrap/Unwrap
+  APIs for symmetric CMKs — this is the conventional wire-up). On the wire:
+  `POST /v1/keys/{id}/wrap` (request: `{dekBase64}`, response: `{wrappedDekBase64}`) and
+  `POST /v1/keys/{id}/unwrap` (request: `{wrappedDekBase64}`, response: `{dekBase64}`). The
+  CLI gained `aegis keys wrap --id <id> --dek <text|@file>` and `aegis keys unwrap --id <id>
+  --wrapped <b64>`. Same state-gate as encrypt/decrypt: wrap requires `Active`; unwrap is
+  permitted on `Active` + `Deactivated` so historical wrapped DEKs remain recoverable across
+  rotations, refused on `Compromised` / `Destroyed`. The `AuditingKeyService` decorator
+  records `dekLen` (not the bytes) so audit logs show what was protected without leaking
+  key material.
+- **Encrypt / decrypt across the whole stack (closes #6).** New
+  `encrypt(id, plaintext, context, by)` and `decrypt(id, ciphertext, context, by)` methods on
+  `KeyService[F[_]]`, with `Operation.Encrypt` / `Operation.Decrypt` added to the IAM allowlist
+  enum and a new `Ciphertext` value type. Encryption context (the `Map[String, String]` AAD) is
+  carried as a separate parameter — not embedded in the ciphertext — so the same context must be
+  supplied to both sides, mirroring AWS KMS semantics. A context mismatch on decrypt returns
+  `KmsError(CryptographicFailure, ...)`. The `RootOfTrust` SPI gained the same operations;
+  `AwsKmsRootOfTrust` implements them via the AWS KMS `Encrypt` / `Decrypt` APIs with
+  `EncryptionContext` plumbed through `AwsKmsPort`. On the wire: `POST /v1/keys/{id}/encrypt`
+  (request: `{plaintextBase64, context}`, response: `{ciphertextBase64, context}`) and
+  `POST /v1/keys/{id}/decrypt` (request: `{ciphertextBase64, context}`, response:
+  `{plaintextBase64, context}`). The CLI gained `aegis keys encrypt --id <id> --plaintext
+  <text|@file> [--context k=v,k2=v2]` and `aegis keys decrypt --id <id> --ciphertext <b64>
+  [--context k=v,k2=v2]`. The in-memory `KeyService` uses a deterministic HMAC-keyed
+  XOR-keystream layout (`HMAC(id, ctx) || pt XOR keystream(id, ctx)`) so the dev REST surface
+  has a working round-trip without a real KMS. Encrypt requires the key to be in
+  `KeyState.Active`; decrypt is permitted on `Active` and `Deactivated` keys (so existing
+  ciphertexts remain readable after a future rotation lands), but refused on `Compromised` /
+  `Destroyed`. The `AuditingKeyService` decorator records the **context keys (not values)** and
+  the plaintext length on success, so audit logs surface what was protected without leaking the
+  AAD's payload.
 
 ### Documentation
 

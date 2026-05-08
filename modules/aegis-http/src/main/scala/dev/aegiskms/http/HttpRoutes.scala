@@ -152,6 +152,124 @@ final class HttpRoutes(
                   }
     }
 
+  private val encryptSE: ServerEndpoint[Any, Future] =
+    Endpoints.encryptKey.serverLogic { case (auth, devHdr, idStr, req) =>
+      principalOf(auth, devHdr) match
+        case Left(e) => Future.successful(Left(e))
+        case Right(principal) =>
+          parseId(idStr) match
+            case Left(e) => Future.successful(Left(e))
+            case Right(id) =>
+              decodeBase64(req.plaintextBase64, "plaintextBase64") match
+                case Left(e) => Future.successful(Left(e))
+                case Right(plaintext) =>
+                  runIO(svc.encrypt(id, plaintext, req.context, principal)).map {
+                    case Left(err) => Left(errorOut(err))
+                    case Right(ct) => Right(EncryptResponse.of(ct, req.context))
+                  }
+    }
+
+  private val decryptSE: ServerEndpoint[Any, Future] =
+    Endpoints.decryptKey.serverLogic { case (auth, devHdr, idStr, req) =>
+      principalOf(auth, devHdr) match
+        case Left(e) => Future.successful(Left(e))
+        case Right(principal) =>
+          parseId(idStr) match
+            case Left(e) => Future.successful(Left(e))
+            case Right(id) =>
+              Ciphertext.fromBase64(req.ciphertextBase64) match
+                case Left(msg) =>
+                  Future.successful(
+                    Left(StatusCode.BadRequest -> KmsErrorDto.of(ErrorCode.InvalidField, msg))
+                  )
+                case Right(ct) =>
+                  runIO(svc.decrypt(id, ct, req.context, principal)).map {
+                    case Left(err) => Left(errorOut(err))
+                    case Right(pt) =>
+                      Right(DecryptResponse(java.util.Base64.getEncoder.encodeToString(pt), req.context))
+                  }
+    }
+
+  private val wrapSE: ServerEndpoint[Any, Future] =
+    Endpoints.wrapKey.serverLogic { case (auth, devHdr, idStr, req) =>
+      principalOf(auth, devHdr) match
+        case Left(e) => Future.successful(Left(e))
+        case Right(principal) =>
+          parseId(idStr) match
+            case Left(e) => Future.successful(Left(e))
+            case Right(id) =>
+              decodeBase64(req.dekBase64, "dekBase64") match
+                case Left(e) => Future.successful(Left(e))
+                case Right(dek) =>
+                  runIO(svc.wrap(id, dek, principal)).map {
+                    case Left(err) => Left(errorOut(err))
+                    case Right(w)  => Right(WrapResponse.of(w))
+                  }
+    }
+
+  private val unwrapSE: ServerEndpoint[Any, Future] =
+    Endpoints.unwrapKey.serverLogic { case (auth, devHdr, idStr, req) =>
+      principalOf(auth, devHdr) match
+        case Left(e) => Future.successful(Left(e))
+        case Right(principal) =>
+          parseId(idStr) match
+            case Left(e) => Future.successful(Left(e))
+            case Right(id) =>
+              WrappedDek.fromBase64(req.wrappedDekBase64) match
+                case Left(msg) =>
+                  Future.successful(
+                    Left(StatusCode.BadRequest -> KmsErrorDto.of(ErrorCode.InvalidField, msg))
+                  )
+                case Right(w) =>
+                  runIO(svc.unwrap(id, w, principal)).map {
+                    case Left(err) => Left(errorOut(err))
+                    case Right(dek) =>
+                      Right(UnwrapResponse(java.util.Base64.getEncoder.encodeToString(dek)))
+                  }
+    }
+
+  private val compromiseSE: ServerEndpoint[Any, Future] =
+    Endpoints.compromiseKey.serverLogic { case (auth, devHdr, idStr, req) =>
+      principalOf(auth, devHdr) match
+        case Left(e) => Future.successful(Left(e))
+        case Right(principal) =>
+          parseId(idStr) match
+            case Left(e) => Future.successful(Left(e))
+            case Right(id) =>
+              if req.reason.trim.isEmpty then
+                Future.successful(
+                  Left(StatusCode.BadRequest -> KmsErrorDto.of(
+                    ErrorCode.InvalidField,
+                    "reason must be non-empty"
+                  ))
+                )
+              else
+                runIO(svc.compromise(id, req.reason, principal)).map {
+                  case Left(err) => Left(errorOut(err))
+                  case Right(k)  => Right(ManagedKeyDto.fromCore(k))
+                }
+    }
+
+  private val rotateSE: ServerEndpoint[Any, Future] =
+    Endpoints.rotateKey.serverLogic { case (auth, devHdr, idStr, req) =>
+      principalOf(auth, devHdr) match
+        case Left(e) => Future.successful(Left(e))
+        case Right(principal) =>
+          parseId(idStr) match
+            case Left(e) => Future.successful(Left(e))
+            case Right(id) =>
+              RotationPolicy.fromString(req.policy) match
+                case Left(msg) =>
+                  Future.successful(
+                    Left(StatusCode.BadRequest -> KmsErrorDto.of(ErrorCode.InvalidField, msg))
+                  )
+                case Right(policy) =>
+                  runIO(svc.rotate(id, policy, principal)).map {
+                    case Left(err) => Left(errorOut(err))
+                    case Right(k)  => Right(ManagedKeyDto.fromCore(k))
+                  }
+    }
+
   private def decodeSignRequest(
       req: SignRequest
   ): Either[(StatusCode, KmsErrorDto), (Array[Byte], SigAlgorithm)] =
@@ -186,7 +304,20 @@ final class HttpRoutes(
 
   /** All server endpoints, for the OpenAPI generator and the test stub interpreter. */
   val serverEndpoints: List[ServerEndpoint[Any, Future]] =
-    List(createSE, getSE, activateSE, destroySE, signSE, verifySE)
+    List(
+      createSE,
+      getSE,
+      activateSE,
+      destroySE,
+      signSE,
+      verifySE,
+      encryptSE,
+      decryptSE,
+      wrapSE,
+      unwrapSE,
+      compromiseSE,
+      rotateSE
+    )
 
   /** A pekko-http `Route` that mounts every endpoint. */
   def routes: Route = PekkoHttpServerInterpreter().toRoute(serverEndpoints)

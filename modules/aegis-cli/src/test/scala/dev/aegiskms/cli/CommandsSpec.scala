@@ -153,3 +153,97 @@ final class CommandsSpec extends AnyFunSuite with Matchers:
     finally
       val _ = Files.deleteIfExists(tmp)
   }
+
+  test("keys encrypt prints the base64 ciphertext and the context that was supplied") {
+    val responseBody =
+      EncryptResponse("Y2lwaGVy", Map("dataset" -> "q2", "tenant" -> "acme")).asJson.noSpaces
+    val client = clientReturning(200, responseBody)
+    val r = Commands.keysEncrypt(
+      client,
+      sampleKey.id,
+      "hello",
+      Map("dataset" -> "q2", "tenant" -> "acme")
+    )
+    r.exitCode shouldBe 0
+    r.stdout should include("ciphertext: Y2lwaGVy")
+    r.stdout should include("context: dataset=q2,tenant=acme")
+  }
+
+  test("keys decrypt on success prints the plaintext as base64") {
+    val ptB64        = java.util.Base64.getEncoder.encodeToString("hello".getBytes("UTF-8"))
+    val responseBody = DecryptResponse(ptB64, Map.empty).asJson.noSpaces
+    val client       = clientReturning(200, responseBody)
+    val r            = Commands.keysDecrypt(client, sampleKey.id, "Y2lwaGVy", Map.empty)
+    r.exitCode shouldBe 0
+    r.stdout should include(s"plaintext: $ptB64")
+  }
+
+  test("keys decrypt on a CryptographicFailure exits 1 with the server's reason") {
+    val errBody = """{"code":"CryptographicFailure","message":"context mismatch"}"""
+    val client  = clientReturning(500, errBody)
+    val r       = Commands.keysDecrypt(client, sampleKey.id, "Y2lwaGVy", Map("a" -> "wrong"))
+    r.exitCode shouldBe 1
+    r.stderr should include("CryptographicFailure")
+  }
+
+  test("keys wrap prints the base64 wrapped blob on success") {
+    val responseBody = WrapResponse("d3JhcHBlZA==").asJson.noSpaces
+    val client       = clientReturning(200, responseBody)
+    val r            = Commands.keysWrap(client, sampleKey.id, "secret-dek")
+    r.exitCode shouldBe 0
+    r.stdout should include("wrapped: d3JhcHBlZA==")
+  }
+
+  test("keys unwrap on success prints the DEK as base64") {
+    val dekB64       = java.util.Base64.getEncoder.encodeToString("secret-dek".getBytes("UTF-8"))
+    val responseBody = UnwrapResponse(dekB64).asJson.noSpaces
+    val client       = clientReturning(200, responseBody)
+    val r            = Commands.keysUnwrap(client, sampleKey.id, "d3JhcHBlZA==")
+    r.exitCode shouldBe 0
+    r.stdout should include(s"dek: $dekB64")
+  }
+
+  test("keys wrap on a denied call exits 5 (permission) with the server's reason") {
+    val errBody = KmsErrorDto("PermissionDenied", "subject not granted Wrap").asJson.noSpaces
+    val client  = clientReturning(403, errBody)
+    val r       = Commands.keysWrap(client, sampleKey.id, "dek")
+    r.exitCode shouldBe 5
+    r.stderr should include("PermissionDenied")
+  }
+
+  test("keys compromise prints the resulting state and the reason on success") {
+    val compromisedKey = sampleKey.copy(state = "Compromised")
+    val client         = clientReturning(200, compromisedKey.asJson.noSpaces)
+    val r              = Commands.keysCompromise(client, sampleKey.id, "leaked in S3 audit")
+    r.exitCode shouldBe 0
+    r.stdout should include(s"compromised ${sampleKey.id}")
+    r.stdout should include("reason: leaked in S3 audit")
+    r.stdout should include("state:  Compromised")
+  }
+
+  test("keys compromise on an already-Destroyed key exits non-zero with IllegalOperation") {
+    val errBody = KmsErrorDto("IllegalOperation", "Key is Destroyed").asJson.noSpaces
+    val client  = clientReturning(500, errBody)
+    val r       = Commands.keysCompromise(client, sampleKey.id, "too late")
+    r.exitCode shouldBe 1
+    r.stderr should include("IllegalOperation")
+  }
+
+  test("keys rotate prints the new version and the policy on success") {
+    val rotatedKey = sampleKey.copy(state = "Active", currentVersion = 2)
+    val client     = clientReturning(200, rotatedKey.asJson.noSpaces)
+    val r          = Commands.keysRotate(client, sampleKey.id, "Manual")
+    r.exitCode shouldBe 0
+    r.stdout should include(s"rotated ${sampleKey.id}")
+    r.stdout should include("version: 2")
+    r.stdout should include("policy:  Manual")
+  }
+
+  test("keys rotate on a non-Active source state exits 1 with IllegalOperation") {
+    val errBody =
+      KmsErrorDto("IllegalOperation", "Key is PreActive, must be Active").asJson.noSpaces
+    val client = clientReturning(500, errBody)
+    val r      = Commands.keysRotate(client, sampleKey.id, "Manual")
+    r.exitCode shouldBe 1
+    r.stderr should include("IllegalOperation")
+  }

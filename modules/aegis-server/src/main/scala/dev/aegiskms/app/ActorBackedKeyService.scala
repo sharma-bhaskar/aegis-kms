@@ -67,3 +67,66 @@ final class ActorBackedKeyService(
       case Left(err) => IO.pure(Left(err))
       case Right(_)  => rootOfTrust.verify(id, message, signature)
     }
+
+  def encrypt(
+      id: KeyId,
+      plaintext: Array[Byte],
+      context: Map[String, String],
+      by: Principal
+  ): IO[Either[KmsError, Ciphertext]] =
+    get(id, by).flatMap {
+      case Left(err) => IO.pure(Left(err))
+      case Right(k) if k.state != KeyState.Active =>
+        IO.pure(Left(KmsError(ErrorCode.IllegalOperation, s"Key ${id.value} is ${k.state}, must be Active")))
+      case Right(_) => rootOfTrust.encrypt(id, plaintext, context)
+    }
+
+  def decrypt(
+      id: KeyId,
+      ciphertext: Ciphertext,
+      context: Map[String, String],
+      by: Principal
+  ): IO[Either[KmsError, Array[Byte]]] =
+    get(id, by).flatMap {
+      case Left(err) => IO.pure(Left(err))
+      case Right(k) if k.state == KeyState.Compromised || k.state == KeyState.Destroyed =>
+        IO.pure(Left(KmsError(ErrorCode.IllegalOperation, s"Key ${id.value} is ${k.state}")))
+      case Right(_) => rootOfTrust.decrypt(id, ciphertext, context)
+    }
+
+  def wrap(id: KeyId, dek: Array[Byte], by: Principal): IO[Either[KmsError, WrappedDek]] =
+    get(id, by).flatMap {
+      case Left(err) => IO.pure(Left(err))
+      case Right(k) if k.state != KeyState.Active =>
+        IO.pure(Left(KmsError(ErrorCode.IllegalOperation, s"Key ${id.value} is ${k.state}, must be Active")))
+      case Right(_) => rootOfTrust.wrap(id, dek)
+    }
+
+  def unwrap(
+      id: KeyId,
+      wrapped: WrappedDek,
+      by: Principal
+  ): IO[Either[KmsError, Array[Byte]]] =
+    get(id, by).flatMap {
+      case Left(err) => IO.pure(Left(err))
+      case Right(k) if k.state == KeyState.Compromised || k.state == KeyState.Destroyed =>
+        IO.pure(Left(KmsError(ErrorCode.IllegalOperation, s"Key ${id.value} is ${k.state}")))
+      case Right(_) => rootOfTrust.unwrapDek(id, wrapped)
+    }
+
+  /** State-mutating: routes through the actor mailbox so the journal append + state transition are serialized
+    * with the rest of the lifecycle.
+    */
+  def compromise(id: KeyId, reason: String, by: Principal): IO[Either[KmsError, ManagedKey]] =
+    IO.fromFuture(IO(actor.ask[Either[KmsError, ManagedKey]](ref =>
+      KeyOpsActor.Compromise(id, reason, by, ref)
+    )))
+
+  /** State-mutating: routes through the actor for the same reason as `compromise`. v0.1.1 doesn't yet drive
+    * AWS-side `EnableKeyRotation` from this path — that wiring lands when per-Aegis-key-to-CMK mapping
+    * arrives in v0.2.0 (PR L2).
+    */
+  def rotate(id: KeyId, policy: RotationPolicy, by: Principal): IO[Either[KmsError, ManagedKey]] =
+    IO.fromFuture(IO(actor.ask[Either[KmsError, ManagedKey]](ref =>
+      KeyOpsActor.Rotate(id, policy, by, ref)
+    )))

@@ -119,5 +119,118 @@ object Endpoints:
       .summary("Verify a signature")
       .description("Returns `valid: true` when the signature checks out, `valid: false` otherwise.")
 
+  /** `POST /v1/keys/{id}/encrypt` — encrypt a base64-encoded plaintext. Key must be `Active`. The encryption
+    * context is bound as AAD; the same context must be supplied at decrypt time.
+    */
+  val encryptKey: PublicEndpoint[
+    (Option[String], Option[String], String, EncryptRequest),
+    (StatusCode, KmsErrorDto),
+    EncryptResponse,
+    Any
+  ] =
+    keysBase.post
+      .in(path[String]("id") / "encrypt")
+      .in(jsonBody[EncryptRequest])
+      .out(jsonBody[EncryptResponse])
+      .summary("Encrypt a plaintext")
+      .description(
+        "Encrypts the supplied (base64) plaintext with the key. Encryption context is bound as AAD."
+      )
+
+  /** `POST /v1/keys/{id}/decrypt` — decrypt a ciphertext produced by /encrypt. Same context required. */
+  val decryptKey: PublicEndpoint[
+    (Option[String], Option[String], String, DecryptRequest),
+    (StatusCode, KmsErrorDto),
+    DecryptResponse,
+    Any
+  ] =
+    keysBase.post
+      .in(path[String]("id") / "decrypt")
+      .in(jsonBody[DecryptRequest])
+      .out(jsonBody[DecryptResponse])
+      .summary("Decrypt a ciphertext")
+      .description("Decrypts a ciphertext produced by `/encrypt`. The context must match or the call fails.")
+
+  /** `POST /v1/keys/{id}/wrap` — wrap a data-encryption key under the named KEK. Key must be `Active`. */
+  val wrapKey: PublicEndpoint[
+    (Option[String], Option[String], String, WrapRequest),
+    (StatusCode, KmsErrorDto),
+    WrapResponse,
+    Any
+  ] =
+    keysBase.post
+      .in(path[String]("id") / "wrap")
+      .in(jsonBody[WrapRequest])
+      .out(jsonBody[WrapResponse])
+      .summary("Wrap a DEK")
+      .description(
+        "KMIP-style envelope: the supplied DEK is wrapped under the KEK and returned as opaque bytes."
+      )
+
+  /** `POST /v1/keys/{id}/unwrap` — unwrap a previously wrapped DEK. Permitted on Active + Deactivated. */
+  val unwrapKey: PublicEndpoint[
+    (Option[String], Option[String], String, UnwrapRequest),
+    (StatusCode, KmsErrorDto),
+    UnwrapResponse,
+    Any
+  ] =
+    keysBase.post
+      .in(path[String]("id") / "unwrap")
+      .in(jsonBody[UnwrapRequest])
+      .out(jsonBody[UnwrapResponse])
+      .summary("Unwrap a DEK")
+      .description("Recovers the original DEK bytes. Permitted on Active and Deactivated keys.")
+
+  /** `POST /v1/keys/{id}/compromise` — operator-issued lockdown. The key transitions to `Compromised` and
+    * refuses every cryptographic operation thereafter.
+    */
+  val compromiseKey: PublicEndpoint[
+    (Option[String], Option[String], String, CompromiseRequest),
+    (StatusCode, KmsErrorDto),
+    ManagedKeyDto,
+    Any
+  ] =
+    keysBase.post
+      .in(path[String]("id") / "compromise")
+      .in(jsonBody[CompromiseRequest])
+      .out(jsonBody[ManagedKeyDto])
+      .summary("Compromise a key (operator override)")
+      .description(
+        "Marks the key as Compromised. From this state every cryptographic operation refuses with " +
+          "IllegalOperation. The supplied `reason` is recorded on the audit row at severity=Critical."
+      )
+
+  /** `POST /v1/keys/{id}/rotate` — bump the key's `currentVersion`. Legal source state is `Active` only. */
+  val rotateKey: PublicEndpoint[
+    (Option[String], Option[String], String, RotateRequest),
+    (StatusCode, KmsErrorDto),
+    ManagedKeyDto,
+    Any
+  ] =
+    keysBase.post
+      .in(path[String]("id") / "rotate")
+      .in(jsonBody[RotateRequest])
+      .out(jsonBody[ManagedKeyDto])
+      .summary("Rotate a key (bump current version)")
+      .description(
+        "Increments the key's currentVersion. Legal source state is Active. Existing signatures and " +
+          "ciphertexts produced before the rotation continue to verify and decrypt. The supplied policy " +
+          "is recorded on the audit row."
+      )
+
   /** All endpoint definitions. Used by the OpenAPI generator and tests. */
-  val all: List[AnyEndpoint] = List(createKey, getKey, activateKey, destroyKey, signKey, verifyKey)
+  val all: List[AnyEndpoint] =
+    List(
+      createKey,
+      getKey,
+      activateKey,
+      destroyKey,
+      signKey,
+      verifyKey,
+      encryptKey,
+      decryptKey,
+      wrapKey,
+      unwrapKey,
+      compromiseKey,
+      rotateKey
+    )

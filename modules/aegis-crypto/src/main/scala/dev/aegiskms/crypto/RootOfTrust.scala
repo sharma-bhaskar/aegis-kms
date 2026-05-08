@@ -1,7 +1,16 @@
 package dev.aegiskms.crypto
 
 import cats.effect.IO
-import dev.aegiskms.core.{ErrorCode, KeyId, KeySpec, KmsError, SigAlgorithm, Signature}
+import dev.aegiskms.core.{
+  Ciphertext,
+  ErrorCode,
+  KeyId,
+  KeySpec,
+  KmsError,
+  SigAlgorithm,
+  Signature,
+  WrappedDek
+}
 
 /** SPI for a root-of-trust provider. Implementations live in `dev.aegiskms.crypto.aws`,
   * `dev.aegiskms.crypto.gcp`, `dev.aegiskms.crypto.pkcs11`, etc., and are selected at server startup based on
@@ -38,6 +47,26 @@ trait RootOfTrust[F[_]]:
       message: Array[Byte],
       signature: Signature
   ): F[Either[KmsError, Boolean]]
+
+  // Bulk encryption family — used by `KeyService.encrypt` / `decrypt`. Encryption context is bound as AAD.
+
+  def encrypt(
+      id: KeyId,
+      plaintext: Array[Byte],
+      context: Map[String, String]
+  ): F[Either[KmsError, Ciphertext]]
+
+  def decrypt(
+      id: KeyId,
+      ciphertext: Ciphertext,
+      context: Map[String, String]
+  ): F[Either[KmsError, Array[Byte]]]
+
+  // Key-wrapping family — KMIP-style envelope encryption of DEK material with no AAD.
+
+  def wrap(id: KeyId, dek: Array[Byte]): F[Either[KmsError, WrappedDek]]
+
+  def unwrapDek(id: KeyId, wrapped: WrappedDek): F[Either[KmsError, Array[Byte]]]
 
 final case class WrappedKey(bytes: Array[Byte], rotationId: String)
 final case class RawKey(bytes: Array[Byte])
@@ -84,3 +113,84 @@ object RootOfTrust:
       }.handleError(e =>
         Left(KmsError(ErrorCode.CryptographicFailure, s"in-memory verify failed: ${e.getMessage}"))
       )
+
+    def encrypt(
+        id: KeyId,
+        plaintext: Array[Byte],
+        context: Map[String, String]
+    ): IO[Either[KmsError, Ciphertext]] =
+      IO {
+        Right(Ciphertext(InMemoryAead.seal(id, context, plaintext)))
+      }.handleError(e =>
+        Left(KmsError(ErrorCode.CryptographicFailure, s"in-memory encrypt failed: ${e.getMessage}"))
+      )
+
+    def decrypt(
+        id: KeyId,
+        ciphertext: Ciphertext,
+        context: Map[String, String]
+    ): IO[Either[KmsError, Array[Byte]]] =
+      IO(InMemoryAead.open(id, context, ciphertext.bytes))
+        .handleError(e =>
+          Left(KmsError(ErrorCode.CryptographicFailure, s"in-memory decrypt failed: ${e.getMessage}"))
+        )
+
+    def wrap(id: KeyId, dek: Array[Byte]): IO[Either[KmsError, WrappedDek]] =
+      IO {
+        Right(WrappedDek(InMemoryAead.seal(id, Map.empty, dek)))
+      }.handleError(e =>
+        Left(KmsError(ErrorCode.CryptographicFailure, s"in-memory wrap failed: ${e.getMessage}"))
+      )
+
+    def unwrapDek(id: KeyId, wrapped: WrappedDek): IO[Either[KmsError, Array[Byte]]] =
+      IO(InMemoryAead.open(id, Map.empty, wrapped.bytes))
+        .handleError(e =>
+          Left(KmsError(ErrorCode.CryptographicFailure, s"in-memory unwrap failed: ${e.getMessage}"))
+        )
+
+/** Deterministic AEAD-shaped helper used by the dev/in-memory `RootOfTrust`. Layout: HMAC(id, ctx) ||
+  * plaintext XOR keystream(id, ctx). Round-trips correctly and detects context mismatch via the prefix; not
+  * real confidentiality. Real encryption lives in `AwsKmsRootOfTrust`.
+  */
+private object InMemoryAead:
+
+  def seal(id: KeyId, context: Map[String, String], plaintext: Array[Byte]): Array[Byte] =
+    contextTag(id, context) ++ keystream(id, context, plaintext)
+
+  def open(
+      id: KeyId,
+      context: Map[String, String],
+      ciphertext: Array[Byte]
+  ): Either[KmsError, Array[Byte]] =
+    if ciphertext.length < 32 then
+      Left(KmsError(ErrorCode.CryptographicFailure, "ciphertext too short"))
+    else
+      val (tag, masked) = ciphertext.splitAt(32)
+      if !java.util.Arrays.equals(tag, contextTag(id, context)) then
+        Left(KmsError(ErrorCode.CryptographicFailure, "encryption-context mismatch"))
+      else Right(keystream(id, context, masked))
+
+  private def contextTag(id: KeyId, context: Map[String, String]): Array[Byte] =
+    val mac = javax.crypto.Mac.getInstance("HmacSHA256")
+    mac.init(new javax.crypto.spec.SecretKeySpec(id.value.getBytes("UTF-8"), "HmacSHA256"))
+    mac.doFinal(serialize(context))
+
+  private def keystream(id: KeyId, context: Map[String, String], data: Array[Byte]): Array[Byte] =
+    val mac     = javax.crypto.Mac.getInstance("HmacSHA256")
+    val keyBase = id.value.getBytes("UTF-8") ++ serialize(context)
+    mac.init(new javax.crypto.spec.SecretKeySpec(keyBase, "HmacSHA256"))
+    val out = new Array[Byte](data.length)
+    var i   = 0
+    var ctr = 0
+    while i < data.length do
+      val block = mac.doFinal(java.nio.ByteBuffer.allocate(4).putInt(ctr).array())
+      var j     = 0
+      while j < block.length && i + j < data.length do
+        out(i + j) = (data(i + j) ^ block(j)).toByte
+        j += 1
+      i += block.length
+      ctr += 1
+    out
+
+  private def serialize(context: Map[String, String]): Array[Byte] =
+    context.toSeq.sortBy(_._1).map((k, v) => s"$k=$v").mkString(" ").getBytes("UTF-8")

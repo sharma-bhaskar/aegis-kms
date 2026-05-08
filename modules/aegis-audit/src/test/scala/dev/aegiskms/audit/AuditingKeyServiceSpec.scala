@@ -112,3 +112,100 @@ final class AuditingKeyServiceSpec extends AnyFunSuite with Matchers:
     verifyRecords.head.outcome should include("valid=true")
     verifyRecords(1).outcome should include("valid=false")
   }
+
+  test("encrypt emits a Success record carrying the context keys (not values) and plaintext length") {
+    val (svc, sink) = fixture()
+
+    val created = svc.create(KeySpec.aes256("audit-enc"), alice).unsafeRunSync().toOption.get
+    svc.activate(created.id, alice).unsafeRunSync()
+    svc.encrypt(created.id, "hello".getBytes, Map("dataset" -> "q2", "tenant" -> "acme"), alice)
+      .unsafeRunSync()
+
+    val encRecord = sink.all.unsafeRunSync().find(_.operation == Operation.Encrypt).get
+    encRecord.outcome should startWith("Success")
+    encRecord.outcome should include("ctxKeys=dataset,tenant")
+    encRecord.outcome should include("ptLen=5")
+    // Critically, the audit must NOT leak the values — only the keys are recorded.
+    encRecord.outcome should not include "q2"
+    encRecord.outcome should not include "acme"
+  }
+
+  test("decrypt with a wrong context emits a Failed record with CryptographicFailure") {
+    val (svc, sink) = fixture()
+
+    val created = svc.create(KeySpec.aes256("audit-dec"), alice).unsafeRunSync().toOption.get
+    svc.activate(created.id, alice).unsafeRunSync()
+    val ct = svc.encrypt(created.id, "hi".getBytes, Map("a" -> "1"), alice)
+      .unsafeRunSync().toOption.get
+    svc.decrypt(created.id, ct, Map("a" -> "2"), alice).unsafeRunSync()
+
+    val decRecord = sink.all.unsafeRunSync().find(_.operation == Operation.Decrypt).get
+    decRecord.outcome should startWith("Failed")
+    decRecord.outcome should include("CryptographicFailure")
+  }
+
+  test("wrap emits a Success record carrying the DEK length (not the bytes)") {
+    val (svc, sink) = fixture()
+
+    val created = svc.create(KeySpec.aes256("audit-wrap"), alice).unsafeRunSync().toOption.get
+    svc.activate(created.id, alice).unsafeRunSync()
+    svc.wrap(created.id, "DEKsecretBytes".getBytes, alice).unsafeRunSync()
+
+    val wrapRecord = sink.all.unsafeRunSync().find(_.operation == Operation.Wrap).get
+    wrapRecord.outcome should startWith("Success")
+    wrapRecord.outcome should include("dekLen=14")
+    // Critically, the audit must NOT leak the DEK bytes themselves.
+    wrapRecord.outcome should not include "DEKsecretBytes"
+  }
+
+  test("unwrap emits a Success record with the recovered length") {
+    val (svc, sink) = fixture()
+
+    val created = svc.create(KeySpec.aes256("audit-unwrap"), alice).unsafeRunSync().toOption.get
+    svc.activate(created.id, alice).unsafeRunSync()
+    val w = svc.wrap(created.id, "dek-bytes".getBytes, alice).unsafeRunSync().toOption.get
+    svc.unwrap(created.id, w, alice).unsafeRunSync()
+
+    val unwrapRecord = sink.all.unsafeRunSync().find(_.operation == Operation.Unwrap).get
+    unwrapRecord.outcome should startWith("Success")
+    unwrapRecord.outcome should include("dekLen=9")
+  }
+
+  test("compromise emits a Critical-severity audit record carrying the reason") {
+    val (svc, sink) = fixture()
+
+    val created = svc.create(KeySpec.aes256("audit-compromise"), alice).unsafeRunSync().toOption.get
+    svc.activate(created.id, alice).unsafeRunSync()
+    svc.compromise(created.id, "leaked in S3 audit 2026-05-08", alice).unsafeRunSync()
+
+    val rec = sink.all.unsafeRunSync().find(_.operation == Operation.Compromise).get
+    rec.outcome should startWith("severity=Critical")
+    rec.outcome should include("Success")
+    rec.outcome should include("reason=leaked in S3 audit 2026-05-08")
+  }
+
+  test("rotate emits a Success record carrying the new version and the policy") {
+    val (svc, sink) = fixture()
+
+    val created = svc.create(KeySpec.aes256("audit-rotate"), alice).unsafeRunSync().toOption.get
+    svc.activate(created.id, alice).unsafeRunSync()
+    svc.rotate(created.id, RotationPolicy.Manual, alice).unsafeRunSync()
+
+    val rec = sink.all.unsafeRunSync().find(_.operation == Operation.Rotate).get
+    rec.outcome should startWith("Success")
+    rec.outcome should include("newVersion=2")
+    rec.outcome should include("policy=Manual")
+  }
+
+  test("rotate on a PreActive key emits a Failed record carrying the policy and IllegalOperation") {
+    val (svc, sink) = fixture()
+
+    val created = svc.create(KeySpec.aes256("audit-rotate-fail"), alice).unsafeRunSync().toOption.get
+    // skip activate
+    svc.rotate(created.id, RotationPolicy.Manual, alice).unsafeRunSync()
+
+    val rec = sink.all.unsafeRunSync().find(_.operation == Operation.Rotate).get
+    rec.outcome should startWith("Failed")
+    rec.outcome should include("IllegalOperation")
+    rec.outcome should include("policy=Manual")
+  }

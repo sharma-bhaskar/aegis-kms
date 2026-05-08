@@ -61,6 +61,55 @@ final class AegisHttpClient(http: HttpPort, baseUrl: String, principal: Option[S
       case 200    => decodeBody[VerifyResponse](res.body)
       case status => Left(toError(status, res.body))
 
+  def encryptKey(id: String, req: EncryptRequest): Either[ClientError, EncryptResponse] =
+    val body    = req.asJson.noSpaces
+    val headers = baseHeaders + ("Content-Type" -> "application/json")
+    val res     = http.execute(HttpPort.Request("POST", url(s"/v1/keys/$id/encrypt"), headers, Some(body)))
+    res.status match
+      case 200    => decodeBody[EncryptResponse](res.body)
+      case status => Left(toError(status, res.body))
+
+  def decryptKey(id: String, req: DecryptRequest): Either[ClientError, DecryptResponse] =
+    val body    = req.asJson.noSpaces
+    val headers = baseHeaders + ("Content-Type" -> "application/json")
+    val res     = http.execute(HttpPort.Request("POST", url(s"/v1/keys/$id/decrypt"), headers, Some(body)))
+    res.status match
+      case 200    => decodeBody[DecryptResponse](res.body)
+      case status => Left(toError(status, res.body))
+
+  def wrapKey(id: String, req: WrapRequest): Either[ClientError, WrapResponse] =
+    val body    = req.asJson.noSpaces
+    val headers = baseHeaders + ("Content-Type" -> "application/json")
+    val res     = http.execute(HttpPort.Request("POST", url(s"/v1/keys/$id/wrap"), headers, Some(body)))
+    res.status match
+      case 200    => decodeBody[WrapResponse](res.body)
+      case status => Left(toError(status, res.body))
+
+  def unwrapKey(id: String, req: UnwrapRequest): Either[ClientError, UnwrapResponse] =
+    val body    = req.asJson.noSpaces
+    val headers = baseHeaders + ("Content-Type" -> "application/json")
+    val res     = http.execute(HttpPort.Request("POST", url(s"/v1/keys/$id/unwrap"), headers, Some(body)))
+    res.status match
+      case 200    => decodeBody[UnwrapResponse](res.body)
+      case status => Left(toError(status, res.body))
+
+  def compromiseKey(id: String, req: CompromiseRequest): Either[ClientError, ManagedKeyDto] =
+    val body    = req.asJson.noSpaces
+    val headers = baseHeaders + ("Content-Type" -> "application/json")
+    val res =
+      http.execute(HttpPort.Request("POST", url(s"/v1/keys/$id/compromise"), headers, Some(body)))
+    res.status match
+      case 200    => decodeBody[ManagedKeyDto](res.body)
+      case status => Left(toError(status, res.body))
+
+  def rotateKey(id: String, req: RotateRequest): Either[ClientError, ManagedKeyDto] =
+    val body    = req.asJson.noSpaces
+    val headers = baseHeaders + ("Content-Type" -> "application/json")
+    val res     = http.execute(HttpPort.Request("POST", url(s"/v1/keys/$id/rotate"), headers, Some(body)))
+    res.status match
+      case 200    => decodeBody[ManagedKeyDto](res.body)
+      case status => Left(toError(status, res.body))
+
   // ── Helpers ────────────────────────────────────────────────────────────────
 
   private def url(path: String): String =

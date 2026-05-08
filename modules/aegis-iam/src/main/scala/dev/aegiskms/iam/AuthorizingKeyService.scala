@@ -59,6 +59,38 @@ final class AuthorizingKeyService(
   ): IO[Either[KmsError, Boolean]] =
     guard(by, Operation.Verify, id.value)(inner.verify(id, message, signature, by))
 
+  def encrypt(
+      id: KeyId,
+      plaintext: Array[Byte],
+      context: Map[String, String],
+      by: Principal
+  ): IO[Either[KmsError, Ciphertext]] =
+    guard(by, Operation.Encrypt, id.value)(inner.encrypt(id, plaintext, context, by))
+
+  def decrypt(
+      id: KeyId,
+      ciphertext: Ciphertext,
+      context: Map[String, String],
+      by: Principal
+  ): IO[Either[KmsError, Array[Byte]]] =
+    guard(by, Operation.Decrypt, id.value)(inner.decrypt(id, ciphertext, context, by))
+
+  def wrap(id: KeyId, dek: Array[Byte], by: Principal): IO[Either[KmsError, WrappedDek]] =
+    guard(by, Operation.Wrap, id.value)(inner.wrap(id, dek, by))
+
+  def unwrap(
+      id: KeyId,
+      wrapped: WrappedDek,
+      by: Principal
+  ): IO[Either[KmsError, Array[Byte]]] =
+    guard(by, Operation.Unwrap, id.value)(inner.unwrap(id, wrapped, by))
+
+  def compromise(id: KeyId, reason: String, by: Principal): IO[Either[KmsError, ManagedKey]] =
+    guard(by, Operation.Compromise, id.value)(inner.compromise(id, reason, by))
+
+  def rotate(id: KeyId, policy: RotationPolicy, by: Principal): IO[Either[KmsError, ManagedKey]] =
+    guard(by, Operation.Rotate, id.value)(inner.rotate(id, policy, by))
+
   private def guard[A](by: Principal, op: Operation, resource: String)(
       action: => IO[Either[KmsError, A]]
   ): IO[Either[KmsError, A]] =

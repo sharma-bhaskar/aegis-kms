@@ -1,7 +1,17 @@
 package dev.aegiskms.crypto.aws
 
 import cats.effect.IO
-import dev.aegiskms.core.{Algorithm, ErrorCode, KeyId, KeySpec, KmsError, SigAlgorithm, Signature}
+import dev.aegiskms.core.{
+  Algorithm,
+  Ciphertext,
+  ErrorCode,
+  KeyId,
+  KeySpec,
+  KmsError,
+  SigAlgorithm,
+  Signature,
+  WrappedDek
+}
 import dev.aegiskms.crypto.{RawKey, RootOfTrust, WrappedKey}
 import software.amazon.awssdk.services.kms.KmsClient
 import software.amazon.awssdk.services.kms.model.{DataKeySpec, KmsException, SigningAlgorithmSpec}
@@ -71,6 +81,41 @@ final class AwsKmsRootOfTrust(port: AwsKmsPort, kekArn: String) extends RootOfTr
       )
       Right(ok)
     }.handleError(translate("Verify"))
+
+  /** Encrypt under the configured AWS KMS CMK with `EncryptionContext` bound as AAD. v0.1.1 uses the global
+    * `kekArn`; v0.2.0's per-Aegis-key-to-CMK mapping (PR L2) will resolve the ARN per `KeyId`.
+    */
+  def encrypt(
+      id: KeyId,
+      plaintext: Array[Byte],
+      context: Map[String, String]
+  ): IO[Either[KmsError, Ciphertext]] =
+    IO.blocking {
+      Right(Ciphertext(port.encrypt(kekArn, plaintext, context)))
+    }.handleError(translate("Encrypt"))
+
+  def decrypt(
+      id: KeyId,
+      ciphertext: Ciphertext,
+      context: Map[String, String]
+  ): IO[Either[KmsError, Array[Byte]]] =
+    IO.blocking {
+      Right(port.decryptWithContext(kekArn, ciphertext.bytes, context))
+    }.handleError(translate("Decrypt"))
+
+  /** Wrap a DEK by feeding its bytes to AWS KMS `Encrypt` with no encryption context. The returned blob is
+    * opaque ciphertext that `unwrapDek` recovers via `Decrypt`. AWS doesn't have separate Wrap/Unwrap APIs at
+    * the symmetric-CMK level — this is the conventional wire-up.
+    */
+  def wrap(id: KeyId, dek: Array[Byte]): IO[Either[KmsError, WrappedDek]] =
+    IO.blocking {
+      Right(WrappedDek(port.encrypt(kekArn, dek, Map.empty)))
+    }.handleError(translate("Wrap"))
+
+  def unwrapDek(id: KeyId, wrapped: WrappedDek): IO[Either[KmsError, Array[Byte]]] =
+    IO.blocking {
+      Right(port.decryptWithContext(kekArn, wrapped.bytes, Map.empty))
+    }.handleError(translate("Unwrap"))
 
   // ── Helpers ────────────────────────────────────────────────────────────────
 
