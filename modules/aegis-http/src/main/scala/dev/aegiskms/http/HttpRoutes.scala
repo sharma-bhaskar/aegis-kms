@@ -6,9 +6,12 @@ import dev.aegiskms.core.*
 import dev.aegiskms.http.JsonCodecs.*
 import dev.aegiskms.iam.PrincipalResolver
 import org.apache.pekko.http.scaladsl.server.Route
+import sttp.apispec.openapi.circe.yaml.*
 import sttp.model.StatusCode
+import sttp.tapir.docs.openapi.OpenAPIDocsInterpreter
 import sttp.tapir.server.ServerEndpoint
 import sttp.tapir.server.pekkohttp.PekkoHttpServerInterpreter
+import sttp.tapir.swagger.bundle.SwaggerInterpreter
 
 import scala.concurrent.{ExecutionContext, Future}
 
@@ -319,5 +322,24 @@ final class HttpRoutes(
       rotateSE
     )
 
-  /** A pekko-http `Route` that mounts every endpoint. */
-  def routes: Route = PekkoHttpServerInterpreter().toRoute(serverEndpoints)
+  /** Render the live endpoint set as an OpenAPI 3.1 document. The build-time guarantee here is the same one
+    * that makes this module valuable: the doc is generated from the same `Endpoints.*` values the routes are
+    * interpreted from, so the docs cannot drift from the wire shape. Title/version pin to `Aegis-KMS v0.1.x`
+    * — the version string is informational only (sbt-dynver computes the real artifact version).
+    */
+  val openApiYaml: String =
+    OpenAPIDocsInterpreter()
+      .toOpenAPI(Endpoints.all, "Aegis-KMS REST API", "0.1.x")
+      .toYaml
+
+  /** Swagger UI server endpoints. Mounted at `/docs` (and the OpenAPI YAML at `/docs/docs.yaml`); this
+    * mirrors the convention `swagger-ui-bundle` defaults to. The interpreter takes the same `AnyEndpoint`
+    * list, so adding a new endpoint above automatically shows up in the UI on next boot.
+    */
+  private val swaggerEndpoints: List[ServerEndpoint[Any, Future]] =
+    SwaggerInterpreter()
+      .fromEndpoints[Future](Endpoints.all, "Aegis-KMS REST API", "0.1.x")
+
+  /** A pekko-http `Route` that mounts every endpoint plus the Swagger UI / OpenAPI surface. */
+  def routes: Route =
+    PekkoHttpServerInterpreter().toRoute(serverEndpoints ++ swaggerEndpoints)

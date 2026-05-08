@@ -20,6 +20,13 @@ All notable changes to Aegis will be documented here. This project follows
 
 ### Added
 
+- **OpenAPI 3.1 spec + Swagger UI on the REST plane (closes #52).** `HttpRoutes` now generates an
+  OpenAPI document from the live `Endpoints.all` list and mounts the standard Swagger UI bundle at
+  `/docs/`, with the raw YAML at `/docs/docs.yaml`. Because the spec is derived from the same Tapir
+  endpoint definitions the routes interpret, drift between the docs and the wire shape is impossible
+  by construction. The `tapir-openapi-docs` and `tapir-swagger-ui-bundle` deps were already in
+  `Dependencies.scala` `tapir`; this PR is purely the route plumbing + a regression test that asserts
+  every shipped path appears in the rendered spec.
 - **Docker Compose hardening: no default Postgres password (closes #51).**
   `deploy/docker/docker-compose.yml` no longer ships the
   `aegis-dev-password-change-me` default. Both the Postgres container and the
