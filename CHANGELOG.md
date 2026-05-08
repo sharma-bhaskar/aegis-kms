@@ -27,6 +27,41 @@ All notable changes to Aegis will be documented here. This project follows
   by construction. The `tapir-openapi-docs` and `tapir-swagger-ui-bundle` deps were already in
   `Dependencies.scala` `tapir`; this PR is purely the route plumbing + a regression test that asserts
   every shipped path appears in the rendered spec.
+- **Maven Central publishing — POM metadata + operator runbook (closes #14).**
+  Each library module (`aegis-core`, `aegis-persistence`, `aegis-crypto`,
+  `aegis-iam`, `aegis-audit`, `aegis-sdk-scala`, `aegis-sdk-java`,
+  `aegis-kmip`, `aegis-http`, `aegis-agent-ai`, `aegis-mcp-server`) now
+  declares its own one-line `description` so Sonatype's POM-validation
+  staging gate accepts the artifact. `aegis-server` and `aegis-cli` keep
+  `publish / skip := true` since they ship as a Docker image and a
+  Universal tarball respectively. A `ThisBuild / description` fallback
+  prevents an unnamed jar from regressing the gate. New `RELEASING.md`
+  documents the one-time maintainer setup (Sonatype OSSRH account, GPG
+  key generation + keyserver publication, the four GitHub Action secrets
+  `PGP_SECRET` / `PGP_PASSPHRASE` / `SONATYPE_USERNAME` / `SONATYPE_PASSWORD`)
+  plus the per-release workflow (CHANGELOG bump, `git tag v0.1.1 && git push
+  origin v0.1.1`, what to expect on the Actions page) and a
+  troubleshooting matrix. The existing `release.yml` workflow already
+  gates the Maven publish step on `PGP_SECRET != ''`, so a release
+  without secrets ships Docker + CLI only with a clear `::notice`.
+- **OpenTelemetry tracing — application-level spans + autoconfigured SDK (closes #11).** New
+  `TracingKeyService` decorator wraps each `KeyService[IO]` call in an OTel span named
+  `kms.<operation>` with attributes `aegis.operation`, `aegis.key.id` (when applicable),
+  `aegis.principal.subject`, `aegis.principal.kind` (`human` or `agent`), and `aegis.outcome`
+  (`success` / `error_<code>`). Span status is set to `ERROR` with the `KmsError` message on
+  failure. New `TracingRegistry` bootstraps the OTel SDK via `AutoConfiguredOpenTelemetrySdk` —
+  configuration is driven entirely by the standard `OTEL_*` env vars / system properties
+  (`OTEL_SERVICE_NAME`, `OTEL_TRACES_EXPORTER`, `OTEL_EXPORTER_OTLP_ENDPOINT`,
+  `OTEL_TRACES_SAMPLER`, `OTEL_RESOURCE_ATTRIBUTES`). The decorator slots between
+  `MeteredKeyService` and `AuditingKeyService`. **For full request-graph coverage** (pekko-http
+  server spans, JDBC client spans, AWS SDK client spans), attach the OpenTelemetry Java Agent at
+  JVM start (`-javaagent:opentelemetry-javaagent.jar`) — the agent and the SDK both read the same
+  `OTEL_*` env vars, so configuration is unchanged and our manual spans become children of the
+  agent's via W3C trace-context propagation. New `TracingKeyServiceSpec` uses the OTel
+  `InMemorySpanExporter` to assert span names, attributes, status codes, and the locate-specific
+  `aegis.locate.hits` attribute. Adds the `opentelemetry-api` + `-sdk` + `-exporter-otlp` +
+  `-sdk-extension-autoconfigure` deps (server-tier only — library modules unaffected) plus
+  `opentelemetry-sdk-testing` at test scope.
 - **Docker Compose hardening: no default Postgres password (closes #51).**
   `deploy/docker/docker-compose.yml` no longer ships the
   `aegis-dev-password-change-me` default. Both the Postgres container and the

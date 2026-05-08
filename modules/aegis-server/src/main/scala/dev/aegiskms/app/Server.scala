@@ -80,6 +80,14 @@ object Server extends IOApp.Simple:
       //    listeners) so we close it on shutdown.
       metricsRegistry <- meterRegistryResource
 
+      // 1b. OpenTelemetry SDK from `OTEL_*` env vars / system properties. With no exporter configured
+      //     the autoconfigure default (`otlp`) silently buffers and drops; set
+      //     `OTEL_TRACES_EXPORTER=none` for unambiguous local-dev silence. See `TracingRegistry`'s doc
+      //     for the full env-var matrix. The SDK is an `OpenTelemetrySdk` (`AutoCloseable`), so the
+      //     Resource finalizer flushes pending spans on shutdown.
+      openTelemetry <- tracingResource
+      tracer = TracingRegistry.tracerFor(openTelemetry)
+
       // 2. Journal connection pool (or in-memory ref). Closing returns the Postgres pool to its
       //    finalizer; in-memory has no finalizer.
       journal <- journalResource(rootConfig)
@@ -90,14 +98,18 @@ object Server extends IOApp.Simple:
       given ActorSystem[KeyOpsActor.Command] = system
       given Scheduler                        = system.scheduler
 
-      // 4. Decorate. Auth → metrics → audit; see the class docstring for why this order matters.
+      // 4. Decorate. Auth → metrics → tracing → audit; see the class docstring for why this order
+      //    matters. Tracing sits between metrics and audit so the trace span measures auth + actor
+      //    + journal as one unit; metrics record their own (smaller) timer next to it; audit stays
+      //    the outermost layer so the audit row reflects the post-trace outcome.
       actorBacked = new ActorBackedKeyService(system)
       authorizing = new AuthorizingKeyService(actorBacked, new DevPolicyEngine)
       metered     = new MeteredKeyService(authorizing, metricsRegistry)
+      traced      = new TracingKeyService(metered, tracer)
       recSink  <- Resource.eval(InMemoryRecommendationSink.make)
       detector <- Resource.eval(BaselineDetector.make())
       sink     = TappedAuditSink(StdoutAuditSink(), detector, recSink)
-      auditing = new AuditingKeyService(metered, sink)
+      auditing = new AuditingKeyService(traced, sink)
 
       resolver = buildResolver(rootConfig)
       _ <- Resource.eval(IO {
@@ -116,6 +128,9 @@ object Server extends IOApp.Simple:
         logger.info(s"aegis-server listening on http://$host:$port (try POST /v1/keys)")
         logger.info(s"docs:    http://$host:$port/docs/  (Swagger UI; OpenAPI YAML at /docs/docs.yaml)")
         logger.info(s"metrics: http://$host:$port/metrics (Prometheus exposition format)")
+        logger.info(
+          "tracing: OTel SDK initialised (configure via OTEL_* env vars; OTEL_TRACES_EXPORTER=none disables)"
+        )
         logger.info("audit feed → stdout; recommendations → in-memory sink (visible via /admin in PR W1.b)")
       })
     yield ()
@@ -127,6 +142,20 @@ object Server extends IOApp.Simple:
     */
   private def meterRegistryResource: Resource[IO, PrometheusMeterRegistry] =
     Resource.make(IO(MetricsRegistry.make()))(r => IO(r.close()))
+
+  /** OpenTelemetry SDK as a Resource. `AutoConfiguredOpenTelemetrySdk` returns an `OpenTelemetrySdk` which is
+    * `AutoCloseable`; closing it flushes pending spans + shuts down the exporter so SIGTERM doesn't drop
+    * in-flight traces. We pattern-match the returned `OpenTelemetry` to recover the SDK instance — it's
+    * always the SDK, but the API type is widened.
+    */
+  private def tracingResource: Resource[IO, io.opentelemetry.api.OpenTelemetry] =
+    Resource.make(IO(TracingRegistry.make())) {
+      case sdk: io.opentelemetry.sdk.OpenTelemetrySdk =>
+        IO(sdk.close()).handleErrorWith(t =>
+          IO(logger.warn(s"OpenTelemetry SDK shutdown reported error: ${t.getMessage}", t))
+        )
+      case _ => IO.unit
+    }
 
   /** Journal as a Resource. The Postgres path returns a real `Resource[IO, EventJournal[IO]]` whose finalizer
     * closes the connection pool. The in-memory path has nothing to close, so we lift it with `Resource.eval`.
