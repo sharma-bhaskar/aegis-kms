@@ -20,6 +20,24 @@ All notable changes to Aegis will be documented here. This project follows
 
 ### Added
 
+- **OpenTelemetry tracing — application-level spans + autoconfigured SDK (closes #11).** New
+  `TracingKeyService` decorator wraps each `KeyService[IO]` call in an OTel span named
+  `kms.<operation>` with attributes `aegis.operation`, `aegis.key.id` (when applicable),
+  `aegis.principal.subject`, `aegis.principal.kind` (`human` or `agent`), and `aegis.outcome`
+  (`success` / `error_<code>`). Span status is set to `ERROR` with the `KmsError` message on
+  failure. New `TracingRegistry` bootstraps the OTel SDK via `AutoConfiguredOpenTelemetrySdk` —
+  configuration is driven entirely by the standard `OTEL_*` env vars / system properties
+  (`OTEL_SERVICE_NAME`, `OTEL_TRACES_EXPORTER`, `OTEL_EXPORTER_OTLP_ENDPOINT`,
+  `OTEL_TRACES_SAMPLER`, `OTEL_RESOURCE_ATTRIBUTES`). The decorator slots between
+  `MeteredKeyService` and `AuditingKeyService`. **For full request-graph coverage** (pekko-http
+  server spans, JDBC client spans, AWS SDK client spans), attach the OpenTelemetry Java Agent at
+  JVM start (`-javaagent:opentelemetry-javaagent.jar`) — the agent and the SDK both read the same
+  `OTEL_*` env vars, so configuration is unchanged and our manual spans become children of the
+  agent's via W3C trace-context propagation. New `TracingKeyServiceSpec` uses the OTel
+  `InMemorySpanExporter` to assert span names, attributes, status codes, and the locate-specific
+  `aegis.locate.hits` attribute. Adds the `opentelemetry-api` + `-sdk` + `-exporter-otlp` +
+  `-sdk-extension-autoconfigure` deps (server-tier only — library modules unaffected) plus
+  `opentelemetry-sdk-testing` at test scope.
 - **Docker Compose hardening: no default Postgres password (closes #51).**
   `deploy/docker/docker-compose.yml` no longer ships the
   `aegis-dev-password-change-me` default. Both the Postgres container and the
