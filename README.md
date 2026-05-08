@@ -11,21 +11,27 @@ Aegis adds identity, intelligence, and real-time control in front of your existi
 [![Release](https://img.shields.io/github/v/release/sharma-bhaskar/aegis-kms?include_prereleases&label=release)](https://github.com/sharma-bhaskar/aegis-kms/releases)
 [![Maven Central](https://img.shields.io/maven-central/v/dev.aegiskms/aegis-core_3?label=maven)](https://search.maven.org/artifact/dev.aegiskms/aegis-core_3)
 
-> ## ⚠️ Status — v0.1.0 (pre-alpha)
+> ## ⚠️ Status — v0.1.x (pre-alpha)
 >
-> This README describes **the full design** Aegis is being built toward. v0.1.0 is the first usable
-> slice. To see exactly which capabilities ship today vs. which are planned, read the
-> [**v0.1.0 status table**](docs/ARCHITECTURE.md#11-status), the [CHANGELOG](CHANGELOG.md), and
-> the [**ROADMAP**](ROADMAP.md) for the per-release delivery plan and cross-cutting capability
-> tracks.
+> This README describes **the full design** Aegis is being built toward. v0.1.0 was the first usable
+> slice; v0.1.1 turns the API surface into a real KMS. To see exactly which capabilities ship today
+> vs. which are planned, read the [**status table**](docs/ARCHITECTURE.md#11-status), the
+> [CHANGELOG](CHANGELOG.md), and the [**ROADMAP**](ROADMAP.md) for the per-release delivery plan and
+> cross-cutting capability tracks.
 >
-> **Shipping in v0.1.0** ✅ — REST `/v1/keys` (create/get/activate/destroy), Pekko-actor key state,
-> Postgres event journal, JWT bearer auth (HS256), AWS KMS root-of-trust adapter, anomaly-detector
-> MVP, audit decorator → stdout, `aegis` admin CLI for key ops.
+> **Shipping in v0.1.1** ✅ — full crypto surface (`sign` / `verify` / `encrypt` / `decrypt` /
+> `wrap` / `unwrap` / `rotate` / `compromise`) end-to-end through REST + CLI; AWS KMS adapter wired;
+> 5-detector anomaly engine (scope, rate-spike, op-histogram, time-of-day, source-IP); Prometheus
+> `/metrics` + JVM/GC standard set; OpenTelemetry tracing (autoconfigured SDK + per-op spans);
+> OpenAPI 3.1 spec + Swagger UI on `/docs`; `Resource[IO, Unit]` boot scope for graceful shutdown.
+> The v0.1.0 surface — REST `/v1/keys` (create/get/activate/destroy), Pekko-actor key state,
+> Postgres event journal, JWT bearer auth (HS256), audit decorator → stdout, `aegis` admin CLI —
+> remains in place.
 >
 > **WIP for v0.2.0+** 🚧 — Risk scorer · auto-responder · LLM advisor · OIDC + JWKS · agent-token
-> issuance endpoint · MCP server · KMIP server · GCP/Azure/Vault/PKCS#11 root-of-trust adapters ·
-> SIEM/Kafka/Postgres audit fan-out · Helm chart.
+> issuance endpoint · `aegis audit tail` / `aegis advisor scan` CLI verbs · MCP server · KMIP
+> server · GCP/Azure/Vault/PKCS#11 root-of-trust adapters · SIEM/Kafka/Postgres audit fan-out ·
+> Helm chart · auto-rotation scheduler.
 >
 > Sections marked 🚧 below describe target shape, not current behaviour. Code blocks containing
 > commands like `aegis advisor`, `aegis agent issue`, `aegis audit tail`, or `aegis key register`
@@ -52,12 +58,14 @@ Four checks on every request, in order — the same model whether the call comes
 | --- | --- | --- | --- |
 | **1. Identity & Context** | Resolves the bearer credential to a `Principal.Human` or `Principal.Agent`. Every agent carries a mandatory back-pointer to the parent human, the explicit scope (which keys, which ops), and the context (source IP, session, time). | An attributed request — no anonymous agents, ever. | ✅ v0.1.0 |
 | **2. Risk Scoring** | Combines behavioral baseline (request rate, time-of-day, source set, op histogram) with contextual signals (agent vs. human, credential age, scope breadth) into a risk score. | A real-valued risk score and a structured *reason*, recorded with the audit event. | 🚧 WIP — v0.2.0 (PR W2) |
-| **3. Anomaly Detection** | Streaming detectors over the audit log: usage spikes, off-hours access, new source IPs, new op types per key, agents touching keys outside their normal pattern. | `AgentRecommendation` events surfaced in CLI, dashboards, webhooks. | ⚠️ MVP shipped (`BaselineDetector`: scope + rate-spike); CLI/dashboard surfacing 🚧 v0.2.0 |
+| **3. Anomaly Detection** | Streaming detectors over the audit log: scope violations, rate spikes, off-hours access, new source IPs, new op types per actor. Five detectors fire compound alerts on a single record when an agent goes off-pattern in multiple dimensions at once. | `AgentRecommendation` events with severity + suggested action (revoke / step-up / alert). | ✅ v0.1.1 (5 detectors live: `ScopeBaseline`, `RateSpike`, `OpHistogramBaseline`, `TimeOfDayBaseline`, `SourceIpBaseline`); `aegis audit tail` CLI surfacing 🚧 v0.2.0 |
 | **4. Real-time Response** | Configurable wiring from detections to actions: **allow · step-up · deny · rotate · revoke · alert.** All recorded. | A decision applied automatically, in the same loop, before the next request lands. | 🚧 WIP — v0.2.0 (PR W3) |
 
-Behind those four checks, the data plane is pluggable. **v0.1.0 ships the AWS KMS adapter** for layered mode; GCP KMS, Azure Key Vault, HashiCorp Vault, on-prem PKCS#11, and Aegis's own software RoT are 🚧 WIP for v0.2.0 — the SPI (`RootOfTrust`) is in place, only the adapters need to land.
+Behind those four checks, the data plane is pluggable. **v0.1.x ships the AWS KMS adapter** for layered mode; GCP KMS, Azure Key Vault, HashiCorp Vault, on-prem PKCS#11, and Aegis's own software RoT are 🚧 WIP for v0.2.0+ — the SPI (`RootOfTrust`) is in place, only the adapters need to land.
 
-Every decision, every score, every detection, every response feeds an immutable audit log with full human+agent attribution and full request context. **v0.1.0 fans out to stdout only**; SIEM / webhook / Kafka / Postgres sinks are 🚧 WIP for v0.2.0.
+Every decision, every score, every detection, every response feeds an immutable audit log with full human+agent attribution and full request context. **v0.1.x fans out to stdout only**; SIEM / webhook / Kafka / Postgres sinks are 🚧 WIP for v0.2.0.
+
+Operations are observable from day one: `GET /metrics` exposes Prometheus counters + latency histograms per `KeyService` operation, and the OpenTelemetry SDK auto-configures from `OTEL_*` env vars so spans land in any compatible backend (Jaeger, Tempo, Honeycomb, Datadog) — see [§ Observability](#observability) below.
 
 ## Example — a Claude agent goes rogue
 
@@ -168,7 +176,7 @@ Most teams should start with **layered** — keep your existing key store, get t
 
 | | **Layered** *(recommended)* | **Standalone** | **HSM-backed** |
 | --- | --- | --- | --- |
-| Status in v0.1.0 | ✅ AWS KMS adapter ships; GCP/Azure/Vault 🚧 v0.2.0 | 🚧 WIP — software RoT not yet shipped | 🚧 WIP — PKCS#11 adapter not yet shipped |
+| Status in v0.1.x | ✅ AWS KMS adapter ships (sign / verify / encrypt / decrypt / wrap / unwrap / generateDataKey); GCP / Azure / Vault 🚧 v0.2.0+ | 🚧 WIP — software RoT not yet shipped | 🚧 WIP — PKCS#11 adapter not yet shipped |
 | Who generates the key bytes? | AWS / GCP / Azure KMS or Vault | Aegis, via its software or cloud-KMS RoT | The HSM, internally |
 | Where does the key material live? | In your cloud KMS or Vault — Aegis stores only a reference | Wrapped in Aegis's Postgres | Inside the HSM, never leaves |
 | Where does the crypto op run? | Proxied to the cloud KMS | In Aegis (after RoT unwrap) | Inside the HSM |
@@ -235,35 +243,37 @@ KMIP is **optional** in any deployment.
 | --- | --- | --- | --- | --- |
 | License | Proprietary | BSL | MPL-2.0 | **Apache-2.0** |
 | Self-hostable / air-gapped | No | Yes | Yes | **Yes** |
-| KMIP 1.4 / 2.x wire protocol | No | Enterprise only | No | 🚧 v0.2.0+ (skeleton in repo) |
-| MCP server for AI agents | No | No | No | 🚧 v0.2.0 (skeleton in repo) |
+| KMIP 1.4 / 2.x wire protocol | No | Enterprise only | No | 🚧 v0.4.0 (skeleton in repo) |
+| MCP server for AI agents | No | No | No | 🚧 v0.4.0 (skeleton in repo) |
 | Agent identity tied to a human operator | No | No | No | ✅ v0.1.0 (`Principal.Agent` + parent linkage in audit) |
 | Risk-scored access (not just policy) | No | No | No | 🚧 v0.2.0 (W2) |
-| Anomaly detection on key usage | No | No | No | ⚠️ MVP in v0.1.0 (`BaselineDetector`); CLI surfacing 🚧 v0.2.0 |
+| Anomaly detection on key usage | No | No | No | ✅ v0.1.1 — 5-detector `BaselineDetector` (scope, rate-spike, op-histogram, time-of-day, source-IP); CLI surfacing 🚧 v0.2.0 |
 | LLM advisor (explain / suggest / clean) | No | No | No | 🚧 v0.2.0 (W4) |
-| Layered mode (front existing AWS / GCP / Vault, no migration) | n/a | No | No | ⚠️ AWS adapter ✅ v0.1.0; GCP/Azure/Vault 🚧 v0.2.0 |
-| Embeddable as a JVM library | No | No | No | ✅ v0.1.0 (`aegis-core`, `aegis-iam`, `aegis-audit`, `aegis-crypto`, `aegis-persistence`, `aegis-sdk-scala`, `aegis-sdk-java`) |
+| Prometheus `/metrics` + OpenTelemetry tracing | varies | Enterprise only | No | ✅ v0.1.1 (out of the box, env-var configured) |
+| OpenAPI 3.1 + Swagger UI | varies | Enterprise only | No | ✅ v0.1.1 (auto-generated from the live endpoint set, served on `/docs`) |
+| Layered mode (front existing AWS / GCP / Vault, no migration) | n/a | No | No | ⚠️ AWS adapter ✅ v0.1.x; GCP/Azure/Vault 🚧 v0.2.0+ |
+| Embeddable as a JVM library | No | No | No | ✅ v0.1.x (`aegis-core`, `aegis-iam`, `aegis-audit`, `aegis-crypto`, `aegis-persistence`, `aegis-sdk-scala`, `aegis-sdk-java`) |
 | Per-operation cost | $$ per API call | License + ops | Ops only | **Ops only** |
 
 Deeper writeup in [docs/ARCHITECTURE.md §10](docs/ARCHITECTURE.md#10-how-aegis-kms-compares).
 
 ## Modules
 
-| Module | Purpose | Pekko? | Status in v0.1.0 |
+| Module | Purpose | Pekko? | Status in v0.1.x |
 | --- | --- | --- | --- |
-| `aegis-core` | Pure domain (DTOs, `KeyService[F]` algebra, `KeyEvent` ADT + Circe codecs) | No | ✅ shipped |
-| `aegis-crypto` | Backend SPI + provider impls | No | ✅ AWS KMS adapter; 🚧 GCP / Azure / Vault / PKCS#11 / software-RoT in v0.2.0 |
+| `aegis-core` | Pure domain (DTOs, `KeyService[F]` algebra, `KeyEvent` ADT + Circe codecs, `Ciphertext` / `WrappedDek` / `RotationPolicy` value types) | No | ✅ shipped — full crypto algebra |
+| `aegis-crypto` | Backend SPI + provider impls | No | ✅ AWS KMS adapter (sign / verify / encrypt / decrypt / wrap / unwrap / generateDataKey); 🚧 GCP / Azure / Vault / PKCS#11 / software-RoT in v0.2.0+ |
 | `aegis-iam` | Principals, policies, JWT issuer/verifier, agent identity | No | ✅ HMAC-SHA256 JWT (HS256); 🚧 OIDC + JWKS in v0.2.0 |
-| `aegis-audit` | Append-only audit log SPI | No | ✅ stdout sink; 🚧 SIEM/Kafka/Postgres sinks in v0.2.0 |
-| `aegis-persistence` | Doobie-based event journal | No | ✅ Postgres journal; 🚧 MySQL driver listed in deps but not wired |
+| `aegis-audit` | Append-only audit log SPI | No | ✅ stdout sink + per-record `context: Map[String, String]`; 🚧 SIEM/Kafka/Postgres sinks in v0.2.0 |
+| `aegis-persistence` | Doobie-based event journal | No | ✅ Postgres journal (replays `Created`/`Activated`/`Deactivated`/`Destroyed`/`Compromised`/`Rotated`); 🚧 MySQL driver listed in deps but not wired |
 | `aegis-sdk-scala` | Scala client SDK | No | ✅ shipped |
 | `aegis-sdk-java` | Java client SDK | No | ✅ shipped |
-| `aegis-kmip` | KMIP codec + TCP server | Yes | 🚧 skeleton only — v0.2.0+ |
-| `aegis-http` | Tapir + pekko-http REST + OpenAPI | Yes | ✅ `/v1/keys` create/get/activate/destroy |
-| `aegis-agent-ai` | Risk scorer · anomaly detector · auto-responder · LLM advisor | Yes | ⚠️ `BaselineDetector` MVP only; risk scorer + auto-responder + LLM advisor 🚧 v0.2.0 |
-| `aegis-mcp-server` | MCP tool surface for LLMs | Yes | 🚧 skeleton only — v0.2.0 |
-| `aegis-server` | Main server app wiring everything | Yes | ✅ shipped (config-driven journal + auth) |
-| `aegis-cli` | `aegis` admin CLI | No | ✅ `version`, `login`, `keys create/get/activate/destroy`; 🚧 `agent issue`, `audit tail`, `advisor scan` are stubs printing "not yet wired up" |
+| `aegis-kmip` | KMIP codec + TCP server | Yes | 🚧 skeleton only — v0.4.0 |
+| `aegis-http` | Tapir + pekko-http REST + OpenAPI | Yes | ✅ full `/v1/keys/*` surface (create / get / activate / destroy / sign / verify / encrypt / decrypt / wrap / unwrap / rotate / compromise) + OpenAPI 3.1 spec on `/docs/docs.yaml` + Swagger UI on `/docs/` |
+| `aegis-agent-ai` | Risk scorer · anomaly detector · auto-responder · LLM advisor | Yes | ✅ 5-detector `BaselineDetector` (scope, rate-spike, op-histogram, time-of-day, source-IP); 🚧 risk scorer + auto-responder + LLM advisor land in v0.2.0+ |
+| `aegis-mcp-server` | MCP tool surface for LLMs | Yes | 🚧 skeleton only — v0.4.0 |
+| `aegis-server` | Main server app wiring everything | Yes | ✅ `Resource[IO, Unit]` boot scope · Prometheus `/metrics` · OpenTelemetry tracing (`OTEL_*` env vars) · 6 decorator layers (audit → tracing → metrics → auth → actor → journal) |
+| `aegis-cli` | `aegis` admin CLI | No | ✅ `version`, `login`, `keys create/get/activate/destroy/sign/verify/encrypt/decrypt/wrap/unwrap/rotate/compromise`; 🚧 `agent issue`, `audit tail`, `advisor scan` are stubs printing "not yet wired up" |
 
 ## Quickstart — running the server
 
@@ -274,29 +284,41 @@ Prerequisites: Docker.
 ```bash
 git clone https://github.com/sharma-bhaskar/aegis-kms.git
 cd aegis-kms
+export POSTGRES_PASSWORD="$(openssl rand -base64 24)"   # required — no default ships
 docker compose -f deploy/docker/docker-compose.yml up
 ```
 
-> The compose file pulls `ghcr.io/sharma-bhaskar/aegis-server:0.1.0`. Until v0.1.0 is published to
-> GHCR, build the image locally first:
+> The compose file pulls `ghcr.io/sharma-bhaskar/aegis-server:0.1.x`. To build the image locally:
 >
 > ```bash
 > sbt 'server / Docker / publishLocal'
-> IMAGE_TAG=0.1.0-SNAPSHOT docker compose -f deploy/docker/docker-compose.yml up
+> IMAGE_TAG=0.1.1-SNAPSHOT docker compose -f deploy/docker/docker-compose.yml up
 > ```
 
-In another shell:
+In another shell — the request shape covers every operation the v0.1.x REST plane supports:
 
 ```bash
+# Create + activate a key
 curl -X POST http://localhost:8080/v1/keys \
-  -H 'Content-Type: application/json' \
-  -H 'X-Aegis-User: alice' \
+  -H 'Content-Type: application/json' -H 'X-Aegis-User: alice' \
   -d '{"spec":{"name":"invoice-signing","algorithm":"AES","sizeBits":256,"objectType":"SymmetricKey"}}'
+# → {"id":"<uuid>","spec":{...},"createdAt":"...","state":"PreActive","currentVersion":1}
+
+curl -X POST http://localhost:8080/v1/keys/<id>/activate -H 'X-Aegis-User: alice'
+
+# Encrypt a base64-encoded plaintext with an `EncryptionContext` AAD
+curl -X POST http://localhost:8080/v1/keys/<id>/encrypt \
+  -H 'Content-Type: application/json' -H 'X-Aegis-User: alice' \
+  -d '{"plaintextBase64":"aGVsbG8=","context":{"dataset":"q2","tenant":"acme"}}'
+
+# OpenAPI / Swagger UI for the full surface
+open http://localhost:8080/docs/
 ```
 
 Auth defaults to dev mode (`X-Aegis-User`). To use JWT bearer auth, set `AEGIS_AUTH_KIND=hmac` and
-`AEGIS_AUTH_HMAC_SECRET=<≥32-byte secret>` in `docker-compose.yml`, then mint tokens with
-`dev.aegiskms.iam.JwtIssuer.hmac(...)`.
+`AEGIS_AUTH_HMAC_SECRET=<≥32-byte secret>`, then mint tokens with
+`dev.aegiskms.iam.JwtIssuer.hmac(...)`. See [`SECURITY.md`](SECURITY.md) for the full
+deploy-time configuration matrix (env vars, AWS IAM permissions, TLS termination).
 
 ### Option B: from source
 
@@ -312,23 +334,79 @@ sbt 'server / run'
 
 ```scala
 libraryDependencies ++= Seq(
-  "dev.aegiskms" %% "aegis-core"        % "0.1.0",
-  "dev.aegiskms" %% "aegis-iam"         % "0.1.0",
-  "dev.aegiskms" %% "aegis-audit"       % "0.1.0",
-  "dev.aegiskms" %% "aegis-crypto"      % "0.1.0",
-  "dev.aegiskms" %% "aegis-persistence" % "0.1.0"
+  "dev.aegiskms" %% "aegis-core"        % "0.1.1",
+  "dev.aegiskms" %% "aegis-iam"         % "0.1.1",
+  "dev.aegiskms" %% "aegis-audit"       % "0.1.1",
+  "dev.aegiskms" %% "aegis-crypto"      % "0.1.1",
+  "dev.aegiskms" %% "aegis-persistence" % "0.1.1"
 )
 ```
+
+## Observability
+
+`aegis-server` exposes three observability surfaces alongside the application port (`8080` by default).
+None of them require code changes — the first two are wired in by the boot, the third is opt-in via env
+vars.
+
+### Prometheus metrics
+
+`GET /metrics` returns the standard exposition format. Per-operation series:
+
+```
+aegis_keys_op_total{operation="Sign"}                              counter
+aegis_keys_op_duration_seconds_bucket{operation="Sign", outcome="success"}  histogram
+aegis_keys_op_errors_total{operation="Sign", code="IllegalOperation"}       counter
+```
+
+The standard JVM/GC/threads/classloader/processor/uptime collectors are bound on boot, so
+`jvm_memory_used_bytes`, `jvm_gc_pause_seconds`, `process_uptime_seconds` and friends are exposed too.
+Point your Prometheus scrape config at `http://aegis-server:8080/metrics`.
+
+### OpenAPI / Swagger UI
+
+The full REST surface is documented at `GET /docs/` (Swagger UI) with the raw spec at
+`GET /docs/docs.yaml`. Because the spec is generated from the same Tapir endpoint values the runtime
+interprets, drift between docs and wire shape is impossible by construction.
+
+### OpenTelemetry tracing
+
+The OTel SDK is auto-configured from the standard environment variables. Point it at any compatible
+backend:
+
+```bash
+export OTEL_SERVICE_NAME=aegis-server
+export OTEL_TRACES_EXPORTER=otlp                    # or `none` to silence
+export OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318
+export OTEL_RESOURCE_ATTRIBUTES=deployment.environment=prod,service.namespace=kms
+```
+
+Each `KeyService` operation emits a span named `kms.<operation>` with attributes
+`aegis.operation`, `aegis.key.id`, `aegis.principal.subject`, `aegis.principal.kind`, and
+`aegis.outcome`. For full request-graph coverage (pekko-http server spans, JDBC client spans, AWS SDK
+client spans), attach the OpenTelemetry Java Agent at JVM start:
+
+```bash
+java -javaagent:opentelemetry-javaagent.jar -jar aegis-server.jar
+```
+
+The agent and the SDK read the same `OTEL_*` env vars, so the operator's configuration is unchanged
+and the manual spans become children of the agent's auto-instrumented spans via W3C trace-context
+propagation.
 
 ## Quickstart — running the CLI
 
 Download the `aegis-cli-<version>.tgz` tarball from the [latest release](https://github.com/sharma-bhaskar/aegis-kms/releases/latest):
 
 ```bash
-tar -xzf aegis-cli-0.1.0.tgz
-./aegis-cli-0.1.0/bin/aegis version
-./aegis-cli-0.1.0/bin/aegis login --server http://localhost:8080 --principal alice
-./aegis-cli-0.1.0/bin/aegis keys create --alg AES-256 --name invoice-signing
+tar -xzf aegis-cli-0.1.1.tgz
+./aegis-cli-0.1.1/bin/aegis version
+./aegis-cli-0.1.1/bin/aegis login --server http://localhost:8080 --principal alice
+./aegis-cli-0.1.1/bin/aegis keys create --alg AES-256 --name invoice-signing
+./aegis-cli-0.1.1/bin/aegis keys activate <id>
+./aegis-cli-0.1.1/bin/aegis keys sign     --id <id> --message "hello"
+./aegis-cli-0.1.1/bin/aegis keys encrypt  --id <id> --plaintext "secret" --context dataset=q2
+./aegis-cli-0.1.1/bin/aegis keys rotate   --id <id>
+./aegis-cli-0.1.1/bin/aegis keys compromise --id <id> --reason "leaked in S3 audit 2026-05-08"
 ```
 
 ```scala
