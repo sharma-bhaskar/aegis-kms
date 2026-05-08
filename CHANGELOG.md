@@ -6,6 +6,18 @@ All notable changes to Aegis will be documented here. This project follows
 
 ## Unreleased
 
+### Changed
+
+- **`Server` now boots inside a `Resource[IO, Unit]` (closes #12).** Refactored the entry point from
+  `def main` + `unsafeRunSync` to `IOApp.Simple` + a single composed `Resource` chain. Each piece of
+  the boot — Prometheus meter registry, journal connection pool, Pekko `ActorSystem`, HTTP binding —
+  is acquired with a matching finalizer, so SIGTERM / SIGINT now unwinds the stack in reverse:
+  HTTP unbind (5 s grace) → actor system terminate → journal pool close → meter registry close.
+  v0.1.0's boot called `PostgresEventJournal.make(...).allocated.unsafeRunSync()._1` and discarded
+  the finalizer, leaking the connection pool until JVM exit; that's gone. New `BootResourceSpec`
+  acquires the full stack against a free local port, hits the listener, and verifies that releasing
+  the resource closes the binding (no 200 on a subsequent connect).
+
 ### Added
 
 - **Docker Compose hardening: no default Postgres password (closes #51).**
