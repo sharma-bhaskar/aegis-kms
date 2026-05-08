@@ -8,6 +8,17 @@ All notable changes to Aegis will be documented here. This project follows
 
 ### Added
 
+- **Docker Compose hardening: no default Postgres password (closes #51).**
+  `deploy/docker/docker-compose.yml` no longer ships the
+  `aegis-dev-password-change-me` default. Both the Postgres container and the
+  `aegis-server` JDBC password now reference `${POSTGRES_PASSWORD:?...}` —
+  Compose fails fast with a clear error if the operator hasn't exported the
+  variable. `SECURITY.md` gains a new "Deploy-time configuration" section
+  enumerating the env vars that must be supplied (`POSTGRES_PASSWORD`,
+  `AEGIS_AUTH_HMAC_SECRET` when JWT auth is on, AWS creds when the KMS
+  root-of-trust is configured) and noting that TLS termination is the
+  fronting proxy's responsibility until the v0.4.0 KMIP plane ships native
+  mTLS.
 - **Prometheus `/metrics` endpoint (closes #10).** New `MeteredKeyService` decorator slots between
   `AuditingKeyService` and `AuthorizingKeyService` in the boot wiring and records three series per
   `KeyService` operation: `aegis_keys_op_total{operation}` (counter),

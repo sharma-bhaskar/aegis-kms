@@ -1,8 +1,17 @@
-# Local development quickstart for Aegis 0.1.0.
+# Local development quickstart for Aegis 0.1.x.
 #
 # Brings up:
 #   - Postgres 16 — durable event journal
 #   - aegis-server  — fronted on http://localhost:8080
+#
+# REQUIRED before `docker compose up`:
+#   export POSTGRES_PASSWORD="$(openssl rand -base64 24)"
+#
+# Compose will fail fast with a clear error if POSTGRES_PASSWORD isn't set —
+# we no longer ship a default credential because earlier versions made it too
+# easy to launch a publicly-bound deployment with a hard-coded password. See
+# `SECURITY.md` ("Deploy-time configuration") for the full list of required
+# environment values.
 #
 # Auth defaults to dev mode (X-Aegis-User header). To exercise the JWT path:
 #   1. Generate a 32-byte secret:  openssl rand -base64 48
@@ -22,7 +31,9 @@ services:
     environment:
       POSTGRES_DB:       aegis
       POSTGRES_USER:     aegis
-      POSTGRES_PASSWORD: aegis-dev-password-change-me
+      # `:?` makes compose fail fast with a clear error message if the variable
+      # is unset or empty. Do NOT add a default value here — see SECURITY.md.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in the shell environment}
     ports:
       - "5432:5432"
     healthcheck:
@@ -44,7 +55,9 @@ services:
       AEGIS_JOURNAL_KIND: "postgres"
       AEGIS_JDBC_URL:     "jdbc:postgresql://postgres:5432/aegis"
       AEGIS_JDBC_USERNAME: "aegis"
-      AEGIS_JDBC_PASSWORD: "aegis-dev-password-change-me"
+      # Same external value as POSTGRES_PASSWORD above — compose substitutes it
+      # into both env blocks at start time.
+      AEGIS_JDBC_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in the shell environment}
       AEGIS_AUTH_KIND:    "dev"
       # AEGIS_AUTH_KIND:        "hmac"
       # AEGIS_AUTH_HMAC_SECRET: "set-me-to-32-or-more-bytes-please"
