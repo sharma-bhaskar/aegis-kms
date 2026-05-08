@@ -35,3 +35,39 @@ Out of scope:
   explicitly disabled.
 - Issues in `aegis-agent-ai` recommendations — these are advisory; no
   cryptographic decision is taken solely on an AI recommendation.
+
+## Deploy-time configuration
+
+The shipped Docker images and Compose files do not contain any default
+credentials. The deploy-time decisions below are the operator's
+responsibility and Aegis-KMS will fail fast at boot rather than fall back to
+a weak default.
+
+### Required environment variables
+
+| Variable | When required | Notes |
+| --- | --- | --- |
+| `POSTGRES_PASSWORD` | Always when running `deploy/docker/docker-compose.yml` | Compose substitutes this into both the Postgres container and the `AEGIS_JDBC_PASSWORD` of `aegis-server`. Generate with `openssl rand -base64 24`; do **not** check the value into source control. |
+| `AEGIS_JDBC_PASSWORD` | When `aegis-server` is configured with `AEGIS_JOURNAL_KIND=postgres` outside the bundled compose file | Same value the Postgres role expects. |
+| `AEGIS_AUTH_HMAC_SECRET` | When `AEGIS_AUTH_KIND=hmac` | Must be ≥ 32 bytes. Generate with `openssl rand -base64 48`. |
+| `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` / `AWS_REGION` | When the AWS KMS root-of-trust is configured | Prefer instance-role credentials over long-lived access keys. The KMS adapter only needs `kms:Encrypt`, `kms:Decrypt`, `kms:Sign`, `kms:Verify`, `kms:GenerateDataKey`, and `kms:EnableKeyRotation` against the configured CMK. |
+
+### Authentication mode
+
+`AEGIS_AUTH_KIND=dev` accepts the `X-Aegis-User` header verbatim and is
+intended for local workstation use only. Any deployment reachable from a
+network you do not fully control must use `AEGIS_AUTH_KIND=hmac` (HS256
+JWT) — or, once the OIDC verifier ships in v0.2.0, an OIDC issuer.
+
+### TLS termination
+
+Aegis-KMS does not yet ship its own TLS listener. Production deployments
+should terminate TLS at a fronting reverse proxy (Envoy, NGINX, Traefik,
+ALB) and forward to `aegis-server` over the internal network. Native TLS +
+mTLS support lands with the KMIP plane in v0.4.0 (PR K1).
+
+### Reverting the default
+
+Reintroducing a default password in `docker-compose.yml` regresses #51 and
+will be rejected at review time. The compose file uses the `${VAR:?error}`
+shell-substitution form deliberately so misconfiguration is loud.
