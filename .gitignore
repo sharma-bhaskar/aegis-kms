@@ -32,3 +32,9 @@ local.conf
 *.pfx
 *.jks
 secrets/
+
+# Docs site (mkdocs build artifacts and local Python venv)
+site/
+.venv-docs/
+__pycache__/
+*.pyc

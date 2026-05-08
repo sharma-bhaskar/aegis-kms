@@ -55,4 +55,4 @@ The best places to start without needing deep context:
 ## Reporting security issues
 
 Please do not open a public issue for a security report. See
-[SECURITY.md](SECURITY.md).
+[SECURITY.md](https://github.com/sharma-bhaskar/aegis-kms/blob/main/SECURITY.md).

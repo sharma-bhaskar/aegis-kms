@@ -1,0 +1,8 @@
+# Pinned dependencies for building the docs site (https://sharma-bhaskar.github.io/aegis-kms/).
+# Used by .github/workflows/docs.yml on every push to main.
+# To preview locally: pip install -r requirements-docs.txt && mkdocs serve
+
+mkdocs==1.6.1
+mkdocs-material==9.5.45
+mkdocs-include-markdown-plugin==7.0.0
+pymdown-extensions==10.12

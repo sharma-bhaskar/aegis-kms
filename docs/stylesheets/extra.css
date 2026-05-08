@@ -1,0 +1,79 @@
+/* Aegis-KMS — custom MkDocs Material overrides.
+   Goal: match the GitHub-Dark + amber-accent visual identity of the marketing covers
+   (medium-cover-comparison.svg, medium-cover-scala-pekko.svg). */
+
+:root {
+  --md-primary-fg-color:        #0d1117;
+  --md-primary-fg-color--light: #21262d;
+  --md-primary-fg-color--dark:  #010409;
+  --md-accent-fg-color:         #f0a050;
+}
+
+[data-md-color-scheme="default"] {
+  --md-typeset-a-color: #c5621f;
+}
+
+[data-md-color-scheme="slate"] {
+  --md-default-bg-color:        #0d1117;
+  --md-default-fg-color:        #e6edf3;
+  --md-default-fg-color--light: #c9d1d9;
+  --md-default-fg-color--lighter: #7d8590;
+  --md-default-fg-color--lightest: #5c6370;
+  --md-typeset-a-color:         #f0a050;
+  --md-code-bg-color:            #161b22;
+  --md-code-fg-color:            #c9d1d9;
+}
+
+/* Make headings a touch tighter and bolder, matching the marketing aesthetic */
+.md-typeset h1,
+.md-typeset h2 {
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+/* Status pills (used in status.md and elsewhere) */
+.green   { color: #57a645 !important; }
+.amber   { color: #f0a050 !important; }
+.grey    { color: #7d8590 !important; }
+.red     { color: #d93025 !important; }
+
+/* Tables: a slightly tighter look */
+.md-typeset table:not([class]) {
+  font-size: 0.78rem;
+}
+
+/* Code blocks: keep the code copy button visible without hovering on mobile */
+.md-clipboard {
+  opacity: 1 !important;
+}
+
+/* Cards on the landing page (md-button + grid cards) */
+.md-typeset .grid.cards > :is(ul, ol) > li,
+.md-typeset .grid > .card {
+  border-radius: 8px;
+  border: 1px solid var(--md-default-fg-color--lightest);
+}
+
+/* Brand the top hero on the landing page */
+.md-header__title {
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  font-weight: 600;
+}
+
+/* Tweak the announce banner if used */
+.md-banner {
+  background: linear-gradient(90deg, #f0a050, #ffb86c);
+  color: #0d1117;
+}
+
+/* Inline code inside paragraphs — slightly stronger contrast on dark mode */
+[data-md-color-scheme="slate"] .md-typeset code {
+  background-color: #21262d;
+  border: 1px solid #30363d;
+}
+
+/* Footer */
+.md-footer-meta {
+  background: #010409;
+}
