@@ -117,3 +117,129 @@ final class BaselineDetectorSpec extends AnyFunSuite with Matchers:
     aliceBaseline.opsSeen(Operation.Get) shouldBe 2
     aliceBaseline.opsSeen(Operation.Create) shouldBe 1
   }
+
+  // ── New v0.1.1 detectors ───────────────────────────────────────────────────
+
+  test("Agent's first novel Operation emits a High-severity OpHistogramBaseline rec with Revoke") {
+    val det = BaselineDetector.make().unsafeRunSync()
+    val ag  = agent(alice)
+    // Establish baseline with `Get`.
+    det.observe(rec(Instant.parse("2026-04-25T03:00:00Z"), ag, Operation.Get, "k1", "Success"))
+      .unsafeRunSync()
+    // Now perform a `Sign` — never seen before for this agent.
+    val recs = det
+      .observe(rec(Instant.parse("2026-04-25T03:00:05Z"), ag, Operation.Sign, "k1", "Success"))
+      .unsafeRunSync()
+
+    val opRec = recs.find(_.detector == "OpHistogramBaseline").get
+    opRec.severity shouldBe Severity.High
+    opRec.suggestedAction shouldBe SuggestedAction.Revoke
+    opRec.details("newOperation") shouldBe "Sign"
+  }
+
+  test("OpHistogramBaseline does NOT fire on the actor's very first call (cold-start guard)") {
+    val det = BaselineDetector.make().unsafeRunSync()
+    val recs = det
+      .observe(rec(Instant.parse("2026-04-25T03:00:00Z"), alice, Operation.Sign, "k1", "Success"))
+      .unsafeRunSync()
+    recs.exists(_.detector == "OpHistogramBaseline") shouldBe false
+  }
+
+  test("TimeOfDayBaseline fires when actor active in a UTC hour-of-day they've never used") {
+    val det = BaselineDetector.make().unsafeRunSync()
+    val ag  = agent(alice)
+    // Establish baseline at hour 03 UTC.
+    det.observe(rec(Instant.parse("2026-04-25T03:14:00Z"), ag, Operation.Sign, "k1", "Success"))
+      .unsafeRunSync()
+    // Move to hour 17 UTC — completely outside the agent's known schedule.
+    val recs = det
+      .observe(rec(Instant.parse("2026-04-25T17:00:00Z"), ag, Operation.Sign, "k1", "Success"))
+      .unsafeRunSync()
+
+    val todRec = recs.find(_.detector == "TimeOfDayBaseline").get
+    todRec.severity shouldBe Severity.High
+    todRec.details("newHourUtc") shouldBe "17"
+    todRec.details("hoursSeen") shouldBe "3"
+  }
+
+  test("TimeOfDayBaseline does NOT fire on the actor's first call (cold-start guard)") {
+    val det = BaselineDetector.make().unsafeRunSync()
+    val recs = det
+      .observe(rec(Instant.parse("2026-04-25T03:00:00Z"), alice, Operation.Sign, "k1", "Success"))
+      .unsafeRunSync()
+    recs.exists(_.detector == "TimeOfDayBaseline") shouldBe false
+  }
+
+  test("SourceIpBaseline fires when context.source.ip is new for this actor") {
+    val det = BaselineDetector.make().unsafeRunSync()
+    val ag  = agent(alice)
+    // Establish baseline IP via context.
+    val first = AuditRecord(
+      at = Instant.parse("2026-04-25T03:00:00Z"),
+      principal = ag,
+      operation = Operation.Sign,
+      resource = "key:k1",
+      outcome = "Success",
+      correlationId = "c1",
+      context = Map("source.ip" -> "10.0.5.10")
+    )
+    det.observe(first).unsafeRunSync()
+
+    val second = first.copy(
+      at = Instant.parse("2026-04-25T03:00:05Z"),
+      correlationId = "c2",
+      context = Map("source.ip" -> "203.0.113.99")
+    )
+    val recs = det.observe(second).unsafeRunSync()
+
+    val ipRec = recs.find(_.detector == "SourceIpBaseline").get
+    ipRec.severity shouldBe Severity.High
+    ipRec.details("sourceIp") shouldBe "203.0.113.99"
+    ipRec.details("priorIpCount") shouldBe "1"
+  }
+
+  test("SourceIpBaseline stays inert when records carry no source.ip context") {
+    val det = BaselineDetector.make().unsafeRunSync()
+    val ag  = agent(alice)
+    det.observe(rec(Instant.parse("2026-04-25T03:00:00Z"), ag, Operation.Sign, "k1", "Success"))
+      .unsafeRunSync()
+    val recs = det
+      .observe(rec(Instant.parse("2026-04-25T03:00:05Z"), ag, Operation.Sign, "k1", "Success"))
+      .unsafeRunSync()
+    recs.exists(_.detector == "SourceIpBaseline") shouldBe false
+  }
+
+  test("a single observation can fire multiple detectors at once (compound anomaly)") {
+    val det = BaselineDetector.make().unsafeRunSync()
+    val ag  = agent(alice)
+    // Establish a tight baseline.
+    det.observe(AuditRecord(
+      at = Instant.parse("2026-04-25T03:14:00Z"),
+      principal = ag,
+      operation = Operation.Get,
+      resource = "key:invoice-2026",
+      outcome = "Success",
+      correlationId = "c0",
+      context = Map("source.ip" -> "10.0.5.10")
+    )).unsafeRunSync()
+
+    // Now: new key + new operation + new hour + new source IP, all in one record.
+    val anomaly = AuditRecord(
+      at = Instant.parse("2026-04-25T17:30:00Z"),
+      principal = ag,
+      operation = Operation.Sign,
+      resource = "key:treasury-master",
+      outcome = "Success",
+      correlationId = "c1",
+      context = Map("source.ip" -> "203.0.113.99")
+    )
+    val recs = det.observe(anomaly).unsafeRunSync()
+
+    val detectors = recs.map(_.detector).toSet
+    detectors should contain allOf (
+      "ScopeBaseline",
+      "OpHistogramBaseline",
+      "TimeOfDayBaseline",
+      "SourceIpBaseline"
+    )
+  }
