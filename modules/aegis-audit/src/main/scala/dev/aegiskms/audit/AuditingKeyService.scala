@@ -178,6 +178,16 @@ final class AuditingKeyService(inner: KeyService[IO], sink: AuditSink[IO]) exten
       AuditRecord(now, by, Operation.Compromise, id.value, outcome, corr)
     }
 
+  def rotate(id: KeyId, policy: RotationPolicy, by: Principal): IO[Either[KmsError, ManagedKey]] =
+    instrument {
+      inner.rotate(id, policy, by)
+    } { (now, corr, result) =>
+      val outcome = result match
+        case Right(k) => s"Success newVersion=${k.currentVersion} policy=${policy.render}"
+        case Left(e)  => s"Failed code=${e.code} policy=${policy.render}"
+      AuditRecord(now, by, Operation.Rotate, id.value, outcome, corr)
+    }
+
   // ── Helpers ────────────────────────────────────────────────────────────────
 
   /** Threads a fresh correlation id and a wall-clock timestamp through the action and writes the resulting

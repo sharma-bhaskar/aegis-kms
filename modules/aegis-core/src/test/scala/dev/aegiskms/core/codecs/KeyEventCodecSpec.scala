@@ -57,6 +57,15 @@ final class KeyEventCodecSpec extends AnyFunSuite:
     assert(event.asJson.hcursor.get[String]("reason").contains("leaked in S3 audit 2026-05-08"))
   }
 
+  test("KeyEvent.Rotated round-trips, preserving newVersion and policy") {
+    val event: KeyEvent =
+      KeyEvent.Rotated("e7", now, keyId, "alice@org", newVersion = 3, policy = "Manual")
+    roundTrip(event)
+    assert(event.asJson.hcursor.get[String]("type").contains("Rotated"))
+    assert(event.asJson.hcursor.get[Int]("newVersion").contains(3))
+    assert(event.asJson.hcursor.get[String]("policy").contains("Manual"))
+  }
+
   test("decode rejects an unknown discriminator with a clear message") {
     val bogus =
       parse(

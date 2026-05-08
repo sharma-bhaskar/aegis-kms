@@ -102,6 +102,14 @@ final class AegisHttpClient(http: HttpPort, baseUrl: String, principal: Option[S
       case 200    => decodeBody[ManagedKeyDto](res.body)
       case status => Left(toError(status, res.body))
 
+  def rotateKey(id: String, req: RotateRequest): Either[ClientError, ManagedKeyDto] =
+    val body    = req.asJson.noSpaces
+    val headers = baseHeaders + ("Content-Type" -> "application/json")
+    val res     = http.execute(HttpPort.Request("POST", url(s"/v1/keys/$id/rotate"), headers, Some(body)))
+    res.status match
+      case 200    => decodeBody[ManagedKeyDto](res.body)
+      case status => Left(toError(status, res.body))
+
   // ── Helpers ────────────────────────────────────────────────────────────────
 
   private def url(path: String): String =

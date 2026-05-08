@@ -111,6 +111,11 @@ object Cli:
           case Right((id, reason)) => Commands.keysCompromise(makeClient(cfg), id, reason)
           case Left(msg)           => CommandResult.err(s"$msg\n\n${keysCompromiseHelp}")
 
+      case "rotate" =>
+        parseKeysRotate(rest) match
+          case Right((id, policy)) => Commands.keysRotate(makeClient(cfg), id, policy)
+          case Left(msg)           => CommandResult.err(s"$msg\n\n${keysRotateHelp}")
+
       case other =>
         CommandResult.err(s"unknown keys subcommand: $other\n\n${keysHelp}")
 
@@ -224,6 +229,14 @@ object Cli:
       )
     yield (id, reason)
 
+  /** Parse `aegis keys rotate --id <id> [--policy <policy>]`. Default policy is `Manual`. */
+  private[cli] def parseKeysRotate(args: List[String]): Either[String, (String, String)] =
+    val flags  = parseFlags(args)
+    val policy = flags.getOrElse("--policy", "Manual")
+    flags.get("--id")
+      .toRight("keys rotate: --id <id> is required")
+      .map(id => (id, policy))
+
   /** Parse `--context k=v,k2=v2` into a map. Empty / missing → empty map. */
   private def parseContext(raw: Option[String]): Either[String, Map[String, String]] =
     raw.filter(_.nonEmpty) match
@@ -264,6 +277,7 @@ object Cli:
       |  aegis keys wrap --id <id> --dek <text|@file>
       |  aegis keys unwrap --id <id> --wrapped <b64>
       |  aegis keys compromise --id <id> --reason "<text>"
+      |  aegis keys rotate --id <id> [--policy Manual|TimeBased:7days|OpCountBased:N]
       |  aegis agent issue        (planned — PR A1)
       |  aegis audit tail         (planned — PR F2.b)
       |  aegis advisor scan       (planned — PR W4)
@@ -285,7 +299,8 @@ object Cli:
       |  aegis keys decrypt --id <id> --ciphertext <b64> [--context k=v,k2=v2]
       |  aegis keys wrap --id <id> --dek <text|@file>
       |  aegis keys unwrap --id <id> --wrapped <b64>
-      |  aegis keys compromise --id <id> --reason "<text>"""".stripMargin
+      |  aegis keys compromise --id <id> --reason "<text>"
+      |  aegis keys rotate --id <id> [--policy Manual|TimeBased:7days|OpCountBased:N]""".stripMargin
   private val keysCreateHelp: String = "Usage: aegis keys create --alg AES-256 --name <name>"
   private val keysSignHelp: String =
     "Usage: aegis keys sign --id <id> --message <text|@file> [--alg RsaPssSha256]"
@@ -299,3 +314,5 @@ object Cli:
   private val keysUnwrapHelp: String = "Usage: aegis keys unwrap --id <id> --wrapped <b64>"
   private val keysCompromiseHelp: String =
     "Usage: aegis keys compromise --id <id> --reason \"<text>\""
+  private val keysRotateHelp: String =
+    "Usage: aegis keys rotate --id <id> [--policy Manual|TimeBased:7days|OpCountBased:N]"

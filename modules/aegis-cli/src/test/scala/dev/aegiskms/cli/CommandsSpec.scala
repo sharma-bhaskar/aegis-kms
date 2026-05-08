@@ -228,3 +228,22 @@ final class CommandsSpec extends AnyFunSuite with Matchers:
     r.exitCode shouldBe 1
     r.stderr should include("IllegalOperation")
   }
+
+  test("keys rotate prints the new version and the policy on success") {
+    val rotatedKey = sampleKey.copy(state = "Active", currentVersion = 2)
+    val client     = clientReturning(200, rotatedKey.asJson.noSpaces)
+    val r          = Commands.keysRotate(client, sampleKey.id, "Manual")
+    r.exitCode shouldBe 0
+    r.stdout should include(s"rotated ${sampleKey.id}")
+    r.stdout should include("version: 2")
+    r.stdout should include("policy:  Manual")
+  }
+
+  test("keys rotate on a non-Active source state exits 1 with IllegalOperation") {
+    val errBody =
+      KmsErrorDto("IllegalOperation", "Key is PreActive, must be Active").asJson.noSpaces
+    val client = clientReturning(500, errBody)
+    val r      = Commands.keysRotate(client, sampleKey.id, "Manual")
+    r.exitCode shouldBe 1
+    r.stderr should include("IllegalOperation")
+  }

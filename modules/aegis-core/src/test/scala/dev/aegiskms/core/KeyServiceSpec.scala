@@ -289,3 +289,84 @@ final class KeyServiceSpec extends AnyFunSuite with Matchers:
 
     state shouldBe KeyState.Compromised
   }
+
+  test("a freshly-created key has currentVersion=1") {
+    val v = (for
+      svc     <- KeyService.inMemory
+      created <- svc.create(KeySpec.aes256("v1-key"), alice)
+    yield created.toOption.get.currentVersion).unsafeRunSync()
+
+    v shouldBe 1
+  }
+
+  test("rotate bumps currentVersion by one and keeps the key Active") {
+    val (version, state) = (for
+      svc     <- KeyService.inMemory
+      created <- svc.create(KeySpec.aes256("rotate-me"), alice)
+      id = created.toOption.get.id
+      _   <- svc.activate(id, alice)
+      _   <- svc.rotate(id, RotationPolicy.Manual, alice)
+      got <- svc.get(id, alice)
+    yield (got.toOption.get.currentVersion, got.toOption.get.state)).unsafeRunSync()
+
+    version shouldBe 2
+    state shouldBe KeyState.Active
+  }
+
+  test("rotate twice produces version 3") {
+    val v = (for
+      svc     <- KeyService.inMemory
+      created <- svc.create(KeySpec.aes256("rotate-twice"), alice)
+      id = created.toOption.get.id
+      _   <- svc.activate(id, alice)
+      _   <- svc.rotate(id, RotationPolicy.Manual, alice)
+      _   <- svc.rotate(id, RotationPolicy.Manual, alice)
+      got <- svc.get(id, alice)
+    yield got.toOption.get.currentVersion).unsafeRunSync()
+
+    v shouldBe 3
+  }
+
+  test("rotate on a PreActive key returns IllegalOperation") {
+    val r = (for
+      svc     <- KeyService.inMemory
+      created <- svc.create(KeySpec.aes256("not-active"), alice)
+      id = created.toOption.get.id
+      res <- svc.rotate(id, RotationPolicy.Manual, alice)
+    yield res).unsafeRunSync()
+
+    r.isLeft shouldBe true
+    r.swap.toOption.get.code shouldBe ErrorCode.IllegalOperation
+  }
+
+  test("verify of a pre-rotation signature still succeeds after rotation") {
+    val ok = (for
+      svc     <- KeyService.inMemory
+      created <- svc.create(KeySpec.rsa2048("rotation-verify"), alice)
+      id = created.toOption.get.id
+      _      <- svc.activate(id, alice)
+      signed <- svc.sign(id, "before".getBytes, SigAlgorithm.RsaPssSha256, alice)
+      sig = signed.toOption.get
+      _     <- svc.rotate(id, RotationPolicy.Manual, alice)
+      valid <- svc.verify(id, "before".getBytes, sig, alice)
+    yield valid).unsafeRunSync()
+
+    ok.isRight shouldBe true
+    ok.toOption.get shouldBe true
+  }
+
+  test("decrypt of a pre-rotation ciphertext still succeeds after rotation") {
+    val out = (for
+      svc     <- KeyService.inMemory
+      created <- svc.create(KeySpec.aes256("rotation-decrypt"), alice)
+      id = created.toOption.get.id
+      _  <- svc.activate(id, alice)
+      ct <- svc.encrypt(id, "secret".getBytes, Map("a" -> "1"), alice)
+      ctv = ct.toOption.get
+      _  <- svc.rotate(id, RotationPolicy.Manual, alice)
+      pt <- svc.decrypt(id, ctv, Map("a" -> "1"), alice)
+    yield pt).unsafeRunSync()
+
+    out.isRight shouldBe true
+    new String(out.toOption.get, "UTF-8") shouldBe "secret"
+  }

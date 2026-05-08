@@ -250,6 +250,26 @@ final class HttpRoutes(
                 }
     }
 
+  private val rotateSE: ServerEndpoint[Any, Future] =
+    Endpoints.rotateKey.serverLogic { case (auth, devHdr, idStr, req) =>
+      principalOf(auth, devHdr) match
+        case Left(e) => Future.successful(Left(e))
+        case Right(principal) =>
+          parseId(idStr) match
+            case Left(e) => Future.successful(Left(e))
+            case Right(id) =>
+              RotationPolicy.fromString(req.policy) match
+                case Left(msg) =>
+                  Future.successful(
+                    Left(StatusCode.BadRequest -> KmsErrorDto.of(ErrorCode.InvalidField, msg))
+                  )
+                case Right(policy) =>
+                  runIO(svc.rotate(id, policy, principal)).map {
+                    case Left(err) => Left(errorOut(err))
+                    case Right(k)  => Right(ManagedKeyDto.fromCore(k))
+                  }
+    }
+
   private def decodeSignRequest(
       req: SignRequest
   ): Either[(StatusCode, KmsErrorDto), (Array[Byte], SigAlgorithm)] =
@@ -295,7 +315,8 @@ final class HttpRoutes(
       decryptSE,
       wrapSE,
       unwrapSE,
-      compromiseSE
+      compromiseSE,
+      rotateSE
     )
 
   /** A pekko-http `Route` that mounts every endpoint. */

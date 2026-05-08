@@ -378,3 +378,42 @@ final class CliSpec extends AnyFunSuite with Matchers:
     r.stdout should include("compromised abc")
     r.stdout should include("state:  Compromised")
   }
+
+  test("'keys rotate' missing --id reports a usage error and exits 1") {
+    val r = Cli.run(
+      List("keys", "rotate"),
+      cfg,
+      fakeClientFactory(200, sampleKey.asJson.noSpaces)
+    )
+    r.exitCode shouldBe 1
+    r.stderr should include("--id")
+  }
+
+  test("'keys rotate --id <id>' defaults policy to Manual and POSTs to /rotate") {
+    var captured: Option[HttpPort.Request] = None
+    val rotatedKey                         = sampleKey.copy(state = "Active", currentVersion = 2)
+    val r = Cli.run(
+      List("keys", "rotate", "--id", "abc"),
+      cfg,
+      captureFactory(req => captured = Some(req), rotatedKey.asJson.noSpaces, status = 200)
+    )
+    r.exitCode shouldBe 0
+    captured.get.method shouldBe "POST"
+    captured.get.url should endWith("/v1/keys/abc/rotate")
+    captured.get.body.get should include("\"policy\":\"Manual\"")
+    r.stdout should include("rotated abc")
+    r.stdout should include("version: 2")
+    r.stdout should include("policy:  Manual")
+  }
+
+  test("'keys rotate --id <id> --policy TimeBased:7days' carries the policy on the wire") {
+    var captured: Option[HttpPort.Request] = None
+    val rotatedKey                         = sampleKey.copy(state = "Active", currentVersion = 2)
+    val r = Cli.run(
+      List("keys", "rotate", "--id", "abc", "--policy", "TimeBased:7days"),
+      cfg,
+      captureFactory(req => captured = Some(req), rotatedKey.asJson.noSpaces, status = 200)
+    )
+    r.exitCode shouldBe 0
+    captured.get.body.get should include("\"policy\":\"TimeBased:7days\"")
+  }

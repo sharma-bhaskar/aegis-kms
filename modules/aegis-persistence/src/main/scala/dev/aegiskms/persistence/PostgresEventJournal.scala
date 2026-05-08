@@ -100,6 +100,7 @@ object PostgresEventJournal:
         case _: KeyEvent.Deactivated => "Deactivated"
         case _: KeyEvent.Destroyed   => "Destroyed"
         case _: KeyEvent.Compromised => "Compromised"
+        case _: KeyEvent.Rotated     => "Rotated"
       sql"""
         INSERT INTO aegis_key_events
           (event_id, key_id, event_type, occurred_at, actor_subject, payload)

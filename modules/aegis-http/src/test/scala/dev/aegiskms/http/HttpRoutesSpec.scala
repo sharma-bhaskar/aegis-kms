@@ -374,3 +374,48 @@ final class HttpRoutesSpec extends AnyFunSuite with Matchers with ScalatestRoute
       responseAs[String] should include(""""code":"InvalidField"""")
     }
   }
+
+  test("POST /v1/keys/{id}/rotate bumps currentVersion and keeps state Active") {
+    val route = freshRoute()
+    var id    = ""
+
+    Post("/v1/keys", jsonEntity(createBody)) ~> route ~> check {
+      id = extractField(responseAs[String], "id")
+    }
+    Post(s"/v1/keys/$id/activate") ~> route ~> check(status shouldBe StatusCodes.OK)
+
+    Post(s"/v1/keys/$id/rotate", jsonEntity("""{"policy":"Manual"}""")) ~> route ~> check {
+      status shouldBe StatusCodes.OK
+      val body = responseAs[String]
+      body should include(""""state":"Active"""")
+      body should include(""""currentVersion":2""")
+    }
+  }
+
+  test("POST /v1/keys/{id}/rotate on a PreActive key returns 500 IllegalOperation") {
+    val route = freshRoute()
+    var id    = ""
+
+    Post("/v1/keys", jsonEntity(createBody)) ~> route ~> check {
+      id = extractField(responseAs[String], "id")
+    }
+    Post(s"/v1/keys/$id/rotate", jsonEntity("""{"policy":"Manual"}""")) ~> route ~> check {
+      status shouldBe StatusCodes.InternalServerError
+      responseAs[String] should include(""""code":"IllegalOperation"""")
+    }
+  }
+
+  test("POST /v1/keys/{id}/rotate with a malformed policy returns 400 InvalidField") {
+    val route = freshRoute()
+    var id    = ""
+
+    Post("/v1/keys", jsonEntity(createBody)) ~> route ~> check {
+      id = extractField(responseAs[String], "id")
+    }
+    Post(s"/v1/keys/$id/activate") ~> route ~> check(status shouldBe StatusCodes.OK)
+
+    Post(s"/v1/keys/$id/rotate", jsonEntity("""{"policy":"NopeBased"}""")) ~> route ~> check {
+      status shouldBe StatusCodes.BadRequest
+      responseAs[String] should include(""""code":"InvalidField"""")
+    }
+  }

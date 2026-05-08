@@ -50,11 +50,18 @@ object JsonCodecs:
       id: String,
       spec: KeySpecDto,
       createdAt: Instant,
-      state: String
+      state: String,
+      currentVersion: Int = 1
   )
   object ManagedKeyDto:
     def fromCore(k: ManagedKey): ManagedKeyDto =
-      ManagedKeyDto(k.id.value, KeySpecDto.fromCore(k.spec), k.createdAt, k.state.toString)
+      ManagedKeyDto(
+        k.id.value,
+        KeySpecDto.fromCore(k.spec),
+        k.createdAt,
+        k.state.toString,
+        k.currentVersion
+      )
 
     given Encoder[ManagedKeyDto] = deriveEncoder
     given Decoder[ManagedKeyDto] = deriveDecoder
@@ -163,3 +170,13 @@ object JsonCodecs:
   object CompromiseRequest:
     given Encoder[CompromiseRequest] = deriveEncoder
     given Decoder[CompromiseRequest] = deriveDecoder
+
+  // ── Rotate DTO ─────────────────────────────────────────────────────────────
+
+  /** Rotate request body. `policy` is the wire-format `RotationPolicy.render` string. Defaults to `"Manual"`
+    * when the field is absent.
+    */
+  final case class RotateRequest(policy: String = "Manual")
+  object RotateRequest:
+    given Encoder[RotateRequest] = deriveEncoder
+    given Decoder[RotateRequest] = deriveDecoder

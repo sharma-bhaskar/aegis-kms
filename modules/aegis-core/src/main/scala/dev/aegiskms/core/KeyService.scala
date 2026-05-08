@@ -5,13 +5,19 @@ import cats.syntax.all.*
 
 import java.time.Instant
 
-/** Describes a stored key from the service's perspective. */
+/** Describes a stored key from the service's perspective. `currentVersion` starts at `1` and increments by
+  * one each time `rotate` is called. The KMIP envelope-encryption flow keeps old ciphertexts and signatures
+  * verifiable after rotation: in the in-memory dev backend the deterministic MAC is keyed by `KeyId` only (so
+  * the byte output is version-stable), and AWS KMS handles per-version material internally so the same CMK
+  * decrypts both pre- and post-rotation ciphertexts.
+  */
 final case class ManagedKey(
     id: KeyId,
     spec: KeySpec,
     owner: Principal,
     createdAt: Instant,
-    state: KeyState
+    state: KeyState,
+    currentVersion: Int = 1
 )
 
 enum KeyState:
@@ -85,6 +91,15 @@ trait KeyService[F[_]]:
     * idempotent on an already-`Compromised` key. `Destroyed` keys cannot be compromised.
     */
   def compromise(id: KeyId, reason: String, by: Principal): F[Either[KmsError, ManagedKey]]
+
+  /** Rotate the key under `id`. The key's `currentVersion` is incremented and the rotation is recorded in the
+    * journal with the supplied `policy` (Manual for explicit calls; TimeBased / OpCountBased when the future
+    * auto-scheduler kicks in). Legal source state is `Active` only; rotating a `PreActive`, `Deactivated`,
+    * `Compromised`, or `Destroyed` key returns `KmsError(IllegalOperation, ...)`. Existing signatures and
+    * ciphertexts produced before the rotation continue to verify / decrypt — see the
+    * `ManagedKey.currentVersion` doc for why.
+    */
+  def rotate(id: KeyId, policy: RotationPolicy, by: Principal): F[Either[KmsError, ManagedKey]]
 
 object KeyService:
 
@@ -226,6 +241,27 @@ object KeyService:
                 (m, Left(KmsError(ErrorCode.IllegalOperation, s"Key ${id.value} is Destroyed")))
               case Some(k) =>
                 val updated = k.copy(state = KeyState.Compromised)
+                (m + (id -> updated), Right(updated))
+          }
+
+        def rotate(
+            id: KeyId,
+            policy: RotationPolicy,
+            by: Principal
+        ): IO[Either[KmsError, ManagedKey]] =
+          ref.modify { m =>
+            m.get(id) match
+              case None =>
+                (m, Left(KmsError(ErrorCode.ItemNotFound, s"No key with id ${id.value}")))
+              case Some(k) if k.state != KeyState.Active =>
+                (
+                  m,
+                  Left(
+                    KmsError(ErrorCode.IllegalOperation, s"Key ${id.value} is ${k.state}, must be Active")
+                  )
+                )
+              case Some(k) =>
+                val updated = k.copy(currentVersion = k.currentVersion + 1)
                 (m + (id -> updated), Right(updated))
           }
 

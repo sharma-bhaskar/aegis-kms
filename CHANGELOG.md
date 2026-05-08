@@ -41,6 +41,28 @@ All notable changes to Aegis will be documented here. This project follows
 - **`ReadmeQuickstartSpec` in `aegis-core`.** Compiles + runs the embedded-library example from
   `README.md` so that snippet can never silently bitrot. If you change the README's
   "Quickstart — embedding as a library" Scala block, mirror the change in this test.
+- **Rotate(id, policy) across the whole stack (closes #8).** New
+  `rotate(id, policy, by)` method on `KeyService[F[_]]`. `ManagedKey` gains
+  `currentVersion: Int = 1` (additive — defaulted for back-compat); rotation increments it
+  by one. Legal source state is `Active` only; rotating from any other state returns
+  `KmsError(IllegalOperation, ...)`. The new value type `RotationPolicy` (`Manual |
+  TimeBased(FiniteDuration) | OpCountBased(Long)`) is recorded on the rotation event and
+  audit row — `Manual` for explicit calls today, the auto variants reserved for the v0.2.0
+  scheduler. New `KeyEvent.Rotated(newVersion, policy)` journal event with circe codec so
+  replays restore `currentVersion` deterministically. The "old version stays
+  verifiable/decryptable after rotation" contract from `docs/ARCHITECTURE.md` §3 is
+  preserved without per-version material storage: the in-memory dev backend keys its
+  deterministic MAC by `KeyId` only (so byte output is version-stable), and AWS KMS
+  handles per-version material internally — the same CMK decrypts both pre- and
+  post-rotation ciphertexts. Added `Operation.Rotate` to the IAM allowlist enum;
+  `AuthorizingKeyService` guards via the policy engine; `AuditingKeyService` records
+  `newVersion=N policy=...`; `ActorBackedKeyService.rotate` routes through the actor
+  mailbox for journal-serialized state changes; `PostgresEventJournal` learns the new event
+  kind. On the wire: `POST /v1/keys/{id}/rotate` (request `{policy?}`, response full
+  `ManagedKeyDto` with the bumped `currentVersion`). The CLI gained `aegis keys rotate
+  --id <id> [--policy Manual|TimeBased:7days|OpCountBased:N]`. `ManagedKeyDto` (HTTP +
+  CLI wire shapes) gained the `currentVersion` field; existing JSON without the field
+  decodes as `currentVersion=1` via the case-class default.
 - **Compromise operator override across the whole stack (closes #9).** New
   `compromise(id, reason, by)` method on `KeyService[F[_]]`. Marks the key as `Compromised`;
   from this state every cryptographic operation — including `verify` — refuses with

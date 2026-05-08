@@ -204,6 +204,22 @@ final class AegisHttpClientSpec extends AnyFunSuite with Matchers:
     seen.get.body.get should include("\"reason\":\"leaked in S3\"")
   }
 
+  test("rotateKey POSTs to /v1/keys/{id}/rotate with the policy and decodes the rotated key") {
+    var seen: Option[HttpPort.Request] = None
+    val rotatedKey                     = sampleKey.copy(state = "Active", currentVersion = 2)
+    val port = new RecordingPort(req => {
+      seen = Some(req)
+      HttpPort.Response(200, rotatedKey.asJson.noSpaces)
+    })
+    val client = new AegisHttpClient(port, baseUrl, principal)
+    val res    = client.rotateKey(sampleKey.id, RotateRequest("Manual"))
+
+    res shouldBe Right(rotatedKey)
+    seen.get.method shouldBe "POST"
+    seen.get.url shouldBe s"$baseUrl/v1/keys/${sampleKey.id}/rotate"
+    seen.get.body.get should include("\"policy\":\"Manual\"")
+  }
+
   // ── Stub ────────────────────────────────────────────────────────────────────
 
   final private class RecordingPort(handler: HttpPort.Request => HttpPort.Response) extends HttpPort:

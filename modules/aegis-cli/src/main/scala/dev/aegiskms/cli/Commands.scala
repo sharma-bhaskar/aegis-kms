@@ -9,6 +9,7 @@ import dev.aegiskms.cli.WireFormats.{
   EncryptResponse,
   KeySpecDto,
   ManagedKeyDto,
+  RotateRequest,
   SignRequest,
   SignResponse,
   UnwrapRequest,
@@ -210,6 +211,20 @@ object Commands:
         CommandResult.out(s"compromised ${key.id}\nreason: $reason\nstate:  ${key.state}")
       case Left(err) => CommandResult.err(renderError(err), exitCodeFor(err))
 
+  // ── keys rotate ────────────────────────────────────────────────────────────
+
+  /** `aegis keys rotate --id <id> [--policy <policy>]`. Bumps the key's currentVersion. Defaults to `Manual`;
+    * supply `TimeBased:7days` or `OpCountBased:10000` to record an automatic rotation.
+    */
+  def keysRotate(client: AegisHttpClient, id: String, policy: String): CommandResult =
+    val req = RotateRequest(policy)
+    client.rotateKey(id, req) match
+      case Right(key) =>
+        CommandResult.out(
+          s"rotated ${key.id}\nversion: ${key.currentVersion}\nstate:   ${key.state}\npolicy:  $policy"
+        )
+      case Left(err) => CommandResult.err(renderError(err), exitCodeFor(err))
+
   // ── placeholders for agent-native commands (backends arrive in later PRs) ──
 
   /** `aegis agent issue` — issues a scoped agent token. Real implementation lands once the agent-token
@@ -244,6 +259,7 @@ object Commands:
        |algorithm: ${key.spec.algorithm}-${key.spec.sizeBits}
        |type:      ${key.spec.objectType}
        |state:     ${key.state}
+       |version:   ${key.currentVersion}
        |createdAt: ${key.createdAt}""".stripMargin
 
   /** Map server errors to exit codes: 4 for not-found, 5 for permission, 1 for everything else. Mirrors the

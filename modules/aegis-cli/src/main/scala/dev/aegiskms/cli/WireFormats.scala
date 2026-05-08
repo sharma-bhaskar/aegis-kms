@@ -24,7 +24,13 @@ object WireFormats:
     given Encoder[CreateKeyRequest] = deriveEncoder
     given Decoder[CreateKeyRequest] = deriveDecoder
 
-  final case class ManagedKeyDto(id: String, spec: KeySpecDto, createdAt: Instant, state: String)
+  final case class ManagedKeyDto(
+      id: String,
+      spec: KeySpecDto,
+      createdAt: Instant,
+      state: String,
+      currentVersion: Int = 1
+  )
   object ManagedKeyDto:
     given Encoder[ManagedKeyDto] = deriveEncoder
     given Decoder[ManagedKeyDto] = deriveDecoder
@@ -98,3 +104,8 @@ object WireFormats:
   object CompromiseRequest:
     given Encoder[CompromiseRequest] = deriveEncoder
     given Decoder[CompromiseRequest] = deriveDecoder
+
+  final case class RotateRequest(policy: String = "Manual")
+  object RotateRequest:
+    given Encoder[RotateRequest] = deriveEncoder
+    given Decoder[RotateRequest] = deriveDecoder

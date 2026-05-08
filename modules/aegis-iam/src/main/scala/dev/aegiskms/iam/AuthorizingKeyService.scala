@@ -88,6 +88,9 @@ final class AuthorizingKeyService(
   def compromise(id: KeyId, reason: String, by: Principal): IO[Either[KmsError, ManagedKey]] =
     guard(by, Operation.Compromise, id.value)(inner.compromise(id, reason, by))
 
+  def rotate(id: KeyId, policy: RotationPolicy, by: Principal): IO[Either[KmsError, ManagedKey]] =
+    guard(by, Operation.Rotate, id.value)(inner.rotate(id, policy, by))
+
   private def guard[A](by: Principal, op: Operation, resource: String)(
       action: => IO[Either[KmsError, A]]
   ): IO[Either[KmsError, A]] =

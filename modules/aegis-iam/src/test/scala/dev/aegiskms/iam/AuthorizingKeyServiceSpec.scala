@@ -191,3 +191,34 @@ final class AuthorizingKeyServiceSpec extends AnyFunSuite with Matchers:
     res.isRight shouldBe true
     res.toOption.get.state shouldBe KeyState.Compromised
   }
+
+  test("rotate is denied when the agent's allowedOps doesn't include Rotate") {
+    val engine = RoleBasedPolicyEngine.adminsOnly("admins")
+    val svc    = fixture(engine)
+    val agent = Principal.Agent(
+      subject = "claude-session-7a3",
+      operator = alice,
+      purpose = "ordinary",
+      issuedAt = Instant.now(),
+      ttl = 1.hour,
+      allowedOps = Set(Operation.Get, Operation.Sign), // no Rotate — agents shouldn't be able
+      parent = None
+    )
+    val res = svc.rotate(KeyId.generate(), RotationPolicy.Manual, agent).unsafeRunSync()
+    res.isLeft shouldBe true
+    res.swap.toOption.get.code shouldBe ErrorCode.PermissionDenied
+  }
+
+  test("rotate passes through and bumps currentVersion when the principal has the role and the op") {
+    val engine = RoleBasedPolicyEngine.adminsOnly("admins")
+    val svc    = fixture(engine)
+
+    val created = svc.create(KeySpec.aes256("rotate"), alice).unsafeRunSync()
+    created.isRight shouldBe true
+    val id = created.toOption.get.id
+    svc.activate(id, alice).unsafeRunSync()
+
+    val res = svc.rotate(id, RotationPolicy.Manual, alice).unsafeRunSync()
+    res.isRight shouldBe true
+    res.toOption.get.currentVersion shouldBe 2
+  }

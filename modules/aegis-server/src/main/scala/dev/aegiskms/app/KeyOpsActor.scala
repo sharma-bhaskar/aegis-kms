@@ -77,6 +77,14 @@ object KeyOpsActor:
       replyTo: ActorRef[Either[KmsError, ManagedKey]]
   ) extends Command
 
+  /** Bump the key's `currentVersion`. Legal source state is `Active` only. */
+  final case class Rotate(
+      id: KeyId,
+      policy: RotationPolicy,
+      by: Principal,
+      replyTo: ActorRef[Either[KmsError, ManagedKey]]
+  ) extends Command
+
   // ── Boot ─────────────────────────────────────────────────────────────────────
 
   /** Build a behavior that has already replayed `replayed` into its state map. The supplied `clock` and
@@ -218,6 +226,39 @@ object KeyOpsActor:
                 ))
                 Behaviors.same
               }
+
+        case Rotate(id, policy, by, replyTo) =>
+          state.get(id) match
+            case None =>
+              replyTo ! Left(KmsError(ErrorCode.ItemNotFound, s"No key with id ${id.value}"))
+              Behaviors.same
+            case Some(k) if k.state != KeyState.Active =>
+              replyTo ! Left(KmsError(
+                ErrorCode.IllegalOperation,
+                s"Key ${id.value} is ${k.state}, must be Active"
+              ))
+              Behaviors.same
+            case Some(k) =>
+              val newVersion = k.currentVersion + 1
+              val event = KeyEvent.Rotated(
+                KeyEvent.freshId(),
+                now,
+                id,
+                by.subject,
+                newVersion,
+                policy.render
+              )
+              val updated = k.copy(currentVersion = newVersion)
+              appendOr(journal, event, ctx) {
+                replyTo ! Right(updated)
+                running(journal, state + (id -> updated), clock, idGen)
+              } { err =>
+                replyTo ! Left(KmsError(
+                  ErrorCode.GeneralFailure,
+                  s"journal append failed: ${err.getMessage}"
+                ))
+                Behaviors.same
+              }
     }
 
   /** Synchronously append `event` to the journal. On success: run `onOk`. On failure: log and run `onErr`.
@@ -258,3 +299,5 @@ object KeyOpsActor:
         state - id
       case KeyEvent.Compromised(_, _, id, _, _) =>
         state.get(id).fold(state)(k => state + (id -> k.copy(state = KeyState.Compromised)))
+      case KeyEvent.Rotated(_, _, id, _, newVersion, _) =>
+        state.get(id).fold(state)(k => state + (id -> k.copy(currentVersion = newVersion)))

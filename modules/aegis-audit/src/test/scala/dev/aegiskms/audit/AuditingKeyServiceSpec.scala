@@ -183,3 +183,29 @@ final class AuditingKeyServiceSpec extends AnyFunSuite with Matchers:
     rec.outcome should include("Success")
     rec.outcome should include("reason=leaked in S3 audit 2026-05-08")
   }
+
+  test("rotate emits a Success record carrying the new version and the policy") {
+    val (svc, sink) = fixture()
+
+    val created = svc.create(KeySpec.aes256("audit-rotate"), alice).unsafeRunSync().toOption.get
+    svc.activate(created.id, alice).unsafeRunSync()
+    svc.rotate(created.id, RotationPolicy.Manual, alice).unsafeRunSync()
+
+    val rec = sink.all.unsafeRunSync().find(_.operation == Operation.Rotate).get
+    rec.outcome should startWith("Success")
+    rec.outcome should include("newVersion=2")
+    rec.outcome should include("policy=Manual")
+  }
+
+  test("rotate on a PreActive key emits a Failed record carrying the policy and IllegalOperation") {
+    val (svc, sink) = fixture()
+
+    val created = svc.create(KeySpec.aes256("audit-rotate-fail"), alice).unsafeRunSync().toOption.get
+    // skip activate
+    svc.rotate(created.id, RotationPolicy.Manual, alice).unsafeRunSync()
+
+    val rec = sink.all.unsafeRunSync().find(_.operation == Operation.Rotate).get
+    rec.outcome should startWith("Failed")
+    rec.outcome should include("IllegalOperation")
+    rec.outcome should include("policy=Manual")
+  }

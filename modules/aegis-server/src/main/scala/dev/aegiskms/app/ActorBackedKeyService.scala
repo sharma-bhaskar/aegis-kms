@@ -121,3 +121,12 @@ final class ActorBackedKeyService(
     IO.fromFuture(IO(actor.ask[Either[KmsError, ManagedKey]](ref =>
       KeyOpsActor.Compromise(id, reason, by, ref)
     )))
+
+  /** State-mutating: routes through the actor for the same reason as `compromise`. v0.1.1 doesn't yet drive
+    * AWS-side `EnableKeyRotation` from this path — that wiring lands when per-Aegis-key-to-CMK mapping
+    * arrives in v0.2.0 (PR L2).
+    */
+  def rotate(id: KeyId, policy: RotationPolicy, by: Principal): IO[Either[KmsError, ManagedKey]] =
+    IO.fromFuture(IO(actor.ask[Either[KmsError, ManagedKey]](ref =>
+      KeyOpsActor.Rotate(id, policy, by, ref)
+    )))

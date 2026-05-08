@@ -200,6 +200,24 @@ object Endpoints:
           "IllegalOperation. The supplied `reason` is recorded on the audit row at severity=Critical."
       )
 
+  /** `POST /v1/keys/{id}/rotate` — bump the key's `currentVersion`. Legal source state is `Active` only. */
+  val rotateKey: PublicEndpoint[
+    (Option[String], Option[String], String, RotateRequest),
+    (StatusCode, KmsErrorDto),
+    ManagedKeyDto,
+    Any
+  ] =
+    keysBase.post
+      .in(path[String]("id") / "rotate")
+      .in(jsonBody[RotateRequest])
+      .out(jsonBody[ManagedKeyDto])
+      .summary("Rotate a key (bump current version)")
+      .description(
+        "Increments the key's currentVersion. Legal source state is Active. Existing signatures and " +
+          "ciphertexts produced before the rotation continue to verify and decrypt. The supplied policy " +
+          "is recorded on the audit row."
+      )
+
   /** All endpoint definitions. Used by the OpenAPI generator and tests. */
   val all: List[AnyEndpoint] =
     List(
@@ -213,5 +231,6 @@ object Endpoints:
       decryptKey,
       wrapKey,
       unwrapKey,
-      compromiseKey
+      compromiseKey,
+      rotateKey
     )

@@ -49,6 +49,7 @@ object KeyEventCodec:
   private given deactivatedCodec: Codec.AsObject[KeyEvent.Deactivated] = deriveCodec
   private given destroyedCodec: Codec.AsObject[KeyEvent.Destroyed]     = deriveCodec
   private given compromisedCodec: Codec.AsObject[KeyEvent.Compromised] = deriveCodec
+  private given rotatedCodec: Codec.AsObject[KeyEvent.Rotated]         = deriveCodec
 
   // ── ADT codec with `"type"` discriminator ────────────────────────────────────
 
@@ -60,6 +61,7 @@ object KeyEventCodec:
     case e: KeyEvent.Destroyed => destroyedCodec.encodeObject(e).add("type", Json.fromString("Destroyed"))
     case e: KeyEvent.Compromised =>
       compromisedCodec.encodeObject(e).add("type", Json.fromString("Compromised"))
+    case e: KeyEvent.Rotated => rotatedCodec.encodeObject(e).add("type", Json.fromString("Rotated"))
   }
 
   given Decoder[KeyEvent] = Decoder.instance { c =>
@@ -69,6 +71,7 @@ object KeyEventCodec:
       case "Deactivated" => deactivatedCodec(c)
       case "Destroyed"   => destroyedCodec(c)
       case "Compromised" => compromisedCodec(c)
+      case "Rotated"     => rotatedCodec(c)
       case other =>
         Left(DecodingFailure(s"Unknown KeyEvent type: $other", c.history))
     }
