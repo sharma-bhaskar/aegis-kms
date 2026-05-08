@@ -1,16 +1,18 @@
 package dev.aegiskms.app
 
-import cats.effect.IO
 import cats.effect.unsafe.IORuntime
+import cats.effect.{IO, IOApp, Resource}
+import cats.syntax.all.*
 import com.typesafe.config.{Config, ConfigFactory}
 import dev.aegiskms.agent.{BaselineDetector, InMemoryRecommendationSink, TappedAuditSink}
 import dev.aegiskms.audit.{AuditingKeyService, StdoutAuditSink}
-import dev.aegiskms.core.KeyService
 import dev.aegiskms.http.HttpRoutes
 import dev.aegiskms.iam.{AuthorizingKeyService, JwtVerifier, PrincipalResolver}
 import dev.aegiskms.persistence.{EventJournal, PostgresEventJournal, PostgresJournalConfig}
+import io.micrometer.prometheusmetrics.PrometheusMeterRegistry
 import org.apache.pekko.actor.typed.{ActorSystem, Scheduler}
 import org.apache.pekko.http.scaladsl.Http
+import org.apache.pekko.http.scaladsl.Http.ServerBinding
 import org.apache.pekko.http.scaladsl.server.Directives.concat
 import org.apache.pekko.util.Timeout
 import org.slf4j.LoggerFactory
@@ -37,102 +39,151 @@ import scala.concurrent.duration.*
   * The detector publishes recommendations into an `InMemoryRecommendationSink` for now; later PRs (W3, W3.b)
   * replace that with the auto-responder + webhook fan-out.
   *
+  * **Boot scope.** The whole server is composed as a single `Resource[IO, ServerHandle]`. Each acquired piece
+  * — meter registry, journal connection pool, actor system, HTTP binding — has a matching finalizer that runs
+  * in reverse acquisition order on cancellation. On SIGTERM / SIGINT the cats-effect runtime cancels
+  * `IO.never`, which walks the finalizer chain: HTTP unbind → actor system terminate → journal pool close →
+  * meter registry close. This replaces the v0.1.0 boot path that called `unsafeRunSync` on the journal
+  * Resource and discarded its finalizer (i.e. relied on JVM exit to release the pool).
+  *
   * Productionising checklist (deferred to later PRs):
-  *   - Replace `EventJournal.inMemory` with the Doobie/Postgres impl (PR F1.b)
   *   - Replace `DevPolicyEngine` with `RoleBasedPolicyEngine` configured from OIDC claims (PR F3.b)
   *   - Add Postgres + Kafka audit sinks alongside stdout (PRs F2.b, F2.c)
   *   - Bind KMIP TTLV + MCP servers in addition to HTTP (PRs K1, A1)
   */
-object Server:
+object Server extends IOApp.Simple:
 
   private val logger = LoggerFactory.getLogger(getClass)
 
   private given Timeout = 5.seconds
 
-  def main(args: Array[String]): Unit =
-    given IORuntime = IORuntime.global
-
-    val rootConfig = ConfigFactory.load()
-    val host       = rootConfig.getString("aegis.http.host")
-    val port       = rootConfig.getInt("aegis.http.port")
-
-    // 1. Build the journal up front. The actor needs it at construction time to replay. The Postgres path
-    //    leaks a Resource (connection pool) for the whole process lifetime — `aegis-server` is a long-running
-    //    daemon, so on shutdown the JVM exit closes the pool. A future PR will tie this to a proper
-    //    `cats.effect.Resource` boot scope.
-    val journal: EventJournal[IO] = buildJournal(rootConfig)
-
-    // 2. Make the user guardian *be* the KeyOpsActor. Pekko's `ActorSystem[T]` itself implements
-    //    `ActorRef[T]` for the user guardian, so we can use `system` directly wherever an
-    //    `ActorRef[KeyOpsActor.Command]` is needed. This avoids the Promise/Await dance that, on
-    //    some JDK + Pekko + sbt combinations, hangs at boot waiting for a `Behaviors.setup` block
-    //    that never gets dispatched.
-    given system: ActorSystem[KeyOpsActor.Command] =
-      ActorSystem(KeyOpsActor.fromJournal(journal), "aegis-server", rootConfig)
-    given Scheduler = system.scheduler
-
-    // 3. Build the meter registry up front so the application + JVM binders share one sink. Bound metrics
-    //    are exposed via the `GET /metrics` route alongside the application routes.
-    val metricsRegistry = MetricsRegistry.make()
-
-    // 4. Decorate the actor-backed service with auth, then metrics, then audit. See the class docstring
-    //    above for why this order matters.
-    val actorBacked: KeyService[IO] = new ActorBackedKeyService(system)
-    val authorizing: KeyService[IO] = new AuthorizingKeyService(actorBacked, new DevPolicyEngine)
-    val metered: KeyService[IO]     = new MeteredKeyService(authorizing, metricsRegistry)
-
-    val resolver = buildResolver(rootConfig)
-
-    val app: IO[Unit] =
-      for
-        recSink  <- InMemoryRecommendationSink.make
-        detector <- BaselineDetector.make()
-        // Demo wiring: the inner sink is stdout (visible to whoever boots `aegis-server`); the tap drives
-        // the W1 anomaly detector and publishes recommendations into the in-memory sink.
-        sink     = TappedAuditSink(StdoutAuditSink(), detector, recSink)
-        auditing = new AuditingKeyService(metered, sink)
-        _ <- IO {
-          logger.warn(
-            "aegis-server starting in DEV MODE — DevPolicyEngine grants every Human full access. " +
-              "Replace with OIDC + RoleBasedPolicyEngine before exposing this beyond a workstation."
-          )
-        }
-        appRoute = concat(HttpRoutes(auditing, resolver).routes, MetricsRoutes.route(metricsRegistry))
-        _ <- IO.fromFuture(IO(Http().newServerAt(host, port).bind(appRoute)))
-        _ <- IO {
-          logger.info(s"aegis-server listening on http://$host:$port (try POST /v1/keys)")
-          logger.info(s"metrics: GET http://$host:$port/metrics (Prometheus exposition format)")
-          logger.info("audit feed → stdout; recommendations → in-memory sink (visible via /admin in PR W1.b)")
-        }
-        _ <- IO.never[Unit]
-      yield ()
-
-    app.unsafeRunSync()
-
-  /** Choose the journal backend from configuration. `in-memory` (default for dev/tests) is built directly;
-    * `postgres` allocates a connection pool via `Resource` and we lift the journal out for the lifetime of
-    * the process. Any other value fails fast at boot — this is operator-facing and silent fallback would mask
-    * a misconfigured deployment.
+  /** `IOApp.Simple` runs `program` and registers a SIGTERM/SIGINT handler that cancels it. The `Resource`
+    * chain inside `boot` walks finalizers in reverse on cancellation, so the binding unbinds before the actor
+    * terminates before the journal pool closes.
     */
-  private def buildJournal(config: Config)(using IORuntime): EventJournal[IO] =
+  def run: IO[Unit] =
+    // `IOApp.Simple` exposes the cats-effect `IORuntime` as `protected def runtime`. We thread it
+    // into implicit scope so `boot`'s `using IORuntime` parameter resolves — the actor's
+    // `appendOr` helper still calls `journal.append(event).unsafeRunSync()` and needs a runtime.
+    given IORuntime = runtime
+    IO(ConfigFactory.load()).flatMap(rootConfig => boot(rootConfig).useForever)
+
+  /** The composed boot scope. Each acquisition is paired with its finalizer; `IOApp` cancels this whole
+    * `Resource` on SIGTERM/SIGINT, and the cats-effect runtime walks the chain in reverse.
+    */
+  def boot(rootConfig: Config)(using IORuntime): Resource[IO, Unit] =
+    val host = rootConfig.getString("aegis.http.host")
+    val port = rootConfig.getInt("aegis.http.port")
+
+    for
+      // 1. Meter registry. Standard JVM binders are AutoCloseable (the JvmGcMetrics binder installs JMX
+      //    listeners) so we close it on shutdown.
+      metricsRegistry <- meterRegistryResource
+
+      // 2. Journal connection pool (or in-memory ref). Closing returns the Postgres pool to its
+      //    finalizer; in-memory has no finalizer.
+      journal <- journalResource(rootConfig)
+
+      // 3. Actor system. Pekko Typed's `ActorSystem[T]` itself implements `ActorRef[T]` for the user
+      //    guardian — see KeyOpsActor docs. `terminate()` returns a Future[Terminated]; we bridge.
+      system <- actorSystemResource(journal, rootConfig)
+      given ActorSystem[KeyOpsActor.Command] = system
+      given Scheduler                        = system.scheduler
+
+      // 4. Decorate. Auth → metrics → audit; see the class docstring for why this order matters.
+      actorBacked = new ActorBackedKeyService(system)
+      authorizing = new AuthorizingKeyService(actorBacked, new DevPolicyEngine)
+      metered     = new MeteredKeyService(authorizing, metricsRegistry)
+      recSink  <- Resource.eval(InMemoryRecommendationSink.make)
+      detector <- Resource.eval(BaselineDetector.make())
+      sink     = TappedAuditSink(StdoutAuditSink(), detector, recSink)
+      auditing = new AuditingKeyService(metered, sink)
+
+      resolver = buildResolver(rootConfig)
+      _ <- Resource.eval(IO {
+        logger.warn(
+          "aegis-server starting in DEV MODE — DevPolicyEngine grants every Human full access. " +
+            "Replace with OIDC + RoleBasedPolicyEngine before exposing this beyond a workstation."
+        )
+      })
+
+      // 5. HTTP binding. Acquire = bind; release = unbind with the configured grace period (5s) so
+      //    in-flight requests finish before the socket closes.
+      appRoute =
+        concat(HttpRoutes(auditing, resolver).routes, MetricsRoutes.route(metricsRegistry))
+      _ <- httpBindingResource(host, port, appRoute)
+      _ <- Resource.eval(IO {
+        logger.info(s"aegis-server listening on http://$host:$port (try POST /v1/keys)")
+        logger.info(s"docs:    http://$host:$port/docs/  (Swagger UI; OpenAPI YAML at /docs/docs.yaml)")
+        logger.info(s"metrics: http://$host:$port/metrics (Prometheus exposition format)")
+        logger.info("audit feed → stdout; recommendations → in-memory sink (visible via /admin in PR W1.b)")
+      })
+    yield ()
+
+  // ── Resource builders ──────────────────────────────────────────────────────
+
+  /** Meter registry as a Resource. The standard JVM binders attached by `MetricsRegistry.make` keep JMX
+    * listeners alive; closing the registry releases them.
+    */
+  private def meterRegistryResource: Resource[IO, PrometheusMeterRegistry] =
+    Resource.make(IO(MetricsRegistry.make()))(r => IO(r.close()))
+
+  /** Journal as a Resource. The Postgres path returns a real `Resource[IO, EventJournal[IO]]` whose finalizer
+    * closes the connection pool. The in-memory path has nothing to close, so we lift it with `Resource.eval`.
+    */
+  private def journalResource(config: Config): Resource[IO, EventJournal[IO]] =
     config.getString("aegis.persistence.journal.kind") match
       case "in-memory" =>
-        logger.info(
-          "journal: in-memory (state is non-durable; set aegis.persistence.journal.kind=postgres for production)"
-        )
-        EventJournal.inMemory.unsafeRunSync()
+        Resource.eval(IO {
+          logger.info(
+            "journal: in-memory (state is non-durable; set aegis.persistence.journal.kind=postgres for production)"
+          )
+        }) *> Resource.eval(EventJournal.inMemory)
       case "postgres" =>
         val pgConfig = readPostgresJournalConfig(config)
-        logger.info(s"journal: postgres at ${pgConfig.jdbcUrl} (pool-size=${pgConfig.poolSize})")
-        // `allocated` returns (resource, finalizer); we discard the finalizer because the JVM exit is the
-        // process's only shutdown trigger today. A real `Resource[IO, Unit]` boot wrapper is on the F1.b
-        // follow-up list; doing it now would pull every other component into the same Resource, which is a
-        // larger refactor than this PR's scope.
-        PostgresEventJournal.make(pgConfig).allocated.unsafeRunSync()._1
+        Resource.eval(IO {
+          logger.info(s"journal: postgres at ${pgConfig.jdbcUrl} (pool-size=${pgConfig.poolSize})")
+        }) *> PostgresEventJournal.make(pgConfig)
       case other =>
-        throw new IllegalArgumentException(
+        Resource.eval(IO.raiseError(new IllegalArgumentException(
           s"Unknown aegis.persistence.journal.kind=$other (expected 'in-memory' or 'postgres')"
+        )))
+
+  /** Actor system as a Resource. `terminate()` returns `Future[Terminated]`; we bridge to `IO` so the
+    * finalizer can wait deterministically. The user guardian *is* the `KeyOpsActor` (see KeyOpsActor doc for
+    * why).
+    */
+  private def actorSystemResource(
+      journal: EventJournal[IO],
+      rootConfig: Config
+  )(using IORuntime): Resource[IO, ActorSystem[KeyOpsActor.Command]] =
+    Resource.make(
+      IO(ActorSystem(KeyOpsActor.fromJournal(journal), "aegis-server", rootConfig))
+    ) { system =>
+      IO.fromFuture(IO {
+        system.terminate()
+        system.whenTerminated
+      }).void.handleErrorWith(t =>
+        IO(logger.warn(s"actor system shutdown reported error: ${t.getMessage}", t))
+      )
+    }
+
+  /** HTTP binding as a Resource. `unbind` honours pekko-http's `terminate(grace)` semantics — we give
+    * in-flight requests up to 5 seconds to finish before the socket is forced closed.
+    */
+  private def httpBindingResource(
+      host: String,
+      port: Int,
+      route: org.apache.pekko.http.scaladsl.server.Route
+  )(using ActorSystem[?]): Resource[IO, ServerBinding] =
+    Resource.make(
+      IO.fromFuture(IO(Http().newServerAt(host, port).bind(route)))
+    ) { binding =>
+      IO.fromFuture(IO(binding.terminate(hardDeadline = 5.seconds))).void
+        .handleErrorWith(t =>
+          IO(logger.warn(s"HTTP binding shutdown reported error: ${t.getMessage}", t))
         )
+    }
 
   /** HOCON loader for `aegis.persistence.journal.postgres`. Lives in the server module rather than the
     * persistence library so the library stays dependency-free of typesafe-config.
