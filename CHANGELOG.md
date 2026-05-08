@@ -20,6 +20,18 @@ All notable changes to Aegis will be documented here. This project follows
 
 ### Added
 
+- **Anomaly detector expansion: time-of-day, source-IP, op-histogram baselines (closes #13).**
+  `BaselineDetector` now ships five detectors instead of two — adds `OpHistogramBaseline` (actor
+  performed an `Operation` it has never used), `TimeOfDayBaseline` (actor active in a UTC hour
+  outside their seen set), and `SourceIpBaseline` (request from a new IP, read from
+  `AuditRecord.context("source.ip")`). Each detector has a cold-start guard: it requires the actor
+  to have at least one prior observation in that dimension, so the first call doesn't alert. A
+  single anomalous record can fire multiple detectors at once (compound anomalies — see the
+  README's "Claude goes rogue" path). `ActorBaseline` gained `hoursSeen: Set[Int]` and
+  `sourceIpsSeen: Set[String]`. `AuditRecord` gained an additive `context: Map[String, String] =
+  Map.empty` field; the `SourceIpBaseline` detector reads `BaselineDetector.SourceIpContextKey`
+  (`"source.ip"`) from it. The HTTP layer doesn't yet populate the context — that's a follow-up;
+  until then the SourceIp detector is shape-complete and tested but inert in production.
 - **OpenAPI 3.1 spec + Swagger UI on the REST plane (closes #52).** `HttpRoutes` now generates an
   OpenAPI document from the live `Endpoints.all` list and mounts the standard Swagger UI bundle at
   `/docs/`, with the raw YAML at `/docs/docs.yaml`. Because the spec is derived from the same Tapir

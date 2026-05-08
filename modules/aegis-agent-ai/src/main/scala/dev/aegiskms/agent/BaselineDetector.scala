@@ -4,7 +4,7 @@ import cats.effect.{IO, Ref}
 import dev.aegiskms.audit.AuditRecord
 import dev.aegiskms.core.{Operation, Principal}
 
-import java.time.{Duration, Instant}
+import java.time.{Duration, Instant, ZoneOffset}
 import java.util.UUID
 
 /** Sliding-window baseline detector — the W1 MVP that powers the "Claude goes rogue" demo in the README.
@@ -12,13 +12,23 @@ import java.util.UUID
   * Maintains, per actor subject, a small in-memory baseline:
   *   - the set of keys the actor has ever touched (within the retention window),
   *   - the histogram of ops the actor has ever performed,
+  *   - the set of UTC hours-of-day the actor has been active in,
+  *   - the set of source IPs the actor has been seen from,
   *   - the timestamps of the last N requests, used for rate-spike detection.
   *
-  * Two detector heuristics:
+  * Five detector heuristics:
   *   - `ScopeBaseline`: the actor touched a key not in its baseline. For agents this is severity High
   *     (suggested action `Revoke`); for humans it's severity Low (suggested action `Alert`).
   *   - `RateSpike`: the actor issued more than `rateBurstThreshold` requests in `rateBurstWindow`. Severity
   *     scales linearly with the multiplier above the burst threshold.
+  *   - `OpHistogramBaseline`: the actor performed an `Operation` it has never performed before.
+  *   - `TimeOfDayBaseline`: the actor was active in a UTC hour-of-day they have never been active in.
+  *   - `SourceIpBaseline`: the actor's request came from an IP not in their seen set. Reads
+  *     `record.context("source.ip")`; inert until the HTTP plumbing PR populates that key.
+  *
+  * Cold-start: every detector requires the actor to have at least one prior observation in the relevant
+  * dimension before it can fire. The first time `claude-session-7a3` shows up we record but don't alert; the
+  * *second* observation is what produces a recommendation if it deviates.
   *
   * The detector is intentionally tiny: this is the demo bar, not the production scorer. Risk-scored access
   * decisions and the LLM advisor are PRs W2 and W4.
@@ -45,6 +55,12 @@ final class BaselineDetector private (
 
 object BaselineDetector:
 
+  /** Well-known key the SourceIp detector reads from `AuditRecord.context`. The HTTP layer is responsible for
+    * populating this once per-request context plumbing lands; until then the SourceIp detector stays inert in
+    * production but can be exercised by tests that build records with the context populated.
+    */
+  val SourceIpContextKey: String = "source.ip"
+
   final case class Config(
       rateRetention: Duration,
       rateBurstWindow: Duration,
@@ -58,25 +74,36 @@ object BaselineDetector:
       rateBurstThreshold = 30
     )
 
+  /** Per-actor baseline. `hoursSeen` are UTC hours-of-day (`0`–`23`); we deliberately don't try to be
+    * timezone-aware in v0.1.1 — this is the *demo* detector. `sourceIpsSeen` is empty until the HTTP plumbing
+    * PR populates `AuditRecord.context("source.ip")`.
+    */
   final case class ActorBaseline(
       keysSeen: Set[String],
       opsSeen: Map[Operation, Int],
+      hoursSeen: Set[Int],
+      sourceIpsSeen: Set[String],
       recentRequests: Vector[Instant],
       firstSeen: Option[Instant]
   ):
     def update(rec: AuditRecord, resource: String, retention: Duration): ActorBaseline =
-      val cutoff = rec.at.minus(retention)
-      val pruned = recentRequests.dropWhile(_.isBefore(cutoff))
-      val newOps = opsSeen.updatedWith(rec.operation)(o => Some(o.getOrElse(0) + 1))
+      val cutoff  = rec.at.minus(retention)
+      val pruned  = recentRequests.dropWhile(_.isBefore(cutoff))
+      val newOps  = opsSeen.updatedWith(rec.operation)(o => Some(o.getOrElse(0) + 1))
+      val newHour = rec.at.atZone(ZoneOffset.UTC).getHour
+      val maybeIp = rec.context.get(SourceIpContextKey)
       ActorBaseline(
         keysSeen = keysSeen + resource,
         opsSeen = newOps,
+        hoursSeen = hoursSeen + newHour,
+        sourceIpsSeen = maybeIp.fold(sourceIpsSeen)(sourceIpsSeen + _),
         recentRequests = pruned :+ rec.at,
         firstSeen = firstSeen.orElse(Some(rec.at))
       )
 
   object ActorBaseline:
-    val empty: ActorBaseline = ActorBaseline(Set.empty, Map.empty, Vector.empty, None)
+    val empty: ActorBaseline =
+      ActorBaseline(Set.empty, Map.empty, Set.empty, Set.empty, Vector.empty, None)
 
   def make(config: Config = Config.Demo): IO[BaselineDetector] =
     Ref.of[IO, Map[String, ActorBaseline]](Map.empty).map(new BaselineDetector(_, config))
@@ -93,18 +120,12 @@ object BaselineDetector:
 
     // 1. ScopeBaseline — actor touched a key it has never touched before.
     if existing.keysSeen.nonEmpty && !existing.keysSeen.contains(resource) then
-      val severity = rec.principal match
-        case _: Principal.Agent => Severity.High
-        case _                  => Severity.Low
-      val action = rec.principal match
-        case _: Principal.Agent => SuggestedAction.Revoke
-        case _                  => SuggestedAction.Alert
       recs += AgentRecommendation(
         eventId = freshId(),
         at = rec.at,
         actor = rec.principal,
         detector = "ScopeBaseline",
-        severity = severity,
+        severity = severityForActor(rec.principal),
         summary = s"Actor touched a key outside its established baseline (${resource})",
         details = Map(
           "resource"      -> resource,
@@ -112,7 +133,7 @@ object BaselineDetector:
           "outcome"       -> rec.outcome,
           "correlationId" -> rec.correlationId
         ),
-        suggestedAction = action
+        suggestedAction = actionForActor(rec.principal)
       )
 
     // 2. RateSpike — too many requests in the burst window.
@@ -144,7 +165,79 @@ object BaselineDetector:
         suggestedAction = action
       )
 
+    // 3. OpHistogramBaseline — actor performed an Operation it has never used before.
+    //    Cold-start guard: we need at least one prior op (`opsSeen.nonEmpty`) before the *novelty* of
+    //    a new op is meaningful. Without this guard the detector would fire on every actor's first call.
+    if existing.opsSeen.nonEmpty && !existing.opsSeen.contains(rec.operation) then
+      recs += AgentRecommendation(
+        eventId = freshId(),
+        at = rec.at,
+        actor = rec.principal,
+        detector = "OpHistogramBaseline",
+        severity = severityForActor(rec.principal),
+        summary =
+          s"Actor performed ${rec.operation} for the first time (prior ops: ${existing.opsSeen.keys.toSeq.sortBy(_.toString).mkString(", ")})",
+        details = Map(
+          "newOperation"  -> rec.operation.toString,
+          "priorOpKinds"  -> existing.opsSeen.size.toString,
+          "outcome"       -> rec.outcome,
+          "correlationId" -> rec.correlationId
+        ),
+        suggestedAction = actionForActor(rec.principal)
+      )
+
+    // 4. TimeOfDayBaseline — actor active in a UTC hour-of-day they've never been active in.
+    val hour = rec.at.atZone(ZoneOffset.UTC).getHour
+    if existing.hoursSeen.nonEmpty && !existing.hoursSeen.contains(hour) then
+      recs += AgentRecommendation(
+        eventId = freshId(),
+        at = rec.at,
+        actor = rec.principal,
+        detector = "TimeOfDayBaseline",
+        // Off-hours is suspicious for any principal, but we keep agents at High because they should
+        // never be the ones widening their schedule on their own.
+        severity = severityForActor(rec.principal),
+        summary =
+          s"Actor active at UTC hour=$hour, outside the established baseline (${existing.hoursSeen.toSeq.sorted.mkString(",")})",
+        details = Map(
+          "newHourUtc"    -> hour.toString,
+          "hoursSeen"     -> existing.hoursSeen.toSeq.sorted.mkString(","),
+          "correlationId" -> rec.correlationId
+        ),
+        suggestedAction = actionForActor(rec.principal)
+      )
+
+    // 5. SourceIpBaseline — request from an IP not in the actor's seen set. Reads
+    //    `record.context("source.ip")`. Inert in production until the HTTP plumbing PR populates the
+    //    key; tests can build records with the context map set directly. We only fire when the actor
+    //    has at least one prior IP — so the cold-start case (no IP history at all) doesn't alert.
+    rec.context.get(SourceIpContextKey).foreach { ip =>
+      if existing.sourceIpsSeen.nonEmpty && !existing.sourceIpsSeen.contains(ip) then
+        recs += AgentRecommendation(
+          eventId = freshId(),
+          at = rec.at,
+          actor = rec.principal,
+          detector = "SourceIpBaseline",
+          severity = severityForActor(rec.principal),
+          summary = s"Actor request from new source IP $ip (prior IPs: ${existing.sourceIpsSeen.size})",
+          details = Map(
+            "sourceIp"      -> ip,
+            "priorIpCount"  -> existing.sourceIpsSeen.size.toString,
+            "correlationId" -> rec.correlationId
+          ),
+          suggestedAction = actionForActor(rec.principal)
+        )
+    }
+
     recs.result()
+
+  private def severityForActor(p: Principal): Severity = p match
+    case _: Principal.Agent => Severity.High
+    case _                  => Severity.Low
+
+  private def actionForActor(p: Principal): SuggestedAction = p match
+    case _: Principal.Agent => SuggestedAction.Revoke
+    case _                  => SuggestedAction.Alert
 
   private def keyResource(rec: AuditRecord): String =
     // Audit records carry resource as `key:<id>` for op-on-key, or `name:<n>/...` for create.
