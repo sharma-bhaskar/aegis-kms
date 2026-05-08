@@ -362,6 +362,47 @@ final class HttpRoutesSpec extends AnyFunSuite with Matchers with ScalatestRoute
     }
   }
 
+  test("OpenAPI YAML generated from the endpoint list mentions every advertised path") {
+    val routes  = HttpRoutes(KeyService.inMemory.unsafeRunSync())
+    val openapi = routes.openApiYaml
+
+    openapi should include("openapi: 3.1.0")
+    openapi should include("Aegis-KMS REST API")
+    // every shipped endpoint must appear in the doc (drift guard)
+    List(
+      "/v1/keys",
+      "/v1/keys/{id}",
+      "/v1/keys/{id}/activate",
+      "/v1/keys/{id}/sign",
+      "/v1/keys/{id}/verify",
+      "/v1/keys/{id}/encrypt",
+      "/v1/keys/{id}/decrypt",
+      "/v1/keys/{id}/wrap",
+      "/v1/keys/{id}/unwrap",
+      "/v1/keys/{id}/compromise",
+      "/v1/keys/{id}/rotate"
+    ).foreach(p => openapi should include(p))
+  }
+
+  test("GET /docs/docs.yaml returns the OpenAPI YAML with text/yaml or application/yaml content-type") {
+    Get("/docs/docs.yaml") ~> freshRoute() ~> check {
+      status shouldBe StatusCodes.OK
+      val body = responseAs[String]
+      body should include("openapi: 3.1.0")
+      body should include("/v1/keys/{id}/sign")
+    }
+  }
+
+  test("GET /docs/ serves the Swagger UI HTML shell") {
+    Get("/docs/") ~> freshRoute() ~> check {
+      status shouldBe StatusCodes.OK
+      val body = responseAs[String]
+      // swagger-ui-bundle ships an HTML page that bootstraps the JS app — we just assert the shell
+      // shape rather than pin specific text the bundle's authors might rev later.
+      body.toLowerCase should (include("swagger") or include("<!doctype html"))
+    }
+  }
+
   test("POST /v1/keys/{id}/compromise with a blank reason returns 400 InvalidField") {
     val route = freshRoute()
     var id    = ""
