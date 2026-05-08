@@ -6,6 +6,18 @@ All notable changes to Aegis will be documented here. This project follows
 
 ## Unreleased
 
+_No entries yet — open the next PR with its `Added` / `Changed` / `Fixed` block._
+
+## 0.1.1 — 2026-05-09
+
+First public, taggable release. Everything below shipped between the
+`v0.1.0-rc.2` candidate and this tag — the full key-lifecycle and
+crypto surface (sign / verify / encrypt / decrypt / wrap / unwrap /
+rotate / compromise), JWT bearer auth, Postgres event journal,
+Prometheus + OpenTelemetry observability, anomaly-detector baselines,
+and the OpenAPI / Swagger UI documentation surface. v0.1.0 final was
+never cut — what we'd planned as v0.1.0 is folded into this release.
+
 ### Changed
 
 - **`Server` now boots inside a `Resource[IO, Unit]` (closes #12).** Refactored the entry point from
