@@ -75,6 +75,16 @@ final class AuthorizingKeyService(
   ): IO[Either[KmsError, Array[Byte]]] =
     guard(by, Operation.Decrypt, id.value)(inner.decrypt(id, ciphertext, context, by))
 
+  def wrap(id: KeyId, dek: Array[Byte], by: Principal): IO[Either[KmsError, WrappedDek]] =
+    guard(by, Operation.Wrap, id.value)(inner.wrap(id, dek, by))
+
+  def unwrap(
+      id: KeyId,
+      wrapped: WrappedDek,
+      by: Principal
+  ): IO[Either[KmsError, Array[Byte]]] =
+    guard(by, Operation.Unwrap, id.value)(inner.unwrap(id, wrapped, by))
+
   private def guard[A](by: Principal, op: Operation, resource: String)(
       action: => IO[Either[KmsError, A]]
   ): IO[Either[KmsError, A]] =

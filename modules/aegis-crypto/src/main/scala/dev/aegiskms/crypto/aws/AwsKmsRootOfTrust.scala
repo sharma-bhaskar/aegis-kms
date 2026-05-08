@@ -1,7 +1,17 @@
 package dev.aegiskms.crypto.aws
 
 import cats.effect.IO
-import dev.aegiskms.core.{Algorithm, Ciphertext, ErrorCode, KeyId, KeySpec, KmsError, SigAlgorithm, Signature}
+import dev.aegiskms.core.{
+  Algorithm,
+  Ciphertext,
+  ErrorCode,
+  KeyId,
+  KeySpec,
+  KmsError,
+  SigAlgorithm,
+  Signature,
+  WrappedDek
+}
 import dev.aegiskms.crypto.{RawKey, RootOfTrust, WrappedKey}
 import software.amazon.awssdk.services.kms.KmsClient
 import software.amazon.awssdk.services.kms.model.{DataKeySpec, KmsException, SigningAlgorithmSpec}
@@ -92,6 +102,20 @@ final class AwsKmsRootOfTrust(port: AwsKmsPort, kekArn: String) extends RootOfTr
     IO.blocking {
       Right(port.decryptWithContext(kekArn, ciphertext.bytes, context))
     }.handleError(translate("Decrypt"))
+
+  /** Wrap a DEK by feeding its bytes to AWS KMS `Encrypt` with no encryption context. The returned blob is
+    * opaque ciphertext that `unwrapDek` recovers via `Decrypt`. AWS doesn't have separate Wrap/Unwrap APIs at
+    * the symmetric-CMK level — this is the conventional wire-up.
+    */
+  def wrap(id: KeyId, dek: Array[Byte]): IO[Either[KmsError, WrappedDek]] =
+    IO.blocking {
+      Right(WrappedDek(port.encrypt(kekArn, dek, Map.empty)))
+    }.handleError(translate("Wrap"))
+
+  def unwrapDek(id: KeyId, wrapped: WrappedDek): IO[Either[KmsError, Array[Byte]]] =
+    IO.blocking {
+      Right(port.decryptWithContext(kekArn, wrapped.bytes, Map.empty))
+    }.handleError(translate("Unwrap"))
 
   // ── Helpers ────────────────────────────────────────────────────────────────
 

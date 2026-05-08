@@ -178,3 +178,48 @@ final class KeyServiceSpec extends AnyFunSuite with Matchers:
     opened.isRight shouldBe true
     new String(opened.toOption.get, "UTF-8") shouldBe "rev"
   }
+
+  test("wrap then unwrap round-trips the DEK bytes") {
+    val dek = Array.tabulate(32)(i => (i * 13 + 7).toByte) // representative 32-byte DEK
+
+    val recovered = (for
+      svc     <- KeyService.inMemory
+      created <- svc.create(KeySpec.aes256("kek"), alice)
+      id = created.toOption.get.id
+      _ <- svc.activate(id, alice)
+      w <- svc.wrap(id, dek, alice)
+      wv = w.toOption.get
+      out <- svc.unwrap(id, wv, alice)
+    yield out).unsafeRunSync()
+
+    recovered.isRight shouldBe true
+    recovered.toOption.get shouldBe dek
+  }
+
+  test("wrap on a PreActive key returns IllegalOperation") {
+    val result = (for
+      svc     <- KeyService.inMemory
+      created <- svc.create(KeySpec.aes256("not-yet-active"), alice)
+      id = created.toOption.get.id
+      w <- svc.wrap(id, "dek".getBytes, alice)
+    yield w).unsafeRunSync()
+
+    result.isLeft shouldBe true
+    result.swap.toOption.get.code shouldBe ErrorCode.IllegalOperation
+  }
+
+  test("unwrap is permitted on a Deactivated key (existing wrapped DEKs stay recoverable)") {
+    val recovered = (for
+      svc     <- KeyService.inMemory
+      created <- svc.create(KeySpec.aes256("deact-kek"), alice)
+      id = created.toOption.get.id
+      _ <- svc.activate(id, alice)
+      w <- svc.wrap(id, "dek-bytes".getBytes, alice)
+      wv = w.toOption.get
+      _   <- svc.revoke(id, alice)
+      out <- svc.unwrap(id, wv, alice)
+    yield out).unsafeRunSync()
+
+    recovered.isRight shouldBe true
+    new String(recovered.toOption.get, "UTF-8") shouldBe "dek-bytes"
+  }

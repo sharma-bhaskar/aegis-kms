@@ -77,6 +77,22 @@ final class AegisHttpClient(http: HttpPort, baseUrl: String, principal: Option[S
       case 200    => decodeBody[DecryptResponse](res.body)
       case status => Left(toError(status, res.body))
 
+  def wrapKey(id: String, req: WrapRequest): Either[ClientError, WrapResponse] =
+    val body    = req.asJson.noSpaces
+    val headers = baseHeaders + ("Content-Type" -> "application/json")
+    val res     = http.execute(HttpPort.Request("POST", url(s"/v1/keys/$id/wrap"), headers, Some(body)))
+    res.status match
+      case 200    => decodeBody[WrapResponse](res.body)
+      case status => Left(toError(status, res.body))
+
+  def unwrapKey(id: String, req: UnwrapRequest): Either[ClientError, UnwrapResponse] =
+    val body    = req.asJson.noSpaces
+    val headers = baseHeaders + ("Content-Type" -> "application/json")
+    val res     = http.execute(HttpPort.Request("POST", url(s"/v1/keys/$id/unwrap"), headers, Some(body)))
+    res.status match
+      case 200    => decodeBody[UnwrapResponse](res.body)
+      case status => Left(toError(status, res.body))
+
   // ── Helpers ────────────────────────────────────────────────────────────────
 
   private def url(path: String): String =

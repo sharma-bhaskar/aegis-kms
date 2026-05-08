@@ -1,7 +1,16 @@
 package dev.aegiskms.crypto
 
 import cats.effect.IO
-import dev.aegiskms.core.{Ciphertext, ErrorCode, KeyId, KeySpec, KmsError, SigAlgorithm, Signature}
+import dev.aegiskms.core.{
+  Ciphertext,
+  ErrorCode,
+  KeyId,
+  KeySpec,
+  KmsError,
+  SigAlgorithm,
+  Signature,
+  WrappedDek
+}
 
 /** SPI for a root-of-trust provider. Implementations live in `dev.aegiskms.crypto.aws`,
   * `dev.aegiskms.crypto.gcp`, `dev.aegiskms.crypto.pkcs11`, etc., and are selected at server startup based on
@@ -52,6 +61,12 @@ trait RootOfTrust[F[_]]:
       ciphertext: Ciphertext,
       context: Map[String, String]
   ): F[Either[KmsError, Array[Byte]]]
+
+  // Key-wrapping family — KMIP-style envelope encryption of DEK material with no AAD.
+
+  def wrap(id: KeyId, dek: Array[Byte]): F[Either[KmsError, WrappedDek]]
+
+  def unwrapDek(id: KeyId, wrapped: WrappedDek): F[Either[KmsError, Array[Byte]]]
 
 final case class WrappedKey(bytes: Array[Byte], rotationId: String)
 final case class RawKey(bytes: Array[Byte])
@@ -118,6 +133,19 @@ object RootOfTrust:
       IO(InMemoryAead.open(id, context, ciphertext.bytes))
         .handleError(e =>
           Left(KmsError(ErrorCode.CryptographicFailure, s"in-memory decrypt failed: ${e.getMessage}"))
+        )
+
+    def wrap(id: KeyId, dek: Array[Byte]): IO[Either[KmsError, WrappedDek]] =
+      IO {
+        Right(WrappedDek(InMemoryAead.seal(id, Map.empty, dek)))
+      }.handleError(e =>
+        Left(KmsError(ErrorCode.CryptographicFailure, s"in-memory wrap failed: ${e.getMessage}"))
+      )
+
+    def unwrapDek(id: KeyId, wrapped: WrappedDek): IO[Either[KmsError, Array[Byte]]] =
+      IO(InMemoryAead.open(id, Map.empty, wrapped.bytes))
+        .handleError(e =>
+          Left(KmsError(ErrorCode.CryptographicFailure, s"in-memory unwrap failed: ${e.getMessage}"))
         )
 
 /** Deterministic AEAD-shaped helper used by the dev/in-memory `RootOfTrust`. Layout: HMAC(id, ctx) ||

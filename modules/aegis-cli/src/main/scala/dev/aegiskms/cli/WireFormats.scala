@@ -73,3 +73,23 @@ object WireFormats:
   object DecryptResponse:
     given Encoder[DecryptResponse] = deriveEncoder
     given Decoder[DecryptResponse] = deriveDecoder
+
+  final case class WrapRequest(dekBase64: String)
+  object WrapRequest:
+    given Encoder[WrapRequest] = deriveEncoder
+    given Decoder[WrapRequest] = deriveDecoder
+
+  final case class WrapResponse(wrappedDekBase64: String)
+  object WrapResponse:
+    given Encoder[WrapResponse] = deriveEncoder
+    given Decoder[WrapResponse] = deriveDecoder
+
+  final case class UnwrapRequest(wrappedDekBase64: String)
+  object UnwrapRequest:
+    given Encoder[UnwrapRequest] = deriveEncoder
+    given Decoder[UnwrapRequest] = deriveDecoder
+
+  final case class UnwrapResponse(dekBase64: String)
+  object UnwrapResponse:
+    given Encoder[UnwrapResponse] = deriveEncoder
+    given Decoder[UnwrapResponse] = deriveDecoder

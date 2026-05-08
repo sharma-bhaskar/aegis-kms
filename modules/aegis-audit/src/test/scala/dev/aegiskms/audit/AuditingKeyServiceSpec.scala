@@ -143,3 +143,30 @@ final class AuditingKeyServiceSpec extends AnyFunSuite with Matchers:
     decRecord.outcome should startWith("Failed")
     decRecord.outcome should include("CryptographicFailure")
   }
+
+  test("wrap emits a Success record carrying the DEK length (not the bytes)") {
+    val (svc, sink) = fixture()
+
+    val created = svc.create(KeySpec.aes256("audit-wrap"), alice).unsafeRunSync().toOption.get
+    svc.activate(created.id, alice).unsafeRunSync()
+    svc.wrap(created.id, "DEKsecretBytes".getBytes, alice).unsafeRunSync()
+
+    val wrapRecord = sink.all.unsafeRunSync().find(_.operation == Operation.Wrap).get
+    wrapRecord.outcome should startWith("Success")
+    wrapRecord.outcome should include("dekLen=14")
+    // Critically, the audit must NOT leak the DEK bytes themselves.
+    wrapRecord.outcome should not include "DEKsecretBytes"
+  }
+
+  test("unwrap emits a Success record with the recovered length") {
+    val (svc, sink) = fixture()
+
+    val created = svc.create(KeySpec.aes256("audit-unwrap"), alice).unsafeRunSync().toOption.get
+    svc.activate(created.id, alice).unsafeRunSync()
+    val w = svc.wrap(created.id, "dek-bytes".getBytes, alice).unsafeRunSync().toOption.get
+    svc.unwrap(created.id, w, alice).unsafeRunSync()
+
+    val unwrapRecord = sink.all.unsafeRunSync().find(_.operation == Operation.Unwrap).get
+    unwrapRecord.outcome should startWith("Success")
+    unwrapRecord.outcome should include("dekLen=9")
+  }

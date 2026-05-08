@@ -276,3 +276,62 @@ final class HttpRoutesSpec extends AnyFunSuite with Matchers with ScalatestRoute
       responseAs[String] should include(""""code":"IllegalOperation"""")
     }
   }
+
+  test("POST /v1/keys/{id}/wrap + /unwrap round-trip recovers the DEK bytes") {
+    val route = freshRoute()
+    var id    = ""
+
+    Post("/v1/keys", jsonEntity(createBody)) ~> route ~> check {
+      id = extractField(responseAs[String], "id")
+    }
+    Post(s"/v1/keys/$id/activate") ~> route ~> check(status shouldBe StatusCodes.OK)
+
+    val dek        = "0123456789abcdef0123456789abcdef" // 32 bytes, representative DEK
+    val dekB64     = java.util.Base64.getEncoder.encodeToString(dek.getBytes)
+    var wrappedB64 = ""
+
+    Post(s"/v1/keys/$id/wrap", jsonEntity(s"""{"dekBase64":"$dekB64"}""")) ~> route ~> check {
+      status shouldBe StatusCodes.OK
+      wrappedB64 = extractField(responseAs[String], "wrappedDekBase64")
+      wrappedB64.nonEmpty shouldBe true
+    }
+
+    val unwrapBody = s"""{"wrappedDekBase64":"$wrappedB64"}"""
+    Post(s"/v1/keys/$id/unwrap", jsonEntity(unwrapBody)) ~> route ~> check {
+      status shouldBe StatusCodes.OK
+      val recoveredB64 = extractField(responseAs[String], "dekBase64")
+      new String(java.util.Base64.getDecoder.decode(recoveredB64), "UTF-8") shouldBe dek
+    }
+  }
+
+  test("POST /v1/keys/{id}/wrap on a PreActive key returns 500 IllegalOperation") {
+    val route = freshRoute()
+    var id    = ""
+
+    Post("/v1/keys", jsonEntity(createBody)) ~> route ~> check {
+      id = extractField(responseAs[String], "id")
+    }
+    val dekB64 = java.util.Base64.getEncoder.encodeToString("dek".getBytes)
+    Post(s"/v1/keys/$id/wrap", jsonEntity(s"""{"dekBase64":"$dekB64"}""")) ~> route ~> check {
+      status shouldBe StatusCodes.InternalServerError
+      responseAs[String] should include(""""code":"IllegalOperation"""")
+    }
+  }
+
+  test("POST /v1/keys/{id}/unwrap with a malformed base64 returns 400 InvalidField") {
+    val route = freshRoute()
+    var id    = ""
+
+    Post("/v1/keys", jsonEntity(createBody)) ~> route ~> check {
+      id = extractField(responseAs[String], "id")
+    }
+    Post(s"/v1/keys/$id/activate") ~> route ~> check(status shouldBe StatusCodes.OK)
+
+    Post(
+      s"/v1/keys/$id/unwrap",
+      jsonEntity("""{"wrappedDekBase64":"not-base-64-at-all!"}""")
+    ) ~> route ~> check {
+      status shouldBe StatusCodes.BadRequest
+      responseAs[String] should include(""""code":"InvalidField"""")
+    }
+  }

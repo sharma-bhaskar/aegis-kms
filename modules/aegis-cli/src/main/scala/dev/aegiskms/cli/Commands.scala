@@ -10,8 +10,12 @@ import dev.aegiskms.cli.WireFormats.{
   ManagedKeyDto,
   SignRequest,
   SignResponse,
+  UnwrapRequest,
+  UnwrapResponse,
   VerifyRequest,
-  VerifyResponse
+  VerifyResponse,
+  WrapRequest,
+  WrapResponse
 }
 
 import java.nio.file.{Files, Path}
@@ -164,6 +168,34 @@ object Commands:
 
   private def formatContext(ctx: Map[String, String]): String =
     ctx.toSeq.sortBy(_._1).map((k, v) => s"$k=$v").mkString(",")
+
+  // ── keys wrap ──────────────────────────────────────────────────────────────
+
+  /** `aegis keys wrap --id <id> --dek <text|@file>`. The DEK can be inline (UTF-8) or read from a file path
+    * prefixed with `@` (the common case — a 32-byte AES-256 DEK won't be valid UTF-8). The wrapped blob is
+    * printed as base64.
+    */
+  def keysWrap(client: AegisHttpClient, id: String, dek: String): CommandResult =
+    readMessage(dek) match
+      case Left(msg) => CommandResult.err(s"keys wrap: $msg")
+      case Right(bytes) =>
+        val req = WrapRequest(Base64.getEncoder.encodeToString(bytes))
+        client.wrapKey(id, req) match
+          case Right(WrapResponse(wrappedB64)) =>
+            CommandResult.out(s"wrapped: $wrappedB64")
+          case Left(err) => CommandResult.err(renderError(err), exitCodeFor(err))
+
+  // ── keys unwrap ────────────────────────────────────────────────────────────
+
+  /** `aegis keys unwrap --id <id> --wrapped <b64>`. Prints the recovered DEK as base64 (it may not be valid
+    * UTF-8 — DEKs are random bytes).
+    */
+  def keysUnwrap(client: AegisHttpClient, id: String, wrappedB64: String): CommandResult =
+    val req = UnwrapRequest(wrappedB64)
+    client.unwrapKey(id, req) match
+      case Right(UnwrapResponse(dekB64)) =>
+        CommandResult.out(s"dek: $dekB64")
+      case Left(err) => CommandResult.err(renderError(err), exitCodeFor(err))
 
   // ── placeholders for agent-native commands (backends arrive in later PRs) ──
 

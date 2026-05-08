@@ -303,3 +303,42 @@ final class CliSpec extends AnyFunSuite with Matchers:
     captured.get.url should endWith("/v1/keys/abc/decrypt")
     r.stdout should include(s"plaintext: $ptB64")
   }
+
+  test("'keys wrap' missing --dek reports a usage error and exits 1") {
+    val r = Cli.run(
+      List("keys", "wrap", "--id", "abc"),
+      cfg,
+      fakeClientFactory(200, sampleKey.asJson.noSpaces)
+    )
+    r.exitCode shouldBe 1
+    r.stderr should include("--dek")
+  }
+
+  test("'keys wrap --id <id> --dek <text>' POSTs to /wrap and prints the wrapped blob") {
+    var captured: Option[HttpPort.Request] = None
+    val responseBody                       = WrapResponse("d3JhcHBlZA==").asJson.noSpaces
+    val r = Cli.run(
+      List("keys", "wrap", "--id", "abc", "--dek", "secret-dek"),
+      cfg,
+      captureFactory(req => captured = Some(req), responseBody, status = 200)
+    )
+    r.exitCode shouldBe 0
+    captured.get.method shouldBe "POST"
+    captured.get.url should endWith("/v1/keys/abc/wrap")
+    captured.get.body.get should include("\"dekBase64\":")
+    r.stdout should include("wrapped: d3JhcHBlZA==")
+  }
+
+  test("'keys unwrap --id <id> --wrapped <b64>' POSTs to /unwrap and renders the DEK as base64") {
+    var captured: Option[HttpPort.Request] = None
+    val dekB64                             = java.util.Base64.getEncoder.encodeToString("secret-dek".getBytes)
+    val responseBody                       = UnwrapResponse(dekB64).asJson.noSpaces
+    val r = Cli.run(
+      List("keys", "unwrap", "--id", "abc", "--wrapped", "d3JhcHBlZA=="),
+      cfg,
+      captureFactory(req => captured = Some(req), responseBody, status = 200)
+    )
+    r.exitCode shouldBe 0
+    captured.get.url should endWith("/v1/keys/abc/unwrap")
+    r.stdout should include(s"dek: $dekB64")
+  }

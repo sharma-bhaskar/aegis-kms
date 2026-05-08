@@ -9,7 +9,8 @@ import dev.aegiskms.core.{
   KeyObjectType,
   KeySpec,
   SigAlgorithm,
-  Signature
+  Signature,
+  WrappedDek
 }
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatest.matchers.should.Matchers
@@ -216,6 +217,58 @@ final class AwsKmsRootOfTrustSpec extends AnyFunSuite with Matchers:
     res.isLeft shouldBe true
     res.swap.toOption.get.code shouldBe ErrorCode.CryptographicFailure
     res.swap.toOption.get.message should include("Encrypt")
+  }
+
+  test("wrap calls the port's encrypt with empty context and stamps the bytes onto a WrappedDek") {
+    var seenContext: Map[String, String] = Map("present" -> "wrong")
+    val port = new StubAwsKmsPort(
+      encryptFn = (arn, dek, ctx) => {
+        arn shouldBe kekArn
+        seenContext = ctx
+        dek ++ Array[Byte](0xee.toByte)
+      }
+    )
+    val rot = AwsKmsRootOfTrust.withPort(port, kekArn)
+    val res = rot.wrap(KeyId.generate(), "dek-bytes".getBytes).unsafeRunSync()
+
+    res.isRight shouldBe true
+    res.toOption.get.bytes.last shouldBe 0xee.toByte
+    seenContext shouldBe Map.empty // wrap MUST NOT carry an AAD
+  }
+
+  test("unwrapDek calls the port's decrypt with empty context and returns the recovered bytes") {
+    var seenContext: Map[String, String] = Map("present" -> "wrong")
+    val port = new StubAwsKmsPort(
+      decryptCtxFn = (arn, blob, ctx) => {
+        arn shouldBe kekArn
+        seenContext = ctx
+        "recovered-dek".getBytes
+      }
+    )
+    val rot = AwsKmsRootOfTrust.withPort(port, kekArn)
+    val res = rot.unwrapDek(KeyId.generate(), WrappedDek("anything".getBytes)).unsafeRunSync()
+
+    res.isRight shouldBe true
+    new String(res.toOption.get, "UTF-8") shouldBe "recovered-dek"
+    seenContext shouldBe Map.empty
+  }
+
+  test("AWS KmsException on Wrap translates to KmsError(CryptographicFailure, ...)") {
+    val port = new StubAwsKmsPort(
+      encryptFn = (_, _, _) =>
+        throw KmsException.builder()
+          .awsErrorDetails(
+            AwsErrorDetails.builder().errorMessage("Disabled").errorCode("KeyDisabled").build()
+          )
+          .message("Disabled")
+          .build()
+    )
+    val rot = AwsKmsRootOfTrust.withPort(port, kekArn)
+    val res = rot.wrap(KeyId.generate(), "x".getBytes).unsafeRunSync()
+
+    res.isLeft shouldBe true
+    res.swap.toOption.get.code shouldBe ErrorCode.CryptographicFailure
+    res.swap.toOption.get.message should include("Wrap")
   }
 
   test("AWS KmsException on Sign translates to KmsError(CryptographicFailure, ...)") {

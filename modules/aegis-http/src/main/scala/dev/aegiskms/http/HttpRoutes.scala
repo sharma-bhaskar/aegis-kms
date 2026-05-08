@@ -190,6 +190,44 @@ final class HttpRoutes(
                   }
     }
 
+  private val wrapSE: ServerEndpoint[Any, Future] =
+    Endpoints.wrapKey.serverLogic { case (auth, devHdr, idStr, req) =>
+      principalOf(auth, devHdr) match
+        case Left(e) => Future.successful(Left(e))
+        case Right(principal) =>
+          parseId(idStr) match
+            case Left(e) => Future.successful(Left(e))
+            case Right(id) =>
+              decodeBase64(req.dekBase64, "dekBase64") match
+                case Left(e) => Future.successful(Left(e))
+                case Right(dek) =>
+                  runIO(svc.wrap(id, dek, principal)).map {
+                    case Left(err) => Left(errorOut(err))
+                    case Right(w)  => Right(WrapResponse.of(w))
+                  }
+    }
+
+  private val unwrapSE: ServerEndpoint[Any, Future] =
+    Endpoints.unwrapKey.serverLogic { case (auth, devHdr, idStr, req) =>
+      principalOf(auth, devHdr) match
+        case Left(e) => Future.successful(Left(e))
+        case Right(principal) =>
+          parseId(idStr) match
+            case Left(e) => Future.successful(Left(e))
+            case Right(id) =>
+              WrappedDek.fromBase64(req.wrappedDekBase64) match
+                case Left(msg) =>
+                  Future.successful(
+                    Left(StatusCode.BadRequest -> KmsErrorDto.of(ErrorCode.InvalidField, msg))
+                  )
+                case Right(w) =>
+                  runIO(svc.unwrap(id, w, principal)).map {
+                    case Left(err) => Left(errorOut(err))
+                    case Right(dek) =>
+                      Right(UnwrapResponse(java.util.Base64.getEncoder.encodeToString(dek)))
+                  }
+    }
+
   private def decodeSignRequest(
       req: SignRequest
   ): Either[(StatusCode, KmsErrorDto), (Array[Byte], SigAlgorithm)] =
@@ -224,7 +262,18 @@ final class HttpRoutes(
 
   /** All server endpoints, for the OpenAPI generator and the test stub interpreter. */
   val serverEndpoints: List[ServerEndpoint[Any, Future]] =
-    List(createSE, getSE, activateSE, destroySE, signSE, verifySE, encryptSE, decryptSE)
+    List(
+      createSE,
+      getSE,
+      activateSE,
+      destroySE,
+      signSE,
+      verifySE,
+      encryptSE,
+      decryptSE,
+      wrapSE,
+      unwrapSE
+    )
 
   /** A pekko-http `Route` that mounts every endpoint. */
   def routes: Route = PekkoHttpServerInterpreter().toRoute(serverEndpoints)

@@ -162,6 +162,31 @@ final class AegisHttpClientSpec extends AnyFunSuite with Matchers:
     res shouldBe Left(ClientError.Server(500, "CryptographicFailure", "context mismatch"))
   }
 
+  test("wrapKey POSTs to /v1/keys/{id}/wrap with Content-Type and decodes the wrapped blob") {
+    var seen: Option[HttpPort.Request] = None
+    val port = new RecordingPort(req => {
+      seen = Some(req)
+      HttpPort.Response(200, WrapResponse("d3JhcHBlZA==").asJson.noSpaces)
+    })
+    val client = new AegisHttpClient(port, baseUrl, principal)
+    val res    = client.wrapKey(sampleKey.id, WrapRequest("aGVsbG8="))
+
+    res shouldBe Right(WrapResponse("d3JhcHBlZA=="))
+    seen.get.method shouldBe "POST"
+    seen.get.url shouldBe s"$baseUrl/v1/keys/${sampleKey.id}/wrap"
+    seen.get.headers.get("Content-Type") shouldBe Some("application/json")
+    seen.get.body.get should include("\"dekBase64\":\"aGVsbG8=\"")
+  }
+
+  test("unwrapKey POSTs to /v1/keys/{id}/unwrap and decodes the DEK") {
+    val port =
+      new RecordingPort(_ => HttpPort.Response(200, UnwrapResponse("aGVsbG8=").asJson.noSpaces))
+    val client = new AegisHttpClient(port, baseUrl, principal)
+    client.unwrapKey(sampleKey.id, UnwrapRequest("d3JhcHBlZA==")) shouldBe Right(
+      UnwrapResponse("aGVsbG8=")
+    )
+  }
+
   // ── Stub ────────────────────────────────────────────────────────────────────
 
   final private class RecordingPort(handler: HttpPort.Request => HttpPort.Response) extends HttpPort:

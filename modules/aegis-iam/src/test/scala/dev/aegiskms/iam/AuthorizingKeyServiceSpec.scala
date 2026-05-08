@@ -126,3 +126,37 @@ final class AuthorizingKeyServiceSpec extends AnyFunSuite with Matchers:
     pt.isRight shouldBe true
     new String(pt.toOption.get, "UTF-8") shouldBe "secret"
   }
+
+  test("wrap is denied when the agent's allowedOps doesn't include Wrap") {
+    val engine = RoleBasedPolicyEngine.adminsOnly("admins")
+    val svc    = fixture(engine)
+    val agent = Principal.Agent(
+      subject = "claude-session-7a3",
+      operator = alice,
+      purpose = "decrypt-only",
+      issuedAt = Instant.now(),
+      ttl = 1.hour,
+      allowedOps = Set(Operation.Get, Operation.Decrypt), // no Wrap
+      parent = None
+    )
+    val res = svc.wrap(KeyId.generate(), "dek".getBytes, agent).unsafeRunSync()
+    res.isLeft shouldBe true
+    res.swap.toOption.get.code shouldBe ErrorCode.PermissionDenied
+  }
+
+  test("wrap + unwrap pass through when the principal has the role and the ops") {
+    val engine = RoleBasedPolicyEngine.adminsOnly("admins")
+    val svc    = fixture(engine)
+
+    val created = svc.create(KeySpec.aes256("kek"), alice).unsafeRunSync()
+    created.isRight shouldBe true
+    val id = created.toOption.get.id
+    svc.activate(id, alice).unsafeRunSync()
+
+    val w = svc.wrap(id, "dek-bytes".getBytes, alice).unsafeRunSync()
+    w.isRight shouldBe true
+
+    val out = svc.unwrap(id, w.toOption.get, alice).unsafeRunSync()
+    out.isRight shouldBe true
+    new String(out.toOption.get, "UTF-8") shouldBe "dek-bytes"
+  }

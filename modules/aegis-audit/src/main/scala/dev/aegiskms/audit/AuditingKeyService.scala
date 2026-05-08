@@ -141,6 +141,30 @@ final class AuditingKeyService(inner: KeyService[IO], sink: AuditSink[IO]) exten
       AuditRecord(now, by, Operation.Decrypt, id.value, outcome, corr)
     }
 
+  def wrap(id: KeyId, dek: Array[Byte], by: Principal): IO[Either[KmsError, WrappedDek]] =
+    instrument {
+      inner.wrap(id, dek, by)
+    } { (now, corr, result) =>
+      val outcome = result match
+        case Right(_) => s"Success dekLen=${dek.length}"
+        case Left(e)  => s"Failed code=${e.code}"
+      AuditRecord(now, by, Operation.Wrap, id.value, outcome, corr)
+    }
+
+  def unwrap(
+      id: KeyId,
+      wrapped: WrappedDek,
+      by: Principal
+  ): IO[Either[KmsError, Array[Byte]]] =
+    instrument {
+      inner.unwrap(id, wrapped, by)
+    } { (now, corr, result) =>
+      val outcome = result match
+        case Right(dek) => s"Success dekLen=${dek.length}"
+        case Left(e)    => s"Failed code=${e.code}"
+      AuditRecord(now, by, Operation.Unwrap, id.value, outcome, corr)
+    }
+
   // ── Helpers ────────────────────────────────────────────────────────────────
 
   /** Threads a fresh correlation id and a wall-clock timestamp through the action and writes the resulting

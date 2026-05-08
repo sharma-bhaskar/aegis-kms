@@ -93,3 +93,23 @@ final class ActorBackedKeyService(
         IO.pure(Left(KmsError(ErrorCode.IllegalOperation, s"Key ${id.value} is ${k.state}")))
       case Right(_) => rootOfTrust.decrypt(id, ciphertext, context)
     }
+
+  def wrap(id: KeyId, dek: Array[Byte], by: Principal): IO[Either[KmsError, WrappedDek]] =
+    get(id, by).flatMap {
+      case Left(err) => IO.pure(Left(err))
+      case Right(k) if k.state != KeyState.Active =>
+        IO.pure(Left(KmsError(ErrorCode.IllegalOperation, s"Key ${id.value} is ${k.state}, must be Active")))
+      case Right(_) => rootOfTrust.wrap(id, dek)
+    }
+
+  def unwrap(
+      id: KeyId,
+      wrapped: WrappedDek,
+      by: Principal
+  ): IO[Either[KmsError, Array[Byte]]] =
+    get(id, by).flatMap {
+      case Left(err) => IO.pure(Left(err))
+      case Right(k) if k.state == KeyState.Compromised || k.state == KeyState.Destroyed =>
+        IO.pure(Left(KmsError(ErrorCode.IllegalOperation, s"Key ${id.value} is ${k.state}")))
+      case Right(_) => rootOfTrust.unwrapDek(id, wrapped)
+    }

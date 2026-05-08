@@ -151,6 +151,47 @@ object Endpoints:
       .summary("Decrypt a ciphertext")
       .description("Decrypts a ciphertext produced by `/encrypt`. The context must match or the call fails.")
 
+  /** `POST /v1/keys/{id}/wrap` — wrap a data-encryption key under the named KEK. Key must be `Active`. */
+  val wrapKey: PublicEndpoint[
+    (Option[String], Option[String], String, WrapRequest),
+    (StatusCode, KmsErrorDto),
+    WrapResponse,
+    Any
+  ] =
+    keysBase.post
+      .in(path[String]("id") / "wrap")
+      .in(jsonBody[WrapRequest])
+      .out(jsonBody[WrapResponse])
+      .summary("Wrap a DEK")
+      .description(
+        "KMIP-style envelope: the supplied DEK is wrapped under the KEK and returned as opaque bytes."
+      )
+
+  /** `POST /v1/keys/{id}/unwrap` — unwrap a previously wrapped DEK. Permitted on Active + Deactivated. */
+  val unwrapKey: PublicEndpoint[
+    (Option[String], Option[String], String, UnwrapRequest),
+    (StatusCode, KmsErrorDto),
+    UnwrapResponse,
+    Any
+  ] =
+    keysBase.post
+      .in(path[String]("id") / "unwrap")
+      .in(jsonBody[UnwrapRequest])
+      .out(jsonBody[UnwrapResponse])
+      .summary("Unwrap a DEK")
+      .description("Recovers the original DEK bytes. Permitted on Active and Deactivated keys.")
+
   /** All endpoint definitions. Used by the OpenAPI generator and tests. */
   val all: List[AnyEndpoint] =
-    List(createKey, getKey, activateKey, destroyKey, signKey, verifyKey, encryptKey, decryptKey)
+    List(
+      createKey,
+      getKey,
+      activateKey,
+      destroyKey,
+      signKey,
+      verifyKey,
+      encryptKey,
+      decryptKey,
+      wrapKey,
+      unwrapKey
+    )

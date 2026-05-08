@@ -41,6 +41,21 @@ All notable changes to Aegis will be documented here. This project follows
 - **`ReadmeQuickstartSpec` in `aegis-core`.** Compiles + runs the embedded-library example from
   `README.md` so that snippet can never silently bitrot. If you change the README's
   "Quickstart — embedding as a library" Scala block, mirror the change in this test.
+- **Wrap / unwrap across the whole stack (closes #7).** New `wrap(id, dek, by)` and
+  `unwrap(id, wrappedDek, by)` methods on `KeyService[F[_]]` for KMIP-style envelope
+  encryption, with `Operation.Wrap` / `Operation.Unwrap` added to the IAM allowlist enum and
+  a new `WrappedDek` value type. The `RootOfTrust` SPI gained `wrap` / `unwrapDek`;
+  `AwsKmsRootOfTrust` implements them by delegating to the existing AWS KMS `Encrypt` /
+  `Decrypt` calls with an empty `EncryptionContext` (AWS doesn't expose separate Wrap/Unwrap
+  APIs for symmetric CMKs — this is the conventional wire-up). On the wire:
+  `POST /v1/keys/{id}/wrap` (request: `{dekBase64}`, response: `{wrappedDekBase64}`) and
+  `POST /v1/keys/{id}/unwrap` (request: `{wrappedDekBase64}`, response: `{dekBase64}`). The
+  CLI gained `aegis keys wrap --id <id> --dek <text|@file>` and `aegis keys unwrap --id <id>
+  --wrapped <b64>`. Same state-gate as encrypt/decrypt: wrap requires `Active`; unwrap is
+  permitted on `Active` + `Deactivated` so historical wrapped DEKs remain recoverable across
+  rotations, refused on `Compromised` / `Destroyed`. The `AuditingKeyService` decorator
+  records `dekLen` (not the bytes) so audit logs show what was protected without leaking
+  key material.
 - **Encrypt / decrypt across the whole stack (closes #6).** New
   `encrypt(id, plaintext, context, by)` and `decrypt(id, ciphertext, context, by)` methods on
   `KeyService[F[_]]`, with `Operation.Encrypt` / `Operation.Decrypt` added to the IAM allowlist

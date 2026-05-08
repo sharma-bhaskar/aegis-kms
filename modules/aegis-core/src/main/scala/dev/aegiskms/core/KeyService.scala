@@ -68,6 +68,17 @@ trait KeyService[F[_]]:
       by: Principal
   ): F[Either[KmsError, Array[Byte]]]
 
+  /** Wrap a Data Encryption Key (`dek`) under the KEK identified by `id`. Same state-gate as `encrypt`: key
+    * must be `Active`. The returned [[WrappedDek]] is opaque ciphertext suitable for storage alongside data
+    * encrypted with the unwrapped DEK — the KMIP envelope-encryption pattern.
+    */
+  def wrap(id: KeyId, dek: Array[Byte], by: Principal): F[Either[KmsError, WrappedDek]]
+
+  /** Unwrap a previously-wrapped DEK. Permitted on `Active` and `Deactivated` (so historical envelopes remain
+    * readable across rotations); refused on `Compromised` and `Destroyed`.
+    */
+  def unwrap(id: KeyId, wrapped: WrappedDek, by: Principal): F[Either[KmsError, Array[Byte]]]
+
 object KeyService:
 
   /** An in-memory reference implementation. Not durable, not safe for production — useful for tests, smoke
@@ -165,6 +176,32 @@ object KeyService:
                 Left(KmsError(ErrorCode.IllegalOperation, s"Key ${id.value} is ${k.state}"))
               case Some(_) =>
                 deterministicOpen(id, context, ciphertext.bytes)
+          }
+
+        def wrap(id: KeyId, dek: Array[Byte], by: Principal): IO[Either[KmsError, WrappedDek]] =
+          ref.get.map { m =>
+            m.get(id) match
+              case None =>
+                Left(KmsError(ErrorCode.ItemNotFound, s"No key with id ${id.value}"))
+              case Some(k) if k.state != KeyState.Active =>
+                Left(KmsError(ErrorCode.IllegalOperation, s"Key ${id.value} is ${k.state}, must be Active"))
+              case Some(_) =>
+                Right(WrappedDek(deterministicSeal(id, Map.empty, dek)))
+          }
+
+        def unwrap(
+            id: KeyId,
+            wrapped: WrappedDek,
+            by: Principal
+        ): IO[Either[KmsError, Array[Byte]]] =
+          ref.get.map { m =>
+            m.get(id) match
+              case None =>
+                Left(KmsError(ErrorCode.ItemNotFound, s"No key with id ${id.value}"))
+              case Some(k) if k.state == KeyState.Compromised || k.state == KeyState.Destroyed =>
+                Left(KmsError(ErrorCode.IllegalOperation, s"Key ${id.value} is ${k.state}"))
+              case Some(_) =>
+                deterministicOpen(id, Map.empty, wrapped.bytes)
           }
 
         private def transition(id: KeyId, to: KeyState): IO[Either[KmsError, ManagedKey]] =

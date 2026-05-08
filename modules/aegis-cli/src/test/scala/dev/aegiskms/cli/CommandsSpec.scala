@@ -185,3 +185,28 @@ final class CommandsSpec extends AnyFunSuite with Matchers:
     r.exitCode shouldBe 1
     r.stderr should include("CryptographicFailure")
   }
+
+  test("keys wrap prints the base64 wrapped blob on success") {
+    val responseBody = WrapResponse("d3JhcHBlZA==").asJson.noSpaces
+    val client       = clientReturning(200, responseBody)
+    val r            = Commands.keysWrap(client, sampleKey.id, "secret-dek")
+    r.exitCode shouldBe 0
+    r.stdout should include("wrapped: d3JhcHBlZA==")
+  }
+
+  test("keys unwrap on success prints the DEK as base64") {
+    val dekB64       = java.util.Base64.getEncoder.encodeToString("secret-dek".getBytes("UTF-8"))
+    val responseBody = UnwrapResponse(dekB64).asJson.noSpaces
+    val client       = clientReturning(200, responseBody)
+    val r            = Commands.keysUnwrap(client, sampleKey.id, "d3JhcHBlZA==")
+    r.exitCode shouldBe 0
+    r.stdout should include(s"dek: $dekB64")
+  }
+
+  test("keys wrap on a denied call exits 5 (permission) with the server's reason") {
+    val errBody = KmsErrorDto("PermissionDenied", "subject not granted Wrap").asJson.noSpaces
+    val client  = clientReturning(403, errBody)
+    val r       = Commands.keysWrap(client, sampleKey.id, "dek")
+    r.exitCode shouldBe 5
+    r.stderr should include("PermissionDenied")
+  }
