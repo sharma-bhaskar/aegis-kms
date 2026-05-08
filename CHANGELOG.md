@@ -20,6 +20,23 @@ All notable changes to Aegis will be documented here. This project follows
 
 ### Added
 
+- **Maven Central publishing — POM metadata + operator runbook (closes #14).**
+  Each library module (`aegis-core`, `aegis-persistence`, `aegis-crypto`,
+  `aegis-iam`, `aegis-audit`, `aegis-sdk-scala`, `aegis-sdk-java`,
+  `aegis-kmip`, `aegis-http`, `aegis-agent-ai`, `aegis-mcp-server`) now
+  declares its own one-line `description` so Sonatype's POM-validation
+  staging gate accepts the artifact. `aegis-server` and `aegis-cli` keep
+  `publish / skip := true` since they ship as a Docker image and a
+  Universal tarball respectively. A `ThisBuild / description` fallback
+  prevents an unnamed jar from regressing the gate. New `RELEASING.md`
+  documents the one-time maintainer setup (Sonatype OSSRH account, GPG
+  key generation + keyserver publication, the four GitHub Action secrets
+  `PGP_SECRET` / `PGP_PASSPHRASE` / `SONATYPE_USERNAME` / `SONATYPE_PASSWORD`)
+  plus the per-release workflow (CHANGELOG bump, `git tag v0.1.1 && git push
+  origin v0.1.1`, what to expect on the Actions page) and a
+  troubleshooting matrix. The existing `release.yml` workflow already
+  gates the Maven publish step on `PGP_SECRET != ''`, so a release
+  without secrets ships Docker + CLI only with a clear `::notice`.
 - **OpenTelemetry tracing — application-level spans + autoconfigured SDK (closes #11).** New
   `TracingKeyService` decorator wraps each `KeyService[IO]` call in an OTel span named
   `kms.<operation>` with attributes `aegis.operation`, `aegis.key.id` (when applicable),
