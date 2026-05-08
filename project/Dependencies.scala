@@ -16,6 +16,7 @@ object Dependencies {
     val scalatest      = "3.2.19"
     val testcontainers = "0.41.4"
     val micrometer     = "1.13.6"
+    val otel           = "1.42.1"
   }
 
   val core: Seq[ModuleID] = Seq(
@@ -73,6 +74,20 @@ object Dependencies {
   val metrics: Seq[ModuleID] = Seq(
     "io.micrometer" % "micrometer-core"                % V.micrometer,
     "io.micrometer" % "micrometer-registry-prometheus" % V.micrometer
+  )
+
+  /** OpenTelemetry SDK + OTLP exporter + autoconfigure. Server-tier only. The autoconfigure module reads
+    * `OTEL_*` env vars and system properties to pick a sampler, exporter, resource attributes, etc. — so the
+    * operator can wire to Jaeger / Tempo / OTel Collector without code changes. The
+    * `opentelemetry-sdk-testing` artifact is test-scope and gives us `InMemorySpanExporter` for deterministic
+    * span assertions.
+    */
+  val tracing: Seq[ModuleID] = Seq(
+    "io.opentelemetry" % "opentelemetry-api"                         % V.otel,
+    "io.opentelemetry" % "opentelemetry-sdk"                         % V.otel,
+    "io.opentelemetry" % "opentelemetry-exporter-otlp"               % V.otel,
+    "io.opentelemetry" % "opentelemetry-sdk-extension-autoconfigure" % V.otel,
+    "io.opentelemetry" % "opentelemetry-sdk-testing"                 % V.otel % Test
   )
 
   /** JJWT (Java JWT) suite for issuing and verifying JWS tokens. Used by `aegis-iam` for the JWT bearer
