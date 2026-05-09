@@ -119,6 +119,6 @@ Each of these is independently shippable and demoable. The order is chosen so ea
 
 ## See also
 
-- [README](../README.md) — the agent-abuse framing, the four pillars, the "Claude goes rogue" example, the demo transcript.
+- [README](https://github.com/sharma-bhaskar/aegis-kms/blob/main/README.md) — the agent-abuse framing, the four pillars, the "Claude goes rogue" example, the demo transcript.
 - [ARCHITECTURE.md](ARCHITECTURE.md) — module layout, wire planes, key lifecycle, audit model, security model, comparison.
 - [USAGE.md](USAGE.md) — end-to-end walkthrough for app developers, operators, AI agents, and KMIP vendors.
