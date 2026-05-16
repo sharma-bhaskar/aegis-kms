@@ -5,19 +5,33 @@ import dev.aegiskms.core.*
 
 import java.util.UUID
 
-/** Decorator that records every `KeyService` call to an `AuditSink`.
+/** Decorator that records every `KeyService` call to an `AuditSink`, with optional risk-based gating.
   *
   * Wraps any `KeyService[IO]` and writes a single `AuditRecord` per call — including failures, so the audit
-  * log captures `AccessDenied` and `ItemNotFound` outcomes the operator needs for incident review.
+  * log captures `AccessDenied`, `StepUpRequired`, and `ItemNotFound` outcomes the operator needs for incident
+  * review.
   *
-  * Order of operations is **score → inner → audit**: the optional `RiskScorer` is consulted first (its result
-  * is stamped into the `AuditRecord.context` whether the inner call succeeds or fails), then the underlying
-  * service runs, then the audit record is written. The scorer is intentionally evaluated even for denied
-  * calls so post-incident review can answer "did the scoring engine already know this was risky?"
+  * Two optional dependencies thread risk-awareness through this decorator:
   *
-  * A slow audit sink can't delay the user response — but it also means a sink failure does not block the
-  * operation. Sinks that need crash-consistency (e.g. Postgres in the same transaction as the EventJournal)
-  * should run inside the actor's `appendOr` instead, not as a decorator like this one.
+  *   - `scorer` — a `RiskScorer[IO]` (typically `BaselineRiskScorer` from `aegis-agent-ai`). If present,
+  *     every request is scored BEFORE the inner action runs, and the `risk.score` + `risk.factors` are
+  *     stamped into the audit row's `context` regardless of outcome.
+  *   - `engine` — a `DecisionEngine[IO]` (typically `ThresholdDecisionEngine`). If present, the score is
+  *     translated into a `Decision`. `Decision.Deny` short-circuits with a synthetic
+  *     `KmsError(PermissionDenied, "risk: …")`; `Decision.StepUp` short-circuits with a synthetic
+  *     `KmsError(StepUpRequired, …)` that the HTTP layer maps to `401 + WWW-Authenticate: aegis-stepup`.
+  *     `Decision.Allow` (or no engine configured) lets the request through to the inner service. The decision
+  *     label and reason land in audit context as `outcome.decision` / `outcome.decision.reason`.
+  *
+  * The boolean policy gate (`AuthorizingKeyService`) remains the floor — a policy denial cannot be overridden
+  * by `Decision.Allow`. The decision adapter is purely additive: it can further restrict an action policy
+  * already permits; it cannot widen one policy forbids.
+  *
+  * Order of operations is **score → decide → (short-circuit | inner) → audit**: the scorer + engine are
+  * consulted first (their outputs always land in the audit row), then either we short-circuit or run the
+  * underlying service, then the audit record is written. A slow audit sink can't delay the user response, but
+  * also can't block the operation — sinks needing crash-consistency belong inside the actor's `appendOr`
+  * instead.
   *
   * Correlation IDs are generated per call so a single client request can be joined across audit, journal, and
   * detector streams.
@@ -25,7 +39,8 @@ import java.util.UUID
 final class AuditingKeyService(
     inner: KeyService[IO],
     sink: AuditSink[IO],
-    scorer: Option[RiskScorer[IO]] = None
+    scorer: Option[RiskScorer[IO]] = None,
+    engine: Option[DecisionEngine[IO]] = None
 ) extends KeyService[IO]:
 
   def create(spec: KeySpec, by: Principal): IO[Either[KmsError, ManagedKey]] =
@@ -49,13 +64,20 @@ final class AuditingKeyService(
     }
 
   def locate(namePattern: String, by: Principal): IO[List[ManagedKey]] =
+    // Locate is read-only directory access; we score for visibility but never gate (the engine isn't
+    // consulted). Returning a filtered/empty result on Deny would leak existence-or-not signal to the
+    // caller and isn't useful as a security primitive — the policy gate handles authorization for
+    // discovery separately.
     val resource = s"pattern:$namePattern"
     for
-      now  <- IO.realTimeInstant
-      corr <- IO(freshCorrelationId())
-      ctx  <- scoreContext(by, Operation.Locate, None, now)
+      corr  <- IO(freshCorrelationId())
+      now   <- IO.realTimeInstant
+      score <- scoreOpt(by, Operation.Locate, None, now)
+      ctx = preflightContext(score, None)
       list <- inner.locate(namePattern, by)
-      _    <- sink.write(AuditRecord(now, by, Operation.Locate, resource, s"Hits=${list.size}", corr, ctx))
+      _ <- sink.write(
+        AuditRecord(now, by, Operation.Locate, resource, s"Hits=${list.size}", corr, ctx)
+      )
     yield list
 
   def activate(id: KeyId, by: Principal): IO[Either[KmsError, ManagedKey]] =
@@ -196,46 +218,85 @@ final class AuditingKeyService(
 
   // ── Helpers ────────────────────────────────────────────────────────────────
 
-  /** Threads a fresh correlation id, a wall-clock timestamp, and a risk-scoring context map through the
-    * action and writes the resulting `AuditRecord`. The scoring call happens BEFORE the inner action so the
-    * same score lands on success and failure rows alike.
-    *
-    * The caller closes over `by`, the resource string, and op-specific outcome formatting when building the
-    * record. The helper deliberately doesn't take those — duplicating the parameter list (helper + closure)
-    * was dead weight (and `-Wunused` agreed).
+  /** Threads a fresh correlation id, a wall-clock timestamp, and the preflight (score + decision) context
+    * through the action and writes the resulting `AuditRecord`. Specialized to `Either[KmsError, A]`-typed
+    * actions so it can synthesize a `Left` when the decision engine short-circuits the request.
     */
   private def instrument[A](
       by: Principal,
       op: Operation,
       keyId: Option[KeyId]
-  )(action: => IO[A])(
-      record: (java.time.Instant, String, Map[String, String], A) => AuditRecord
-  ): IO[A] =
+  )(action: => IO[Either[KmsError, A]])(
+      record: (java.time.Instant, String, Map[String, String], Either[KmsError, A]) => AuditRecord
+  ): IO[Either[KmsError, A]] =
     for
-      corr   <- IO(freshCorrelationId())
-      now0   <- IO.realTimeInstant
-      ctx    <- scoreContext(by, op, keyId, now0)
-      result <- action
+      corr     <- IO(freshCorrelationId())
+      now0     <- IO.realTimeInstant
+      score    <- scoreOpt(by, op, keyId, now0)
+      decision <- decideOpt(score, by, op)
+      ctx = preflightContext(score, decision)
+      result <- shortCircuitOr(decision, action)
       now    <- IO.realTimeInstant
       _      <- sink.write(record(now, corr, ctx, result))
     yield result
 
-  /** Call the optional `RiskScorer` and return a stamping map. `risk.score` is fixed to 2 decimal places
-    * (avoids `0.62000…01` floating-point noise in audit rows); `risk.factors` is a semicolon-separated
-    * `name:weight` list. Returns an empty map when no scorer is configured.
-    */
-  private def scoreContext(
+  /** Run the inner action unless the decision short-circuits the request. */
+  private def shortCircuitOr[A](
+      decision: Option[Decision],
+      action: => IO[Either[KmsError, A]]
+  ): IO[Either[KmsError, A]] =
+    decision match
+      case Some(Decision.Deny(reason)) =>
+        IO.pure(Left(KmsError(ErrorCode.PermissionDenied, s"risk: $reason")))
+      case Some(Decision.StepUpRequired(reason)) =>
+        IO.pure(Left(KmsError(ErrorCode.StepUpRequired, reason)))
+      case _ => action
+
+  /** Call the optional `RiskScorer` and return its score (or `None` if no scorer is configured). */
+  private def scoreOpt(
       by: Principal,
       op: Operation,
       keyId: Option[KeyId],
       now: java.time.Instant
-  ): IO[Map[String, String]] =
+  ): IO[Option[RiskScore]] =
     scorer match
-      case None => IO.pure(Map.empty)
-      case Some(s) =>
-        s.score(RiskScorer.Request(by, op, keyId, now)).map { rs =>
-          Map("risk.score" -> rs.renderedScore, "risk.factors" -> rs.renderedFactors)
-        }
+      case None    => IO.pure(None)
+      case Some(s) => s.score(RiskScorer.Request(by, op, keyId, now)).map(Some(_))
+
+  /** Call the optional `DecisionEngine` against the score (skipped when either is missing). */
+  private def decideOpt(
+      score: Option[RiskScore],
+      by: Principal,
+      op: Operation
+  ): IO[Option[Decision]] =
+    (score, engine) match
+      case (Some(s), Some(e)) => e.decide(s, by, op).map(Some(_))
+      case _                  => IO.pure(None)
+
+  /** Build the `AuditRecord.context` fragment from the score + decision. Stamps:
+    *
+    *   - `risk.score` — present iff scorer was configured
+    *   - `risk.factors` — present iff scorer was configured
+    *   - `outcome.decision` — present iff engine was configured ("Allow" / "StepUp" / "Deny")
+    *   - `outcome.decision.reason` — present iff engine was configured AND decision != Allow
+    */
+  private def preflightContext(
+      score: Option[RiskScore],
+      decision: Option[Decision]
+  ): Map[String, String] =
+    val builder = Map.newBuilder[String, String]
+    score.foreach { rs =>
+      builder += ("risk.score"   -> rs.renderedScore)
+      builder += ("risk.factors" -> rs.renderedFactors)
+    }
+    decision.foreach { d =>
+      import Decision.label
+      import Decision.reasonOrEmpty
+      builder += ("outcome.decision"                                -> d.label)
+      val reason                                = d.reasonOrEmpty
+      if reason.nonEmpty then builder += ("outcome.decision.reason" -> reason)
+    }
+    builder.result()
 
   private def resourceForCreate(spec: KeySpec): String =
     s"name:${spec.name}/alg:${spec.algorithm}/size:${spec.sizeBits}"

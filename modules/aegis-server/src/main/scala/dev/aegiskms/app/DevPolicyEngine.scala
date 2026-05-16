@@ -1,8 +1,8 @@
 package dev.aegiskms.app
 
 import cats.effect.IO
-import dev.aegiskms.core.{Operation, Principal}
-import dev.aegiskms.iam.{Decision, PolicyEngine}
+import dev.aegiskms.core.{Decision, Operation, Principal}
+import dev.aegiskms.iam.PolicyEngine
 
 /** A permissive `PolicyEngine` for dev-mode boots.
   *

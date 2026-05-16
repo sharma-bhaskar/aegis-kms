@@ -48,6 +48,12 @@ final class HttpRoutes(
       case ErrorCode.ItemNotFound                => StatusCode.NotFound
       case ErrorCode.PermissionDenied            => StatusCode.Forbidden
       case ErrorCode.AuthenticationNotSuccessful => StatusCode.Unauthorized
+      // StepUpRequired: the risk decision engine (#16) is asking for a stronger credential. The reason
+      // string (carried in `err.message`) is the WWW-Authenticate challenge content; clients should
+      // re-present with a freshly-minted / MFA-stepped token. A dedicated `WWW-Authenticate:
+      // aegis-stepup ...` header lands in a follow-up that extends the endpoint signatures with header
+      // outputs — for v0.2.0 the JSON body carries the challenge reason and is sufficient for SDK use.
+      case ErrorCode.StepUpRequired => StatusCode.Unauthorized
       case ErrorCode.InvalidField | ErrorCode.MissingData | ErrorCode.InvalidMessage =>
         StatusCode.BadRequest
       case _ => StatusCode.InternalServerError
