@@ -18,8 +18,26 @@ All notable changes to Aegis will be documented here. This project follows
   `risk.factors` (semicolon-separated `name:weight` list) into every `AuditRecord.context` — for
   successful, denied, and failed calls alike, so post-incident review can answer "did the scoring
   engine already know this was risky?". Wired into `Server.boot` against the same `BaselineDetector`
-  instance the tapped sink writes into. The decision adapter that *acts* on the score (allow /
-  step-up / deny) ships next as #16.
+  instance the tapped sink writes into. The decision adapter that *acts* on the score is #16 below.
+
+- **Decision adapter — risk score becomes a verdict (closes #16).** New `Decision` enum in `aegis-core`
+  (`Allow` / `Deny(reason)` / `StepUpRequired(reason)`) consolidated with `aegis-iam`'s pre-existing
+  policy-decision type so the boolean policy gate and the risk overlay now speak the same vocabulary.
+  New `DecisionEngine[F[_]]` SPI translates a `(RiskScore, Principal, Operation)` triple into a
+  `Decision`. `ThresholdDecisionEngine` in `aegis-agent-ai` ships the default two-threshold
+  implementation (`denyAt=0.85`, `stepUpAt=0.60`) with a per-op irreversibility tax —
+  destructive ops (`Rotate`, `Compromise`, `Destroy`, `Revoke`) drop both thresholds by 0.15.
+  `AuditingKeyService` gained an optional `engine: Option[DecisionEngine[IO]]` arg and now
+  short-circuits the inner `KeyService` on `Deny` (returns `Left(KmsError(PermissionDenied, "risk: …"))`)
+  and `StepUpRequired` (returns the new `Left(KmsError(StepUpRequired, reason))`). Every audit row
+  stamps `outcome.decision` (`Allow` / `StepUp` / `Deny`) plus an `outcome.decision.reason` when the
+  decision was non-`Allow`. New `ErrorCode.StepUpRequired` is an Aegis-specific extension (KMIP has no
+  equivalent — the wire codec maps it to `OperationCanceledByRequester`); the HTTP layer translates it
+  to `401 Unauthorized` with the reason in the JSON body. `locate` is intentionally never gated by
+  the engine — filtering directory results would leak existence-or-not signal and isn't a useful
+  security primitive; the policy gate handles discovery authorization separately. Wired into
+  `Server.boot` with default thresholds; HOCON-configurable thresholds and a dedicated
+  `WWW-Authenticate: aegis-stepup` response header land in follow-ups.
 
 ## 0.1.1 — 2026-05-09
 

@@ -268,3 +268,123 @@ final class AuditingKeyServiceSpec extends AnyFunSuite with Matchers:
     val record = sink.all.unsafeRunSync().head
     record.context shouldBe empty
   }
+
+  // ── DecisionEngine integration (#16) ──────────────────────────────────────
+  //
+  // The decision engine is an additive risk overlay: scoring still happens (the audit row still carries
+  // `risk.score`), the engine translates that score into Allow / StepUp / Deny, and the decorator
+  // short-circuits the inner call on Deny/StepUp without losing the audit row.
+
+  final private class FixedEngine(d: Decision) extends DecisionEngine[IO]:
+    def decide(score: RiskScore, principal: Principal, operation: Operation): IO[Decision] = IO.pure(d)
+
+  private def fixtureWithEngine(
+      score: RiskScore,
+      decision: Decision
+  ): (AuditingKeyService, InMemoryAuditSink, KeyService[IO]) =
+    val sink  = InMemoryAuditSink.make.unsafeRunSync()
+    val inner = KeyService.inMemory.unsafeRunSync()
+    val audit = AuditingKeyService(
+      inner,
+      sink,
+      Some(new FixedScorer(score)),
+      Some(new FixedEngine(decision))
+    )
+    (audit, sink, inner)
+
+  test("Decision.Allow → inner runs; audit row stamps outcome.decision=Allow (no reason key)") {
+    val (svc, sink, _) = fixtureWithEngine(
+      RiskScore(0.1, List(RiskFactor("AgentPrincipal", 0.1, "low"))),
+      Decision.Allow
+    )
+    val res = svc.create(KeySpec.aes256("allowed"), alice).unsafeRunSync()
+    res.isRight shouldBe true
+
+    val record = sink.all.unsafeRunSync().head
+    record.context("outcome.decision") shouldBe "Allow"
+    record.context.contains("outcome.decision.reason") shouldBe false
+    record.context("risk.score") shouldBe "0.10"
+  }
+
+  test("Decision.StepUpRequired → inner does NOT run; returns Left(StepUpRequired) with reason") {
+    val (svc, sink, inner) = fixtureWithEngine(
+      RiskScore(0.7, List(RiskFactor("ScopeBaseline", 0.5, "new key"))),
+      Decision.StepUpRequired("score=0.70 threshold=0.60 factors=ScopeBaseline:0.5")
+    )
+    val res = svc.create(KeySpec.aes256("stepup"), alice).unsafeRunSync()
+
+    res match
+      case Left(KmsError(ErrorCode.StepUpRequired, msg)) =>
+        msg should include("ScopeBaseline:0.5")
+      case other => fail(s"expected Left(StepUpRequired, …) but got $other")
+
+    // The inner KeyService must NOT have created the key.
+    inner.locate("stepup", alice).unsafeRunSync() shouldBe empty
+
+    val record = sink.all.unsafeRunSync().head
+    record.outcome should startWith("Failed")
+    record.outcome should include("StepUpRequired")
+    record.context("outcome.decision") shouldBe "StepUp"
+    record.context("outcome.decision.reason") should include("ScopeBaseline:0.5")
+  }
+
+  test("Decision.Deny → inner does NOT run; returns Left(PermissionDenied) with 'risk:' prefix") {
+    val (svc, sink, inner) = fixtureWithEngine(
+      RiskScore(0.9, List(RiskFactor("ScopeBaseline", 0.5, "new"), RiskFactor("RateSpike", 0.4, "burst"))),
+      Decision.Deny("score=0.90 threshold=0.85 factors=ScopeBaseline:0.5;RateSpike:0.4")
+    )
+    val res = svc.create(KeySpec.aes256("denied"), alice).unsafeRunSync()
+
+    res match
+      case Left(KmsError(ErrorCode.PermissionDenied, msg)) =>
+        msg should startWith("risk:")
+        msg should include("ScopeBaseline:0.5")
+      case other => fail(s"expected Left(PermissionDenied, 'risk: …') but got $other")
+
+    inner.locate("denied", alice).unsafeRunSync() shouldBe empty
+
+    val record = sink.all.unsafeRunSync().head
+    record.context("outcome.decision") shouldBe "Deny"
+    record.context("outcome.decision.reason") should include("threshold=0.85")
+  }
+
+  test("Decision.Deny on sign also short-circuits (gating applies to every Either-returning op)") {
+    // Build a fixture where a key exists (use a separate decorated svc that allows the setup ops),
+    // then swap in the deny engine for the sign call. Simplest: two passes.
+    val sink  = InMemoryAuditSink.make.unsafeRunSync()
+    val inner = KeyService.inMemory.unsafeRunSync()
+    val setup = AuditingKeyService(inner, sink) // no scorer/engine → Allow path
+    val key   = setup.create(KeySpec.rsa2048("sign-deny"), alice).unsafeRunSync().toOption.get
+    setup.activate(key.id, alice).unsafeRunSync()
+
+    // Now wrap the SAME inner with a denying engine.
+    val gated = AuditingKeyService(
+      inner,
+      sink,
+      Some(new FixedScorer(RiskScore(0.9, Nil))),
+      Some(new FixedEngine(Decision.Deny("composite high-risk")))
+    )
+
+    val res = gated.sign(key.id, "msg".getBytes, SigAlgorithm.RsaPssSha256, alice).unsafeRunSync()
+    res.left.toOption.map(_.code) shouldBe Some(ErrorCode.PermissionDenied)
+
+    val signRow = sink.all.unsafeRunSync().last
+    signRow.operation shouldBe Operation.Sign
+    signRow.context("outcome.decision") shouldBe "Deny"
+  }
+
+  test("locate is never gated by the engine — read-only ops always pass through") {
+    val (svc, sink, _) = fixtureWithEngine(
+      RiskScore(0.9, Nil),
+      Decision.Deny("would deny if asked")
+    )
+    val list = svc.locate("anything", alice).unsafeRunSync()
+    list shouldBe Nil // no keys exist, but the call ran (didn't short-circuit)
+
+    val record = sink.all.unsafeRunSync().head
+    record.operation shouldBe Operation.Locate
+    record.outcome shouldBe "Hits=0"
+    // Locate audit row carries the score but NOT a decision (engine isn't consulted for locate).
+    record.context.contains("risk.score") shouldBe true
+    record.context.contains("outcome.decision") shouldBe false
+  }

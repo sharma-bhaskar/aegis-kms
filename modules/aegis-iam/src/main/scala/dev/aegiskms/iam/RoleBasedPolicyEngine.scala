@@ -1,7 +1,7 @@
 package dev.aegiskms.iam
 
 import cats.effect.IO
-import dev.aegiskms.core.{Operation, Principal}
+import dev.aegiskms.core.{Decision, Operation, Principal}
 
 /** A simple allowlist policy engine.
   *

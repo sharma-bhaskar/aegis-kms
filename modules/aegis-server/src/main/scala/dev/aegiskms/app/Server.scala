@@ -4,7 +4,13 @@ import cats.effect.unsafe.IORuntime
 import cats.effect.{IO, IOApp, Resource}
 import cats.syntax.all.*
 import com.typesafe.config.{Config, ConfigFactory}
-import dev.aegiskms.agent.{BaselineDetector, BaselineRiskScorer, InMemoryRecommendationSink, TappedAuditSink}
+import dev.aegiskms.agent.{
+  BaselineDetector,
+  BaselineRiskScorer,
+  InMemoryRecommendationSink,
+  TappedAuditSink,
+  ThresholdDecisionEngine
+}
 import dev.aegiskms.audit.{AuditingKeyService, StdoutAuditSink}
 import dev.aegiskms.http.HttpRoutes
 import dev.aegiskms.iam.{AuthorizingKeyService, JwtVerifier, PrincipalResolver}
@@ -109,11 +115,15 @@ object Server extends IOApp.Simple:
       recSink  <- Resource.eval(InMemoryRecommendationSink.make)
       detector <- Resource.eval(BaselineDetector.make())
       sink = TappedAuditSink(StdoutAuditSink(), detector, recSink)
-      // Risk scorer (#15 / W2): reads the same baseline state the tapped sink writes into. Audit-only
-      // for now — every record gets `risk.score` + `risk.factors` stamped. The decision adapter (#16)
-      // will consume the same scorer to allow / step-up / deny BEFORE the inner op runs.
+      // Risk scorer (#15 / W2): reads the same baseline state the tapped sink writes into. Every audit
+      // record gets `risk.score` + `risk.factors` stamped.
       riskScorer = BaselineRiskScorer.make(detector)
-      auditing   = new AuditingKeyService(traced, sink, Some(riskScorer))
+      // Decision adapter (#16 / W2.b): translates score → Allow / StepUp / Deny. Default thresholds
+      // (deny=0.85, stepUp=0.60, destructiveOpOffset=0.15) mean a single high-weight factor trips
+      // step-up, a composite trips deny, and destructive ops (Rotate / Compromise / Destroy / Revoke)
+      // are gated harder by 0.15. Operator-tuned thresholds via HOCON land later.
+      decisionEngine = ThresholdDecisionEngine.make()
+      auditing       = new AuditingKeyService(traced, sink, Some(riskScorer), Some(decisionEngine))
 
       resolver = buildResolver(rootConfig)
       _ <- Resource.eval(IO {
