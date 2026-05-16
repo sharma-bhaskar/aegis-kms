@@ -4,7 +4,7 @@ import cats.effect.unsafe.IORuntime
 import cats.effect.{IO, IOApp, Resource}
 import cats.syntax.all.*
 import com.typesafe.config.{Config, ConfigFactory}
-import dev.aegiskms.agent.{BaselineDetector, InMemoryRecommendationSink, TappedAuditSink}
+import dev.aegiskms.agent.{BaselineDetector, BaselineRiskScorer, InMemoryRecommendationSink, TappedAuditSink}
 import dev.aegiskms.audit.{AuditingKeyService, StdoutAuditSink}
 import dev.aegiskms.http.HttpRoutes
 import dev.aegiskms.iam.{AuthorizingKeyService, JwtVerifier, PrincipalResolver}
@@ -108,8 +108,12 @@ object Server extends IOApp.Simple:
       traced      = new TracingKeyService(metered, tracer)
       recSink  <- Resource.eval(InMemoryRecommendationSink.make)
       detector <- Resource.eval(BaselineDetector.make())
-      sink     = TappedAuditSink(StdoutAuditSink(), detector, recSink)
-      auditing = new AuditingKeyService(traced, sink)
+      sink = TappedAuditSink(StdoutAuditSink(), detector, recSink)
+      // Risk scorer (#15 / W2): reads the same baseline state the tapped sink writes into. Audit-only
+      // for now — every record gets `risk.score` + `risk.factors` stamped. The decision adapter (#16)
+      // will consume the same scorer to allow / step-up / deny BEFORE the inner op runs.
+      riskScorer = BaselineRiskScorer.make(detector)
+      auditing   = new AuditingKeyService(traced, sink, Some(riskScorer))
 
       resolver = buildResolver(rootConfig)
       _ <- Resource.eval(IO {

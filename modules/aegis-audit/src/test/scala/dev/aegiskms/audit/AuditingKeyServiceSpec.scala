@@ -1,5 +1,6 @@
 package dev.aegiskms.audit
 
+import cats.effect.IO
 import cats.effect.unsafe.implicits.global
 import dev.aegiskms.core.*
 import org.scalatest.funsuite.AnyFunSuite
@@ -208,4 +209,62 @@ final class AuditingKeyServiceSpec extends AnyFunSuite with Matchers:
     rec.outcome should startWith("Failed")
     rec.outcome should include("IllegalOperation")
     rec.outcome should include("policy=Manual")
+  }
+
+  // ── RiskScorer integration ────────────────────────────────────────────────
+  //
+  // When the decorator is built with a `RiskScorer`, every audit record (success, denial, and failure
+  // alike) must carry `risk.score` + `risk.factors` in its `context` map. This is the load-bearing
+  // contract of the W2 wiring: the SIEM exporters and the upcoming decision adapter (#16) both depend
+  // on these keys being present.
+
+  /** Stub scorer that returns a fixed `RiskScore`. The method param is `req` (not `request`) to keep the line
+    * short; the value param is `s` (not `score`) to avoid clashing with the method name.
+    */
+  final private class FixedScorer(s: RiskScore) extends RiskScorer[IO]:
+    def score(req: RiskScorer.Request): IO[RiskScore] = IO.pure(s)
+
+  private def fixtureWithScorer(score: RiskScore): (AuditingKeyService, InMemoryAuditSink) =
+    val sink  = InMemoryAuditSink.make.unsafeRunSync()
+    val inner = KeyService.inMemory.unsafeRunSync()
+    val audit = AuditingKeyService(inner, sink, Some(new FixedScorer(score)))
+    (audit, sink)
+
+  test("scorer-decorated create stamps risk.score + risk.factors into the record context") {
+    val rs = RiskScore(
+      0.42,
+      List(RiskFactor("AgentPrincipal", 0.2, "agent"), RiskFactor("DestructiveOp", 0.1, "destroy"))
+    )
+    val (svc, sink) = fixtureWithScorer(rs)
+
+    svc.create(KeySpec.aes256("scored"), alice).unsafeRunSync()
+
+    val record = sink.all.unsafeRunSync().head
+    record.context.get("risk.score") shouldBe Some("0.42")
+    record.context.get("risk.factors") shouldBe Some("AgentPrincipal:0.2;DestructiveOp:0.1")
+  }
+
+  test("scorer is invoked on FAILED ops too — denied/notfound calls still carry risk context") {
+    val rs = RiskScore(
+      0.71,
+      List(RiskFactor("ScopeBaseline", 0.5, "new key"), RiskFactor("AgentPrincipal", 0.2, "agent"))
+    )
+    val (svc, sink) = fixtureWithScorer(rs)
+
+    // Get on a never-created key → KeyService returns ItemNotFound. The audit row is still written
+    // and must still carry the score.
+    svc.get(KeyId.generate(), alice).unsafeRunSync().isLeft shouldBe true
+
+    val record = sink.all.unsafeRunSync().head
+    record.outcome should startWith("Failed")
+    record.context("risk.score") shouldBe "0.71"
+    record.context("risk.factors") shouldBe "ScopeBaseline:0.5;AgentPrincipal:0.2"
+  }
+
+  test("no scorer configured (default arg) → context map stays empty (back-compat)") {
+    val (svc, sink) = fixture() // 2-arg constructor — no scorer
+    svc.create(KeySpec.aes256("unscored"), alice).unsafeRunSync()
+
+    val record = sink.all.unsafeRunSync().head
+    record.context shouldBe empty
   }

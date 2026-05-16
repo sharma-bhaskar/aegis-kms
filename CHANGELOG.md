@@ -6,7 +6,20 @@ All notable changes to Aegis will be documented here. This project follows
 
 ## Unreleased
 
-_No entries yet — open the next PR with its `Added` / `Changed` / `Fixed` block._
+### Added
+
+- **Risk scorer with reasoning (closes #15).** New `RiskScorer[F[_]]` SPI in `aegis-core` returns a
+  numeric score in `[0.0, 1.0]` plus a list of `RiskFactor` evidence rows (name + weight +
+  human-readable evidence string) for every request. `BaselineRiskScorer` in `aegis-agent-ai`
+  combines the five baseline detectors (scope, rate-spike, op-histogram, time-of-day, source-IP)
+  with four contextual signals (`AgentPrincipal`, `CredentialAge` past 80 % of TTL, `BroadScope`
+  > 5 allowed ops, `DestructiveOp` for Rotate / Compromise / Destroy / Revoke). `AuditingKeyService`
+  takes an optional scorer constructor arg and stamps `risk.score` (two-decimal-place string) and
+  `risk.factors` (semicolon-separated `name:weight` list) into every `AuditRecord.context` — for
+  successful, denied, and failed calls alike, so post-incident review can answer "did the scoring
+  engine already know this was risky?". Wired into `Server.boot` against the same `BaselineDetector`
+  instance the tapped sink writes into. The decision adapter that *acts* on the score (allow /
+  step-up / deny) ships next as #16.
 
 ## 0.1.1 — 2026-05-09
 
