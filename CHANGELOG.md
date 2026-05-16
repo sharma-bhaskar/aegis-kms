@@ -8,6 +8,26 @@ All notable changes to Aegis will be documented here. This project follows
 
 ### Added
 
+- **Auto-responder — recommendations become actions (closes #17).** New `AutoResponder` in
+  `aegis-agent-ai` is itself a `RecommendationSink`: it decorates the existing in-memory store, so
+  every `AgentRecommendation` is persisted first, then matched against a configured `List[AutoResponseRule]`,
+  then executed if the rule fires and the per-`(actor, action)` cooldown allows.
+  `AutoResponseAction` enum models the four execution actions: `Alert` (audit-only annotation),
+  `Revoke` (calls `KeyService.revoke` on the target key extracted from `details("resource")`),
+  `Deactivate` (mapped to `Revoke` for v0.2.0), and `Freeze` (records intent; full enforcement
+  arrives with #24's JTI blacklist). Action audit rows are written with
+  `actor = Principal.Service("aegis-system", TenantId("system"))` and the outcome string
+  `AnomalyAlert(detector=…, severity=…, rec=<id>, action=…) Success|Failed …` so operators can grep
+  the responder's timeline. The responder calls a "below the audit decorator" `KeyService` on
+  purpose: routing through the outer `AuditingKeyService` would feed every auto-response back into
+  the detector → recommendation pipeline, causing recursion. Default rule set covers all five
+  baseline detectors at `High → Revoke` and `Medium → Alert`; `Low` is intentionally absent (too
+  much noise — operators opt in). Wired into `Server.boot` between the recommendation store and the
+  tapped audit sink. Failure modes (missing target key, invalid keyId, KMS error) are captured in
+  the audit row, never thrown — `publish` is total. Operator-tuned rules via HOCON land in a follow-up.
+
+
+
 - **Risk scorer with reasoning (closes #15).** New `RiskScorer[F[_]]` SPI in `aegis-core` returns a
   numeric score in `[0.0, 1.0]` plus a list of `RiskFactor` evidence rows (name + weight +
   human-readable evidence string) for every request. `BaselineRiskScorer` in `aegis-agent-ai`

@@ -5,6 +5,7 @@ import cats.effect.{IO, IOApp, Resource}
 import cats.syntax.all.*
 import com.typesafe.config.{Config, ConfigFactory}
 import dev.aegiskms.agent.{
+  AutoResponder,
   BaselineDetector,
   BaselineRiskScorer,
   InMemoryRecommendationSink,
@@ -112,9 +113,24 @@ object Server extends IOApp.Simple:
       authorizing = new AuthorizingKeyService(actorBacked, new DevPolicyEngine)
       metered     = new MeteredKeyService(authorizing, metricsRegistry)
       traced      = new TracingKeyService(metered, tracer)
-      recSink  <- Resource.eval(InMemoryRecommendationSink.make)
+      recStore <- Resource.eval(InMemoryRecommendationSink.make)
       detector <- Resource.eval(BaselineDetector.make())
-      sink = TappedAuditSink(StdoutAuditSink(), detector, recSink)
+      stdoutSink = StdoutAuditSink()
+      // Auto-responder (#17 / W3): decorates the recommendation sink. Every recommendation is first
+      // persisted to `recStore` (full alert history retained), then matched against `DefaultRules`
+      // (High → Revoke, Medium → Alert), then executed with a per-(actor,action) 60 s cooldown. The
+      // responder calls `traced` directly — bypassing the outer Auditing decorator on purpose so a
+      // revoke action doesn't recurse through the detector. It writes its own audit row to
+      // `stdoutSink` with `actor = AutoResponder.SystemPrincipal` so operators can grep the timeline.
+      autoResponder <- Resource.eval(
+        AutoResponder.make(
+          rules = AutoResponder.DefaultRules,
+          inner = recStore,
+          keyService = traced,
+          auditSink = stdoutSink
+        )
+      )
+      sink = TappedAuditSink(stdoutSink, detector, autoResponder)
       // Risk scorer (#15 / W2): reads the same baseline state the tapped sink writes into. Every audit
       // record gets `risk.score` + `risk.factors` stamped.
       riskScorer = BaselineRiskScorer.make(detector)
