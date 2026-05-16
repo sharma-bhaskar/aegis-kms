@@ -1,11 +1,12 @@
 # Quickstart
 
-**Goal:** in ~5 minutes, get Aegis-KMS running on your machine and use it to sign + verify a
-message. Step 0 → Step 9, every command runnable, every output shown.
+**Goal:** in ~10 minutes, get Aegis-KMS running on your machine and exercise the full v0.1.x
+operation surface — sign / verify, encrypt / decrypt (with AAD), wrap / unwrap a DEK, rotate, and
+compromise — plus the three observability surfaces (Swagger UI, Prometheus, OpenTelemetry). Step
+0 → Step 14, every command runnable, every output shown.
 
-For a deeper hands-on tour covering every operation (encrypt, decrypt, wrap, unwrap, rotate,
-compromise, audit log, metrics, traces, CLI, JWT, AWS KMS), see the
-[full walkthrough](../USAGE.md) (~20 minutes).
+For a deeper tour covering CLI usage, JWT auth, and configuring AWS KMS as the Root of Trust, see
+the [full walkthrough](../USAGE.md) (~20 minutes).
 
 ---
 
@@ -254,7 +255,169 @@ That's the cryptographic guarantee working: even a one-byte change to the messag
 
 ---
 
-## Step 9 — Stop the server
+## Step 9 — Encrypt and decrypt with an encryption context
+
+`encrypt` takes an additional **encryption context** — a free-form `Map[String, String]` that's
+bound to the ciphertext as additional authenticated data (AAD). The same context must be supplied
+to `decrypt` or the call fails with `CryptographicFailure`. This is AWS KMS's `EncryptionContext`
+model — useful for tying a ciphertext to its tenant / dataset / purpose.
+
+```bash
+PT_B64=$(echo -n 'secret invoice payload' | base64)
+
+CIPHERTEXT=$(curl -s -X POST "$AEGIS/v1/keys/$KEY_ID/encrypt" \
+  -H "$USER_HEADER" -H "Content-Type: application/json" \
+  -d "{\"plaintextBase64\":\"$PT_B64\",\"context\":{\"dataset\":\"q2\",\"tenant\":\"acme\"}}" \
+  | jq -r '.ciphertextBase64')
+
+# Decrypt with the *same* context — succeeds
+curl -s -X POST "$AEGIS/v1/keys/$KEY_ID/decrypt" \
+  -H "$USER_HEADER" -H "Content-Type: application/json" \
+  -d "{\"ciphertextBase64\":\"$CIPHERTEXT\",\"context\":{\"dataset\":\"q2\",\"tenant\":\"acme\"}}" \
+  | jq -r '.plaintextBase64' | base64 -d
+# → secret invoice payload
+
+# Decrypt with a *different* context — fails (CryptographicFailure)
+curl -s -X POST "$AEGIS/v1/keys/$KEY_ID/decrypt" \
+  -H "$USER_HEADER" -H "Content-Type: application/json" \
+  -d "{\"ciphertextBase64\":\"$CIPHERTEXT\",\"context\":{\"dataset\":\"q3\"}}" \
+  | jq
+```
+
+The mismatched-context call returns:
+
+```json
+{ "error": "CryptographicFailure", "message": "encryption context mismatch" }
+```
+
+---
+
+## Step 10 — Wrap and unwrap a DEK (envelope encryption)
+
+For data too large for a single `encrypt` call (or for tools like `aws-encryption-sdk` that expect
+envelope-encrypted blobs), wrap a Data Encryption Key under the Aegis KEK:
+
+```bash
+DEK_B64=$(head -c 32 /dev/urandom | base64)   # a 256-bit DEK
+
+WRAPPED=$(curl -s -X POST "$AEGIS/v1/keys/$KEY_ID/wrap" \
+  -H "$USER_HEADER" -H "Content-Type: application/json" \
+  -d "{\"dekBase64\":\"$DEK_B64\"}" \
+  | jq -r '.wrappedDekBase64')
+
+# Unwrap to recover the original DEK — bytes-identical
+UNWRAPPED=$(curl -s -X POST "$AEGIS/v1/keys/$KEY_ID/unwrap" \
+  -H "$USER_HEADER" -H "Content-Type: application/json" \
+  -d "{\"wrappedDekBase64\":\"$WRAPPED\"}" \
+  | jq -r '.dekBase64')
+
+diff <(echo "$DEK_B64") <(echo "$UNWRAPPED") && echo "round-trip OK"
+```
+
+Use the unwrapped DEK locally with `openssl` / your AES library of choice; persist the *wrapped*
+form alongside your ciphertext. Rotating the KEK (Step 11) re-wraps without re-encrypting any of
+the payload data.
+
+---
+
+## Step 11 — Rotate the key
+
+Rotation increments the key's `currentVersion`. The dev backend produces deterministic-shape output
+keyed by `KeyId` only, so signatures + ciphertexts produced before the rotation continue to verify
+and decrypt — that's the contract the AWS KMS adapter preserves too:
+
+```bash
+curl -s -X POST "$AEGIS/v1/keys/$KEY_ID/rotate" \
+  -H "$USER_HEADER" -H "Content-Type: application/json" \
+  -d '{"policy":"Manual"}' \
+  | jq
+```
+
+Expected output:
+
+```json
+{
+  "id":             "8a3f1e25-...",
+  "state":          "Active",
+  "currentVersion": 2,
+  "rotatedAt":      "2026-05-09T01:30:12Z"
+}
+```
+
+Verify that the signature from Step 7 *still* validates against the rotated key:
+
+```bash
+curl -s -X POST "$AEGIS/v1/keys/$KEY_ID/verify" \
+  -H "$USER_HEADER" -H "Content-Type: application/json" \
+  -d "{\"messageBase64\":\"$MSG_B64\",\"signatureBase64\":\"$SIG\",\"algorithm\":\"RsaPssSha256\"}" \
+  | jq
+# → { "valid": true, "algorithm": "RsaPssSha256" }
+```
+
+Other policy shapes the server accepts: `TimeBased:7days`, `OpCountBased:10000`. v0.1.x records
+the policy on the audit row; the auto-scheduler that *drives* rotation from the policy lands in
+v0.2.0.
+
+---
+
+## Step 12 — Mark a key as compromised (operator override)
+
+This is the breakglass operation. From `Compromised` every cryptographic call — including
+`verify` — refuses with `IllegalOperation`. The audit row carries `severity=Critical` and the
+operator-supplied `reason`.
+
+```bash
+curl -s -X POST "$AEGIS/v1/keys/$KEY_ID/compromise" \
+  -H "$USER_HEADER" -H "Content-Type: application/json" \
+  -d '{"reason":"discovered in S3 audit leak 2026-05-08"}' \
+  | jq
+```
+
+Expected output:
+
+```json
+{
+  "id":            "8a3f1e25-...",
+  "state":         "Compromised",
+  "compromisedAt": "2026-05-09T01:31:00Z",
+  "reason":        "discovered in S3 audit leak 2026-05-08"
+}
+```
+
+Subsequent calls now refuse:
+
+```bash
+curl -s -X POST "$AEGIS/v1/keys/$KEY_ID/sign" \
+  -H "$USER_HEADER" -H "Content-Type: application/json" \
+  -d "{\"messageBase64\":\"$MSG_B64\",\"algorithm\":\"RsaPssSha256\"}" \
+  | jq
+# → { "error": "IllegalOperation", "message": "Key 8a3f1e25-... is Compromised" }
+```
+
+Compromise is **one-way** — there's no `un-compromise` operation. Cut a fresh key with a new
+`create` + `activate`.
+
+---
+
+## Step 13 — Watch the observability surfaces
+
+While the server is running, every operation you've made is visible on three surfaces. Open each
+in a browser tab:
+
+| Surface | URL | What you see |
+|---|---|---|
+| **Swagger UI** | <http://localhost:8080/docs/> | Live OpenAPI 3.1 spec for every endpoint. "Try it out" lets you fire requests from the browser. |
+| **Prometheus metrics** | <http://localhost:8080/metrics> | `aegis_keys_op_total{operation="Sign"}`, latency histograms, error counters, plus the standard JVM / GC / process collectors. |
+| **OpenAPI YAML** | <http://localhost:8080/docs/docs.yaml> | The raw spec — feed it to Postman, Insomnia, or `openapi-generator`. |
+
+For full traces, point the OpenTelemetry SDK at any OTLP collector by setting env vars on the
+container (`OTEL_TRACES_EXPORTER=otlp`, `OTEL_EXPORTER_OTLP_ENDPOINT=http://collector:4318`,
+`OTEL_SERVICE_NAME=aegis-server`). The full env-var matrix is in
+[Operations → Observability](../operations/observability.md).
+
+---
+
+## Step 14 — Stop the server
 
 ```bash
 docker compose -f deploy/docker/docker-compose.yml down
@@ -270,14 +433,17 @@ docker compose -f deploy/docker/docker-compose.yml down -v
 
 ## What you just did
 
-In ~5 minutes you:
+In ~10 minutes you:
 
 - Booted Aegis-KMS with a Postgres event journal
 - Created a key (in safe `PreActive` state by default)
 - Activated the key (explicit transition)
-- Signed a message with RSA-PSS-SHA-256
-- Verified the signature (and saw the tamper detection work)
-- Watched audit rows land on stdout in real time
+- Signed a message with RSA-PSS-SHA-256 + verified (and saw tamper detection work)
+- Encrypted with an `EncryptionContext` AAD + saw context-mismatch refusal
+- Wrapped + unwrapped a 256-bit DEK (envelope encryption)
+- Rotated the key and confirmed the prior signature still validates
+- Marked the key as `Compromised` and saw every subsequent crypto op refuse
+- Opened the Swagger UI, scraped `/metrics`, watched audit rows on stdout in real time
 
 Every operation was attributed to `alice` (the principal you passed via `X-Aegis-User`),
 recorded in the audit journal, exposed as a Prometheus metric on `/metrics`, and traced as

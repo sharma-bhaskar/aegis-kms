@@ -61,6 +61,31 @@ GCP / Azure / Vault adapters in v0.2.0) and adds the four things role-centric KM
 
 </div>
 
+## How a request flows through Aegis
+
+Every operation — whether it arrives over REST, the CLI, or (eventually) MCP — passes through the same set of decorators around the `KeyService` algebra. Each layer does one thing and one thing only:
+
+```mermaid
+flowchart LR
+    classDef plane   fill:#1d3557,stroke:#1d3557,color:#fff
+    classDef ops     fill:#2a9d8f,stroke:#2a9d8f,color:#fff
+    classDef gate    fill:#f4a261,stroke:#f4a261,color:#000
+    classDef core    fill:#457b9d,stroke:#457b9d,color:#fff
+    classDef sink    fill:#e76f51,stroke:#e76f51,color:#fff
+
+    rest["REST · CLI · SDK"]:::plane --> audit["AuditingKeyService<br/><i>records every call</i>"]:::sink
+    audit --> traced["TracingKeyService<br/><i>OTel span per op</i>"]:::ops
+    traced --> metered["MeteredKeyService<br/><i>Prometheus counter + timer</i>"]:::ops
+    metered --> authz["AuthorizingKeyService<br/><i>policy gate</i>"]:::gate
+    authz --> actor["KeyOpsActor<br/><i>single-thread state owner</i>"]:::core
+    actor --> rot[("Root of Trust<br/>AWS KMS · GCP 🚧 · Azure 🚧")]:::sink
+    actor --> journal[(Postgres event journal)]:::sink
+```
+
+- **Audit is outermost** so denied calls + errors still produce a row.
+- **Auth is innermost** of the decorators so a deny short-circuits before any real work.
+- **Tracing + metrics** sit between them so dashboards see the work that actually happened, while the audit row reflects the post-trace outcome.
+
 ## Quickstart in 30 seconds
 
 ```bash

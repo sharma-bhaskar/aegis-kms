@@ -2,38 +2,50 @@
 
 Aegis-KMS is a key management service designed for a world where humans, services, storage vendors, and AI agents all need to use the same keys safely. Four protocol planes (REST, KMIP, MCP, Agent-AI) terminate at a single audited core. The core is split into a library-safe tier (algebras, codecs, SDKs) that any JVM application can embed, and a server tier that adds wire protocols, persistence, and a pluggable root-of-trust.
 
-This document describes the system the project is building toward. For current implementation state, see [§9 Status](#9-status).
+This document describes the system the project is building toward. For current implementation state, see [§11 Status](#11-status).
 
 ## 1. Module layout
 
 The build is split into two tiers. The split is enforced at build time: anything in the library-safe tier that imports Pekko fails to compile because Pekko isn't on its classpath. This guarantees `aegis-core` and the SDKs stay slim enough to embed in any JVM app.
 
-```
-                     ┌────────────────────────────────────────────────────────┐
-                     │                     aegis-server                       │
-                     │   (entry point, wires HTTP + KMIP + MCP + agent-ai)    │
-                     └───────┬───────────┬───────────┬───────────┬────────────┘
-                             │           │           │           │
-                ┌────────────▼─┐  ┌──────▼─────┐  ┌──▼───────┐  ┌▼──────────┐
-   server tier  │  aegis-http  │  │ aegis-kmip │  │ aegis-   │  │ aegis-    │
-  (Pekko-aware) │  Tapir +     │  │ TTLV + TLS │  │ mcp-     │  │ agent-ai  │
-                │  pekko-http  │  │            │  │ server   │  │           │
-                └──────┬───────┘  └─────┬──────┘  └────┬─────┘  └─────┬─────┘
-                       │                │              │              │
-                       └────────┬───────┴──────────────┴──────────────┘
-                                │
-        ┌───────────────────────▼───────────────────────────────┐
-        │               aegis-core  (algebras, model)           │
-        │   KeyService[F[_]], ManagedKey, KmsError, Principal   │
-        └───┬──────────────┬──────────────┬─────────────────────┘
-            │              │              │
-   ┌────────▼─────┐  ┌─────▼─────┐  ┌─────▼──────┐  ┌──────────┐  ┌──────────┐
-   │ aegis-       │  │ aegis-    │  │ aegis-     │  │ aegis-   │  │ aegis-   │
-   │ persistence  │  │ crypto    │  │ iam        │  │ audit    │  │ sdk-*    │
-   │ Doobie / PG  │  │ Root of   │  │ OIDC, JWT, │  │ event    │  │ Scala +  │
-   │              │  │  Trust    │  │ agent ID   │  │ log      │  │ Java     │
-   └──────────────┘  └───────────┘  └────────────┘  └──────────┘  └──────────┘
-            ────────────  library-safe tier (no Pekko)  ────────────
+```mermaid
+flowchart TD
+    classDef server   fill:#1d3557,stroke:#1d3557,color:#fff
+    classDef library  fill:#457b9d,stroke:#457b9d,color:#fff
+    classDef boot     fill:#e63946,stroke:#e63946,color:#fff
+
+    boot["<b>aegis-server</b><br/><i>entry point<br/>wires HTTP · KMIP · MCP · Agent-AI</i>"]:::boot
+
+    subgraph ServerTier["Server tier (Pekko-aware)"]
+        http["<b>aegis-http</b><br/>Tapir + pekko-http<br/>OpenAPI on /docs"]:::server
+        kmip["<b>aegis-kmip</b><br/>TTLV + TLS 1.3<br/>(v0.4.0 🚧)"]:::server
+        mcp["<b>aegis-mcp-server</b><br/>JSON-RPC over stdio/SSE<br/>(v0.4.0 🚧)"]:::server
+        agent["<b>aegis-agent-ai</b><br/>Function-call shape<br/>+ BaselineDetector"]:::server
+    end
+
+    core["<b>aegis-core</b><br/><i>KeyService&#91;F&#91;_&#93;&#93; algebra · ManagedKey · KmsError · Principal · KeyEvent</i>"]:::library
+
+    subgraph LibraryTier["Library-safe tier (no Pekko · embeddable in any JVM app)"]
+        persistence["<b>aegis-persistence</b><br/>Doobie + Postgres<br/>event journal"]:::library
+        crypto["<b>aegis-crypto</b><br/>Root-of-Trust SPI<br/>+ AWS KMS adapter"]:::library
+        iam["<b>aegis-iam</b><br/>JWT issue/verify<br/>policy engine"]:::library
+        audit["<b>aegis-audit</b><br/>append-only sink<br/>(stdout · Postgres 🚧)"]:::library
+        sdks["<b>aegis-sdk-scala</b><br/><b>aegis-sdk-java</b><br/>thin REST clients"]:::library
+    end
+
+    boot --> http
+    boot --> kmip
+    boot --> mcp
+    boot --> agent
+    http --> core
+    kmip --> core
+    mcp --> core
+    agent --> core
+    core --> persistence
+    core --> crypto
+    core --> iam
+    core --> audit
+    core --> sdks
 ```
 
 | Module | Tier | Purpose |
@@ -84,21 +96,37 @@ In a deployment that has no storage / DB / backup / tape consumers, the KMIP lis
 
 A managed key in Aegis-KMS is a state machine, not a bag of bytes. Every operation either reads the current state or transitions it, and every transition produces an audit event.
 
-```
-       create                 activate              schedule rotation
-   ┌──────────►  PreActive  ───────────►  Active  ──────────────┐
-   │                                       │  ▲                 │
-   │                                       │  │                 ▼
-   │                                       │  │             Active'  (new version)
-   │                                       │  │                 │
-   │                                       ▼  │                 │
-   │                                  Deactivated  ◄────────────┘ old version, verify-only
-   │                                       │
-   │                                       ▼  retention period
-   │                                   Compromised? ──► Compromised  (manual)
-   │                                       │
-   │                                       ▼
-   └────────────────────────────────►  Destroyed     audit row preserved forever
+```mermaid
+stateDiagram-v2
+    direction LR
+    [*]          --> PreActive    : create
+    PreActive    --> Active       : activate
+    PreActive    --> Compromised  : compromise<br/>(operator override)
+    PreActive    --> Destroyed    : destroy
+    Active       --> Active       : rotate<br/>(currentVersion += 1)
+    Active       --> Deactivated  : revoke<br/>(or rotation moves prior version here)
+    Active       --> Compromised  : compromise<br/>(severity=Critical audit)
+    Active       --> Destroyed    : destroy
+    Deactivated  --> Compromised  : compromise
+    Deactivated  --> Destroyed    : destroy
+    Compromised  --> Destroyed    : destroy
+    Destroyed    --> [*]          : audit row<br/>preserved forever
+
+    note right of Active
+        sign · verify
+        encrypt · decrypt
+        wrap · unwrap
+    end note
+    note right of Deactivated
+        verify · decrypt · unwrap only
+        (read-only, for ciphertexts
+        produced before rotation)
+    end note
+    note right of Compromised
+        every crypto op refused
+        — including verify —
+        with IllegalOperation
+    end note
 ```
 
 Each transition has a single owner and a clear semantic:
@@ -159,10 +187,24 @@ The result: a Claude or GPT agent can use Aegis-KMS as if it were any other MCP-
 
 Every request, regardless of plane, follows the same shape:
 
-```
-client ─► plane terminator ─► IAM (authn + authz) ─► KeyService ─► [persistence + root-of-trust]
-                                                          │
-                                                          └─► AuditEvent ─► audit sink
+```mermaid
+flowchart LR
+    classDef plane    fill:#1d3557,stroke:#1d3557,color:#fff
+    classDef gate     fill:#f4a261,stroke:#f4a261,color:#000
+    classDef metric   fill:#2a9d8f,stroke:#2a9d8f,color:#fff
+    classDef core     fill:#457b9d,stroke:#457b9d,color:#fff
+    classDef sink     fill:#e76f51,stroke:#e76f51,color:#fff
+
+    client[Client] --> plane["Plane terminator<br/>(REST · KMIP · MCP · Agent-AI)"]:::plane
+    plane --> audit["AuditingKeyService<br/><i>outermost — records every call</i>"]:::sink
+    audit --> traced["TracingKeyService<br/><i>OTel span per op</i>"]:::metric
+    traced --> metered["MeteredKeyService<br/><i>Prometheus counter + timer</i>"]:::metric
+    metered --> authz["AuthorizingKeyService<br/><i>policy engine gate</i>"]:::gate
+    authz --> svc["KeyService.&lt;op&gt;"]:::core
+    svc --> actor["KeyOpsActor<br/><i>single-thread state owner</i>"]:::core
+    actor --> journal[(Event journal)]:::sink
+    actor --> rot[(Root of Trust<br/>AWS KMS adapter)]:::sink
+    audit -. on every call .-> auditSink[(Audit sink<br/>stdout · SIEM · Kafka 🚧)]:::sink
 ```
 
 For a `POST /v1/keys` over REST, the concrete steps are:
@@ -180,21 +222,21 @@ KMIP, MCP, and Agent-AI flows differ only in steps 1, 2, and 6 — the framing l
 
 Aegis-KMS distinguishes **operational logs** (for engineers) from **audit events** (for compliance and forensics). They have different retention, different consumers, and different write paths.
 
-```
-                                                    ┌─ stdout (JSON, slf4j) ──► loki / cloudwatch / datadog
-   any plane ──► HTTP / KMIP / MCP / Agent ──► logger ─┤
-                            │                          └─ stderr (errors)
-                            │
-                            ▼
-                       KeyService
-                            │
-                            │  on every state-changing event
-                            ▼
-                        audit sink
-                            │
-                            ├─► append-only Postgres table
-                            ├─► fan-out to S3 / object store
-                            └─► optional SIEM webhook
+```mermaid
+flowchart LR
+    classDef plane  fill:#1d3557,stroke:#1d3557,color:#fff
+    classDef ops    fill:#2a9d8f,stroke:#2a9d8f,color:#fff
+    classDef audit  fill:#e76f51,stroke:#e76f51,color:#fff
+
+    plane["Any plane<br/>(REST · KMIP · MCP · Agent-AI)"]:::plane --> logger[Logger<br/>slf4j + logback]:::ops
+    plane --> svc[KeyService op]
+    logger --> stdout[stdout JSON<br/>→ Loki / CloudWatch / Datadog]:::ops
+    logger --> stderr[stderr errors]:::ops
+    svc -. on every state-changing event .-> sink[Audit sink]:::audit
+    sink --> pg[(Postgres audit table 🚧)]:::audit
+    sink --> obj[(S3 / object store 🚧)]:::audit
+    sink --> siem[(SIEM webhook 🚧)]:::audit
+    sink --> sout[stdout JSON<br/>v0.1.x default]:::audit
 ```
 
 ### What gets logged vs audited
@@ -247,25 +289,26 @@ A single `request-id` joins log lines, audit events, and the client-side trace i
 
 ## 8. Operational topology
 
-```
-                       ┌──────────────────────────────┐
-                       │       Load Balancer (TLS)    │
-                       └───────┬──────────────┬───────┘
-                               │              │
-                       ┌───────▼─────┐ ┌──────▼───────┐
-                       │ aegis-server│ │ aegis-server │   N replicas, each runs:
-                       │   pod 1     │ │   pod 2      │     • HTTP (8080)
-                       └───────┬─────┘ └──────┬───────┘     • KMIP (5696, mTLS)
-                               │              │              • MCP   (8443, optional)
-                               └──────┬───────┘              • Agent-AI (8081, internal)
-                                      │
-                              ┌───────▼────────┐
-                              │  Postgres HA   │  ─── event journal + audit log
-                              └────────────────┘
-                                      │
-                              ┌───────▼────────┐
-                              │  Root of Trust │  ─── never accessed except through aegis-crypto
-                              └────────────────┘
+```mermaid
+flowchart TD
+    classDef edge   fill:#264653,stroke:#264653,color:#fff
+    classDef pod    fill:#1d3557,stroke:#1d3557,color:#fff
+    classDef ports  fill:#fff,stroke:#1d3557,color:#1d3557
+    classDef state  fill:#e76f51,stroke:#e76f51,color:#fff
+    classDef rot    fill:#e63946,stroke:#e63946,color:#fff
+
+    lb["Load Balancer<br/>(TLS termination)"]:::edge --> pod1
+    lb --> pod2
+
+    subgraph aegis_server_pods["aegis-server pods (N replicas)"]
+        pod1["aegis-server<br/>pod 1"]:::pod
+        pod2["aegis-server<br/>pod 2"]:::pod
+        ports["Each pod runs:<br/>• HTTP 8080 (+ /docs + /metrics)<br/>• KMIP 5696 mTLS 🚧<br/>• MCP 8443 optional 🚧<br/>• Agent-AI 8081 internal 🚧"]:::ports
+    end
+
+    pod1 --> pg[(Postgres HA<br/>event journal + audit log)]:::state
+    pod2 --> pg
+    pg   --> rot{{"Root of Trust<br/>AWS KMS adapter (v0.1.x)<br/>GCP · Azure · Vault · PKCS#11 🚧<br/><i>never touched outside aegis-crypto</i>"}}:::rot
 ```
 
 The `ActorSystem` is local to each pod; cross-pod consistency is achieved through the journal — two pods racing on the same `KeyId` conflict at the persistence layer, not via cluster sharding. This is deliberate: a single-pod-first deployment lets KMIP, MCP, and the SDKs ride alongside without waiting on cluster-mode work, and most production deployments run a small fixed pool of pods rather than autoscaling the KMS itself.
