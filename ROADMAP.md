@@ -76,9 +76,9 @@ Non-goals: cryptographic operations, multi-cloud RoT, KMIP, MCP, OIDC. All defer
 
 | # | Capability | Area | Status |
 |---|---|---|---|
-| 2.0.a | Risk scorer (W2) — multi-factor numeric score; reasoning recorded in audit context | Wedge | 🔜 |
-| 2.0.b | Decision adapter (`allow` / `step-up` / `deny`) wired into IAM | Wedge | 🔜 |
-| 2.0.c | Auto-responder (W3) — configurable rules from `AgentRecommendation` → action (revoke / deactivate / freeze / alert) | Wedge | 🔜 |
+| 2.0.a | Risk scorer (W2) — multi-factor numeric score; reasoning recorded in audit context | Wedge | ✅ |
+| 2.0.b | Decision adapter (`allow` / `step-up` / `deny`) wired into IAM | Wedge | ✅ |
+| 2.0.c | Auto-responder (W3) — configurable rules from `AgentRecommendation` → action (revoke / deactivate / freeze / alert) | Wedge | ✅ |
 | 2.0.d | Agent-token issuance HTTP endpoint (`POST /v1/agents/issue`) | Wedge | 🔜 |
 | 2.0.e | `aegis agent issue` CLI — wire the existing stub to the new endpoint | Wedge | 🔜 |
 | 2.0.f | Postgres audit table (queryable, indexed on actor + occurredAt + key) | Platform | 🔜 |
