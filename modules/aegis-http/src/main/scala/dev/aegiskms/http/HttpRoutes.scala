@@ -4,7 +4,7 @@ import cats.effect.IO
 import cats.effect.unsafe.IORuntime
 import dev.aegiskms.core.*
 import dev.aegiskms.http.JsonCodecs.*
-import dev.aegiskms.iam.PrincipalResolver
+import dev.aegiskms.iam.{AgentTokenIssuer, IssueAgentRequest as IamIssueAgentRequest, PrincipalResolver}
 import org.apache.pekko.http.scaladsl.server.Route
 import sttp.apispec.openapi.circe.yaml.*
 import sttp.model.StatusCode
@@ -30,7 +30,8 @@ import scala.concurrent.{ExecutionContext, Future}
   */
 final class HttpRoutes(
     svc: KeyService[IO],
-    resolver: PrincipalResolver = PrincipalResolver.dev
+    resolver: PrincipalResolver = PrincipalResolver.dev,
+    agentIssuer: Option[AgentTokenIssuer] = None
 )(using runtime: IORuntime):
 
   private given ExecutionContext = runtime.compute
@@ -279,6 +280,49 @@ final class HttpRoutes(
                   }
     }
 
+  private val issueAgentSE: ServerEndpoint[Any, Future] =
+    Endpoints.issueAgent.serverLogic { case (auth, devHdr, body) =>
+      principalOf(auth, devHdr) match
+        case Left(e) => Future.successful(Left(e))
+        case Right(principal) =>
+          agentIssuer match
+            case None =>
+              // The agent-issue endpoint is wired in the public OpenAPI surface unconditionally so
+              // clients always see it, but the implementation is opt-in (Server.boot wires it). When
+              // not wired, return 501 NotImplemented rather than crashing.
+              Future.successful(
+                Left(
+                  StatusCode.NotImplemented -> KmsErrorDto.of(
+                    ErrorCode.FeatureNotSupported,
+                    "agent-token issuance is not enabled on this server"
+                  )
+                )
+              )
+            case Some(issuer) =>
+              val domainReq = IamIssueAgentRequest(
+                label = body.label,
+                scopes = body.scopes,
+                ttl = scala.concurrent.duration.FiniteDuration(
+                  body.ttlSeconds,
+                  scala.concurrent.duration.SECONDS
+                ),
+                parent = body.parent,
+                callerSubject = Some(principal.subject)
+              )
+              runIO(issuer.issue(principal, domainReq)).map {
+                case Left(err) => Left(errorOut(err))
+                case Right(token) =>
+                  Right(
+                    IssueAgentResponseDto(
+                      agentId = token.agentId,
+                      jwt = token.jwt,
+                      jti = token.jti,
+                      expiresAt = token.expiresAt
+                    )
+                  )
+              }
+    }
+
   private def decodeSignRequest(
       req: SignRequest
   ): Either[(StatusCode, KmsErrorDto), (Array[Byte], SigAlgorithm)] =
@@ -325,7 +369,8 @@ final class HttpRoutes(
       wrapSE,
       unwrapSE,
       compromiseSE,
-      rotateSE
+      rotateSE,
+      issueAgentSE
     )
 
   /** Render the live endpoint set as an OpenAPI 3.1 document. The build-time guarantee here is the same one

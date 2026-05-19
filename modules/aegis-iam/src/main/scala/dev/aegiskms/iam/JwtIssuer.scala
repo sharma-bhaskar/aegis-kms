@@ -34,6 +34,7 @@ object JwtIssuer:
     def issue(claims: JwtClaims): String =
       val builder = Jwts
         .builder()
+        .id(claims.jti)
         .subject(claims.subject)
         .issuedAt(Date.from(claims.issuedAt))
         .expiration(Date.from(claims.expiresAt))

@@ -8,6 +8,29 @@ All notable changes to Aegis will be documented here. This project follows
 
 ### Added
 
+- **Agent-token issuance endpoint `POST /v1/agents/issue` (closes #18).** Exposes the existing
+  `JwtIssuer` over REST so operators (and the upcoming `aegis agent issue` CLI) can mint
+  short-lived agent JWTs programmatically. New `AgentTokenIssuer` in `aegis-iam` wraps the issuer
+  with three concerns the raw `JwtIssuer` doesn't carry: **authz** (only `Principal.Human` can
+  issue — `Service` and `Agent` callers are refused with `403 PermissionDenied`, enforcing the
+  "agents cannot issue agents" rule from the spec), **validation** (label must be non-empty,
+  scopes must parse as `Operation` names, TTL must be `> 0` and `≤ 24 h` by default), and
+  **identity generation** (`agentId = agent-<uuid>`, `jti = <uuid>`). Wire body:
+  `{label, scopes, ttlSeconds, parent?}` — when present, `parent` must equal the authenticated
+  caller's subject (cross-principal issuance is rejected in v0.2.0; delegated issuance lands with
+  a future release). Response: `{agentId, jwt, jti, expiresAt}`. The JWT carries the same claims
+  the verifier already understands (`kind=agent`, `aegis_parent`, `aegis_purpose`, `aegis_ops`)
+  plus a new `jti` claim for the future revocation list (#24). Wired into `Server.boot` for both
+  auth modes: `hmac` reuses `aegis.auth.hmac.secret`; `dev` mints a per-boot ephemeral 48-byte
+  secret (logged with a warning so operators don't confuse dev tokens with production).
+
+- **`jti` (RFC 7519 token ID) on all Aegis-issued JWTs.** `JwtClaims.Human` and `JwtClaims.Agent`
+  gained a required `jti: String` field; `JwtIssuer` sets the `jti` claim via `builder.id(...)`;
+  `JwtVerifier` extracts it on parse (tolerating absent `jti` as empty string for
+  backwards-compatibility with externally-minted tokens). The JTI blacklist consumer ships with
+  #24 (Redis-backed revocation list). 7 test sites updated to pass `jti` to the case-class
+  constructors.
+
 - **CI publishes `ghcr.io/<owner>/aegis-server:main` on every push to `main`.** New
   `.github/workflows/docker-main.yml` builds and publishes a floating `:main` image (and an
   immutable `:main-<short-sha>`) so the v0.2.0 wedge demo in the quickstart can be exercised

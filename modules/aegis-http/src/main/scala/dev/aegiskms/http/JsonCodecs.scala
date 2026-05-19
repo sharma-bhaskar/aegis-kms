@@ -180,3 +180,41 @@ object JsonCodecs:
   object RotateRequest:
     given Encoder[RotateRequest] = deriveEncoder
     given Decoder[RotateRequest] = deriveDecoder
+
+  // ── Agent issuance DTOs (#18) ──────────────────────────────────────────────
+
+  /** Wire body for `POST /v1/agents/issue`.
+    *
+    *   - `label` — human-readable purpose ("claude-invoice-batch-q2"). Persisted as the agent's `purpose`
+    *     claim and shown in audit rows. Required, non-empty.
+    *   - `scopes` — KMIP `Operation` names the agent is permitted to call (e.g. `["Sign", "Get"]`). Required,
+    *     non-empty. Any name that doesn't resolve to an `Operation` rejects the request with `400
+    *     InvalidField`.
+    *   - `ttlSeconds` — token lifetime. Must be `> 0` and `≤ 86400` (24 h cap).
+    *   - `parent` — optional. When present, must equal the authenticated caller's subject; cross-principal
+    *     issuance is rejected in v0.2.0. The field exists so callers can be explicit about who they're
+    *     issuing on behalf of (and so future delegated-issuance can reuse the wire shape).
+    */
+  final case class IssueAgentRequestDto(
+      label: String,
+      scopes: List[String],
+      ttlSeconds: Long,
+      parent: Option[String] = None
+  )
+  object IssueAgentRequestDto:
+    given Encoder[IssueAgentRequestDto] = deriveEncoder
+    given Decoder[IssueAgentRequestDto] = deriveDecoder
+
+  /** Wire response for `POST /v1/agents/issue`. The JWT is the bearer the agent presents on every subsequent
+    * call; `agentId` is the same string that appears in the audit log as the agent's subject; `jti` is the
+    * JWT ID, recorded for the future revocation list (#24).
+    */
+  final case class IssueAgentResponseDto(
+      agentId: String,
+      jwt: String,
+      jti: String,
+      expiresAt: Instant
+  )
+  object IssueAgentResponseDto:
+    given Encoder[IssueAgentResponseDto] = deriveEncoder
+    given Decoder[IssueAgentResponseDto] = deriveDecoder

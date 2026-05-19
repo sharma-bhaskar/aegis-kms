@@ -4,13 +4,14 @@ import java.time.Instant
 
 /** Typed view of the claims encoded in an Aegis-issued JWS.
   *
-  * The wire format is plain JWT (`iat`/`exp`/`iss`/`sub` from RFC 7519 plus Aegis-namespaced custom claims
-  * prefixed `aegis_`). This sealed ADT discriminates Human vs Agent at the type level so downstream code
-  * cannot accidentally treat one as the other.
+  * The wire format is plain JWT (`jti`/`iat`/`exp`/`iss`/`sub` from RFC 7519 plus Aegis-namespaced custom
+  * claims prefixed `aegis_`). This sealed ADT discriminates Human vs Agent at the type level so downstream
+  * code cannot accidentally treat one as the other.
   *
   * Claim layout on the wire:
   * {{{
   *   {
+  *     "jti":   "9c4f5a72-…",            // RFC 7519, unique token id (for revocation, see #24)
   *     "sub":   "alice@org",            // RFC 7519
   *     "iss":   "https://aegis.local",  // RFC 7519, optional
   *     "iat":   1714400000,             // RFC 7519, seconds since epoch
@@ -23,6 +24,10 @@ import java.time.Instant
   *   }
   * }}}
   *
+  * `jti` is required so every issued token has a stable identifier for the JTI blacklist (#24) and for
+  * correlation in the audit log. Callers that don't care about jti can pass a fresh
+  * `UUID.randomUUID().toString`.
+  *
   * The `aegis_*` namespace is reserved so we don't trample on standard OIDC claims (`groups`, `roles`,
   * `scope`) when Aegis is fronted by a corporate IDP.
   */
@@ -31,6 +36,7 @@ sealed trait JwtClaims:
   def issuer: Option[String]
   def issuedAt: Instant
   def expiresAt: Instant
+  def jti: String
 
 object JwtClaims:
 
@@ -39,7 +45,8 @@ object JwtClaims:
       issuer: Option[String],
       issuedAt: Instant,
       expiresAt: Instant,
-      groups: Set[String]
+      groups: Set[String],
+      jti: String
   ) extends JwtClaims
 
   final case class Agent(
@@ -49,7 +56,8 @@ object JwtClaims:
       expiresAt: Instant,
       parentSubject: String,
       purpose: String,
-      allowedOps: Set[String]
+      allowedOps: Set[String],
+      jti: String
   ) extends JwtClaims
 
   /** Custom-claim names. Constants so the verifier and the issuer stay in lockstep. */

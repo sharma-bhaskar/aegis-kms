@@ -218,6 +218,43 @@ object Endpoints:
           "is recorded on the audit row."
       )
 
+  // ── Agent tokens ────────────────────────────────────────────────────────────
+
+  /** Common path + headers + error contract for the agent-management surface. The base differs from
+    * `keysBase` (path = `v1/agents`, tag = `"agents"`) so OpenAPI groups them cleanly in Swagger UI.
+    */
+  private val agentsBase =
+    endpoint
+      .in("v1" / "agents")
+      .in(authHeader)
+      .in(devUserHeader)
+      .errorOut(statusCode and jsonBody[KmsErrorDto].description("Failure detail"))
+      .tag("agents")
+
+  /** `POST /v1/agents/issue` — issue a short-lived JWT for an AI agent acting under a human's authority.
+    * Caller must be a `Principal.Human` (Service and Agent callers are refused with 403).
+    *
+    * Request body: `{ label, scopes, ttlSeconds, parent? }` Response: `{ agentId, jwt, jti, expiresAt }`
+    */
+  val issueAgent: PublicEndpoint[
+    (Option[String], Option[String], IssueAgentRequestDto),
+    (StatusCode, KmsErrorDto),
+    IssueAgentResponseDto,
+    Any
+  ] =
+    agentsBase.post
+      .in("issue")
+      .in(jsonBody[IssueAgentRequestDto])
+      .out(statusCode(StatusCode.Created))
+      .out(jsonBody[IssueAgentResponseDto])
+      .summary("Issue an agent JWT")
+      .description(
+        "Mints a short-lived JWT carrying `kind=agent`, the caller's subject as parent, and the " +
+          "requested scopes (KMIP Operation names). Only humans can issue agents — service and agent " +
+          "principals are refused with 403. Maximum TTL is 24 hours (the agent credential lifetime is " +
+          "deliberately short because the only revocation mechanism is the JTI blacklist that lands in #24)."
+      )
+
   /** All endpoint definitions. Used by the OpenAPI generator and tests. */
   val all: List[AnyEndpoint] =
     List(
@@ -232,5 +269,6 @@ object Endpoints:
       wrapKey,
       unwrapKey,
       compromiseKey,
-      rotateKey
+      rotateKey,
+      issueAgent
     )

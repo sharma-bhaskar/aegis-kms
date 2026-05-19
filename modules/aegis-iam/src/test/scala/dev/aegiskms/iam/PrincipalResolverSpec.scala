@@ -5,6 +5,7 @@ import org.scalatest.funsuite.AnyFunSuite
 
 import java.time.Instant
 import java.time.temporal.ChronoUnit
+import java.util.UUID
 
 final class PrincipalResolverSpec extends AnyFunSuite:
 
@@ -34,9 +35,16 @@ final class PrincipalResolverSpec extends AnyFunSuite:
   // ── jwt resolver — happy paths ───────────────────────────────────────────────
 
   test("jwt resolver verifies a Human token and returns Principal.Human with the carried groups") {
-    val claims = JwtClaims.Human("alice@org", None, now, now.plus(1, ChronoUnit.HOURS), Set("admins"))
-    val token  = issuer.issue(claims)
-    val res    = PrincipalResolver.jwt(verifier).resolve(Some(s"Bearer $token"), devUserHeader = None)
+    val claims = JwtClaims.Human(
+      "alice@org",
+      None,
+      now,
+      now.plus(1, ChronoUnit.HOURS),
+      Set("admins"),
+      UUID.randomUUID().toString
+    )
+    val token = issuer.issue(claims)
+    val res   = PrincipalResolver.jwt(verifier).resolve(Some(s"Bearer $token"), devUserHeader = None)
     assert(res == Right(Principal.Human("alice@org", Set("admins"))))
   }
 
@@ -48,7 +56,8 @@ final class PrincipalResolverSpec extends AnyFunSuite:
       expiresAt = now.plus(1, ChronoUnit.HOURS),
       parentSubject = "alice@org",
       purpose = "claude-invoice-batch-q2",
-      allowedOps = Set("Get", "Activate")
+      allowedOps = Set("Get", "Activate"),
+      jti = UUID.randomUUID().toString
     )
     val token = issuer.issue(claims)
     val res   = PrincipalResolver.jwt(verifier).resolve(Some(s"Bearer $token"), devUserHeader = None)
@@ -83,7 +92,8 @@ final class PrincipalResolverSpec extends AnyFunSuite:
       issuer = None,
       issuedAt = now.minus(2, ChronoUnit.HOURS),
       expiresAt = now.minus(1, ChronoUnit.HOURS),
-      groups = Set.empty
+      groups = Set.empty,
+      jti = UUID.randomUUID().toString
     )
     val token = issuer.issue(claims)
     val res   = PrincipalResolver.jwt(verifier).resolve(Some(s"Bearer $token"), None)
@@ -91,7 +101,14 @@ final class PrincipalResolverSpec extends AnyFunSuite:
   }
 
   test("token signed with a different secret is rejected") {
-    val claims      = JwtClaims.Human("alice", None, now, now.plus(1, ChronoUnit.HOURS), Set.empty)
+    val claims = JwtClaims.Human(
+      "alice",
+      None,
+      now,
+      now.plus(1, ChronoUnit.HOURS),
+      Set.empty,
+      UUID.randomUUID().toString
+    )
     val otherIssuer = JwtIssuer.hmac("an-entirely-different-32-byte-secret-pls")
     val token       = otherIssuer.issue(claims)
     val res         = PrincipalResolver.jwt(verifier).resolve(Some(s"Bearer $token"), None)

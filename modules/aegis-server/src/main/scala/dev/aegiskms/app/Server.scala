@@ -14,7 +14,7 @@ import dev.aegiskms.agent.{
 }
 import dev.aegiskms.audit.{AuditingKeyService, StdoutAuditSink}
 import dev.aegiskms.http.HttpRoutes
-import dev.aegiskms.iam.{AuthorizingKeyService, JwtVerifier, PrincipalResolver}
+import dev.aegiskms.iam.{AgentTokenIssuer, AuthorizingKeyService, JwtIssuer, JwtVerifier, PrincipalResolver}
 import dev.aegiskms.persistence.{EventJournal, PostgresEventJournal, PostgresJournalConfig}
 import io.micrometer.prometheusmetrics.PrometheusMeterRegistry
 import org.apache.pekko.actor.typed.{ActorSystem, Scheduler}
@@ -142,6 +142,14 @@ object Server extends IOApp.Simple:
       auditing       = new AuditingKeyService(traced, sink, Some(riskScorer), Some(decisionEngine))
 
       resolver = buildResolver(rootConfig)
+      // Agent-token issuer (#18). Needs a JwtIssuer with the HMAC secret. We share the same secret
+      // the verifier uses when `aegis.auth.kind=hmac`; in dev mode we mint a stable per-boot secret
+      // (logged below) so the demo can issue + verify agent tokens within a single server lifetime.
+      // The "dev mode self-issued tokens" approach is deliberate — it lets newcomers exercise the
+      // wedge demo with real Agent principals without standing up an OIDC IDP. PR #25 replaces this
+      // with proper OIDC + JWKS rotation.
+      agentIssuer <- Resource.eval(buildAgentIssuer(rootConfig))
+
       _ <- Resource.eval(IO {
         logger.warn(
           "aegis-server starting in DEV MODE — DevPolicyEngine grants every Human full access. " +
@@ -152,7 +160,10 @@ object Server extends IOApp.Simple:
       // 5. HTTP binding. Acquire = bind; release = unbind with the configured grace period (5s) so
       //    in-flight requests finish before the socket closes.
       appRoute =
-        concat(HttpRoutes(auditing, resolver).routes, MetricsRoutes.route(metricsRegistry))
+        concat(
+          HttpRoutes(auditing, resolver, Some(agentIssuer)).routes,
+          MetricsRoutes.route(metricsRegistry)
+        )
       _ <- httpBindingResource(host, port, appRoute)
       _ <- Resource.eval(IO {
         logger.info(s"aegis-server listening on http://$host:$port (try POST /v1/keys)")
@@ -255,6 +266,39 @@ object Server extends IOApp.Simple:
       password = pg.getString("password"),
       poolSize = pg.getInt("pool-size")
     )
+
+  /** Build the `AgentTokenIssuer` that backs `POST /v1/agents/issue`.
+    *
+    *   - `aegis.auth.kind=hmac` — reuses the configured HMAC secret so issued agent tokens validate against
+    *     the same verifier.
+    *   - `aegis.auth.kind=dev` — mints a per-boot ephemeral 48-byte HMAC secret. Dev-mode tokens are valid
+    *     only against this server instance and only until the next restart. Logged with a clear warning so
+    *     operators don't accidentally rely on them in production.
+    *
+    * Both modes return a `Resource.eval`-friendly `IO[AgentTokenIssuer]`; the issuer itself holds no closable
+    * resource, but lifting it via `IO` keeps the boot composition uniform.
+    */
+  private def buildAgentIssuer(config: Config): IO[AgentTokenIssuer] = IO {
+    config.getString("aegis.auth.kind") match
+      case "hmac" =>
+        val secret = config.getString("aegis.auth.hmac.secret")
+        if secret.isEmpty then
+          throw new IllegalArgumentException(
+            "aegis.auth.kind=hmac requires aegis.auth.hmac.secret (also used to sign issued agent tokens)"
+          )
+        logger.info("agent-issue: reusing aegis.auth.hmac.secret for issued agent JWTs")
+        new AgentTokenIssuer(JwtIssuer.hmac(secret))
+      case _ =>
+        // Dev mode: ephemeral per-boot secret. 48 random bytes (>32 byte HS256 minimum).
+        val randomSecret = java.util.Base64.getEncoder
+          .encodeToString(java.security.SecureRandom.getInstanceStrong.generateSeed(48))
+        logger.warn(
+          "agent-issue: DEV MODE — issuing agent JWTs signed with a per-boot ephemeral secret. " +
+            "Tokens are valid only against this server instance and only until restart. Do not " +
+            "rely on dev-issued tokens beyond a workstation."
+        )
+        new AgentTokenIssuer(JwtIssuer.hmac(randomSecret))
+  }
 
   /** Build the principal resolver from `aegis.auth.kind`. Misconfiguration fails fast at boot — silent
     * fallback to dev would be a security hole.

@@ -4,6 +4,7 @@ import org.scalatest.funsuite.AnyFunSuite
 
 import java.time.Instant
 import java.time.temporal.ChronoUnit
+import java.util.UUID
 
 /** Round-trips JwtIssuer → JwtVerifier for both Human and Agent claim shapes, and verifies the negative paths
   * the verifier promises (expired, malformed, bad signature, wrong kind).
@@ -30,7 +31,8 @@ final class JwtRoundTripSpec extends AnyFunSuite:
       issuer = Some("https://aegis.local"),
       issuedAt = now,
       expiresAt = now.plus(1, ChronoUnit.HOURS),
-      groups = Set("admins", "sre")
+      groups = Set("admins", "sre"),
+      jti = UUID.randomUUID().toString
     )
     val token = issuer.issue(claims)
     val back  = verifier.verify(token).toOption.get.asInstanceOf[JwtClaims.Human]
@@ -39,6 +41,7 @@ final class JwtRoundTripSpec extends AnyFunSuite:
     assert(back.issuer.contains("https://aegis.local"))
     // JWT exp/iat are encoded as seconds-since-epoch — round-trip truncates sub-second precision.
     assert(back.issuedAt.getEpochSecond == now.getEpochSecond)
+    assert(back.jti == claims.jti) // jti round-trips through issue → verify
   }
 
   test("Agent claim carries parent, purpose, allowedOps") {
@@ -49,7 +52,8 @@ final class JwtRoundTripSpec extends AnyFunSuite:
       expiresAt = now.plus(1, ChronoUnit.HOURS),
       parentSubject = "alice@org",
       purpose = "claude-invoice-batch-q2",
-      allowedOps = Set("Get", "Activate")
+      allowedOps = Set("Get", "Activate"),
+      jti = UUID.randomUUID().toString
     )
     val token = issuer.issue(claims)
     val back  = verifier.verify(token).toOption.get.asInstanceOf[JwtClaims.Agent]
@@ -64,7 +68,8 @@ final class JwtRoundTripSpec extends AnyFunSuite:
       issuer = None,
       issuedAt = now.minus(2, ChronoUnit.HOURS),
       expiresAt = now.minus(1, ChronoUnit.HOURS),
-      groups = Set.empty
+      groups = Set.empty,
+      jti = UUID.randomUUID().toString
     )
     val token  = issuer.issue(claims)
     val result = verifier.verify(token)
@@ -72,9 +77,10 @@ final class JwtRoundTripSpec extends AnyFunSuite:
   }
 
   test("token signed with a different secret fails with SignatureInvalid") {
-    val claims = JwtClaims.Human("alice@org", None, now, now.plusSeconds(60), Set.empty)
-    val token  = issuer.issue(claims)
-    val other  = JwtVerifier.hmac("a-totally-different-secret-also-32+bytes")
+    val claims =
+      JwtClaims.Human("alice@org", None, now, now.plusSeconds(60), Set.empty, UUID.randomUUID().toString)
+    val token = issuer.issue(claims)
+    val other = JwtVerifier.hmac("a-totally-different-secret-also-32+bytes")
     assert(other.verify(token) == Left(JwtError.SignatureInvalid))
   }
 
