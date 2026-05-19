@@ -196,27 +196,52 @@ flowchart LR
     classDef sink     fill:#e76f51,stroke:#e76f51,color:#fff
 
     client[Client] --> plane["Plane terminator<br/>(REST · KMIP · MCP · Agent-AI)"]:::plane
-    plane --> audit["AuditingKeyService<br/><i>outermost — records every call</i>"]:::sink
+    plane --> audit["AuditingKeyService<br/><i>outermost — scores, decides, records</i>"]:::sink
     audit --> traced["TracingKeyService<br/><i>OTel span per op</i>"]:::metric
     traced --> metered["MeteredKeyService<br/><i>Prometheus counter + timer</i>"]:::metric
-    metered --> authz["AuthorizingKeyService<br/><i>policy engine gate</i>"]:::gate
+    metered --> authz["AuthorizingKeyService<br/><i>policy engine gate (floor)</i>"]:::gate
     authz --> svc["KeyService.&lt;op&gt;"]:::core
     svc --> actor["KeyOpsActor<br/><i>single-thread state owner</i>"]:::core
     actor --> journal[(Event journal)]:::sink
     actor --> rot[(Root of Trust<br/>AWS KMS adapter)]:::sink
+    audit -. score+factors .-> scorer["RiskScorer<br/><i>BaselineRiskScorer</i>"]:::metric
+    audit -. decide .-> engine["DecisionEngine<br/><i>ThresholdDecisionEngine</i>"]:::gate
     audit -. on every call .-> auditSink[(Audit sink<br/>stdout · SIEM · Kafka 🚧)]:::sink
+    auditSink -. tapped .-> detector["BaselineDetector<br/><i>5 detectors</i>"]:::metric
+    detector --> responder["AutoResponder<br/><i>matches rules → revoke / alert / freeze</i>"]:::gate
+    responder -. system-actor revoke .-> traced
 ```
+
+`AuditingKeyService` is the load-bearing decorator: on every call it (1) asks the optional
+`RiskScorer` for a `RiskScore(value, factors)`, (2) asks the optional `DecisionEngine` for an
+`Allow` / `StepUp` / `Deny` verdict, (3) stamps `risk.score`, `risk.factors`, `outcome.decision`
+into the audit row's `context`, (4) short-circuits the inner call on `Deny` (returns
+`PermissionDenied` with `"risk: …"` prefix) or `StepUp` (returns the new `StepUpRequired` error
+that the HTTP plane maps to `401 Unauthorized`), and (5) writes the audit record regardless of
+outcome. The boolean `AuthorizingKeyService` further inside is the **policy floor** — risk can
+only further restrict an action policy permits; it cannot widen one policy forbids.
+
+Every record written to the audit sink is also observed by the `BaselineDetector` (via
+`TappedAuditSink`), which may emit `AgentRecommendation` events. Those events flow into the
+`AutoResponder`, which persists them and — when a `Rule` matches and the per-(actor, action)
+cooldown allows — calls a *below-the-audit-decorator* `KeyService` (typically `Revoke`) under
+the `aegis-system` principal. The responder writes its own audit row directly to the sink, so
+operators can grep `principal=aegis-system` to see the auto-response timeline. The "below the
+audit decorator" routing is deliberate: feeding auto-response actions back through Auditing
+would re-trigger the detector and cause revoke recursion.
 
 For a `POST /v1/keys` over REST, the concrete steps are:
 
 1. `aegis-http` matches the route, generates a `request-id`, and parses the JSON body into a wire DTO.
 2. The DTO is validated and translated to the core domain (`KeySpec`); a parse failure short-circuits to `400 InvalidField` and `KeyService` is never called.
-3. IAM resolves the bearer token to a `Principal` and checks the `create_key` permission against policy.
-4. `KeyService.create(spec, principal)` runs. The state-changing event is persisted to the journal first; the audit event is emitted after the persist commits, so the audit log can never describe a key the journal doesn't have.
-5. If the audit sink is unavailable, the operation still commits and the actor records a `PendingAuditDelivery` event for a sweeper. The audit row is delivered late, never lost.
-6. The new `ManagedKey` is mapped back to a wire DTO (`ManagedKeyDto`) and returned with `201 Created`.
+3. IAM resolves the bearer token to a `Principal`.
+4. `AuditingKeyService` scores + decides. If `Deny` or `StepUp`, the request short-circuits before the inner call — but the audit row still lands.
+5. `AuthorizingKeyService` checks the `create_key` permission against the boolean policy floor.
+6. `KeyService.create(spec, principal)` runs. The state-changing event is persisted to the journal first; the audit event is emitted after the persist commits, so the audit log can never describe a key the journal doesn't have.
+7. If the audit sink is unavailable, the operation still commits and the actor records a `PendingAuditDelivery` event for a sweeper. The audit row is delivered late, never lost.
+8. The new `ManagedKey` is mapped back to a wire DTO (`ManagedKeyDto`) and returned with `201 Created`.
 
-KMIP, MCP, and Agent-AI flows differ only in steps 1, 2, and 6 — the framing layer. Steps 3–5 are identical for every plane.
+KMIP, MCP, and Agent-AI flows differ only in steps 1, 2, and 8 — the framing layer. Steps 3–7 are identical for every plane.
 
 ## 6. Audit and logging
 
@@ -386,6 +411,8 @@ What's implemented today vs. what the design above describes. This is the only p
 | IAM allowlist policy engine + recursive parent-check for agents | ✅ Shipped |
 | JWT bearer auth — `Authorization: Bearer`, HS256 verification + issuance | ✅ Shipped |
 | Audit decorator + stdout sink + W1 anomaly detector (BaselineDetector) | ✅ Shipped |
+| Risk scorer (W2) + decision adapter (Allow / StepUp / Deny) | ✅ Shipped on `main` (v0.2.0 in progress) |
+| Auto-responder (W3) — `AgentRecommendation` → revoke / alert / freeze | ✅ Shipped on `main` (v0.2.0 in progress) |
 | Operator CLI — `version`, `login`, `keys create/get/activate/destroy` | ✅ Shipped |
 | Scala SDK skeleton + Java SDK skeleton | ✅ Shipped (skeleton) |
 | Docker image (`ghcr.io/sharma-bhaskar/aegis-server`) + Maven Central jars | ✅ Shipped |
@@ -398,8 +425,8 @@ What's implemented today vs. what the design above describes. This is the only p
 | OIDC discovery + JWKS verification + RS256/ES256 verifier | 🔜 Designed (trait in place) |
 | Agent-token issuance HTTP endpoint (`POST /v1/agents/issue`) | 🔜 Designed (`JwtIssuer` in place) |
 | Postgres / Kafka / SIEM webhook audit sinks | 🔜 Designed (sink SPI in place) |
-| Risk scorer (W2) — numeric scores feeding access decisions | 🔜 Designed |
-| Auto-responder (W3) consuming `AgentRecommendation`s | 🔜 Designed |
+| Risk scorer (W2) — numeric scores feeding access decisions | ✅ Shipped (see v0.1.x table above) |
+| Auto-responder (W3) consuming `AgentRecommendation`s | ✅ Shipped (see v0.1.x table above) |
 | LLM advisor (W4) — `aegis advisor scan/explain` | 🔜 Designed (CLI stub in place) |
 | KMIP plane: TTLV codec, schema, operations, TLS server, multi-version | 🔜 Designed (skeleton module) |
 | MCP server with curated KMS tool surface | 🔜 Designed (skeleton module) |

@@ -8,6 +8,41 @@ All notable changes to Aegis will be documented here. This project follows
 
 ### Added
 
+- **CI publishes `ghcr.io/<owner>/aegis-server:main` on every push to `main`.** New
+  `.github/workflows/docker-main.yml` builds and publishes a floating `:main` image (and an
+  immutable `:main-<short-sha>`) so the v0.2.0 wedge demo in the quickstart can be exercised
+  without waiting for a tagged release. The workflow skips on docs-only commits (paths filter)
+  to avoid burning CI minutes for typo fixes. `release.yml` (tagged releases) is untouched —
+  `:0.1.x`, `:0.2.0`, … continue to be published from `v*` tags.
+
+### Changed
+
+- **`deploy/docker/docker-compose.yml` default image bumped `0.1.0` → `0.1.1`.** The compose
+  default now pulls the latest stable tagged release; the embedded comment documents the three
+  alternatives (`:main` for v0.2.0 preview, `:main-<sha>` for immutability, local build via
+  `sbt 'server / Docker / publishLocal'`).
+
+- **Docs + roadmap refresh reflecting the W2 + W3 wedge work on `main`.** `ROADMAP.md` 2.0.a /
+  2.0.b / 2.0.c marked ✅ Shipped. `docs/index.md` feature table now lists the risk scorer,
+  decision adapter, and auto-responder under "shipped (v0.2.0)" with explicit thresholds + default
+  rules. `docs/about/status.md` updated per-capability snapshot (Agent-AI plane → Shipped; risk
+  scorer / decision adapter / auto-responder rows replaced their WIP entries). `docs/about/comparison.md`
+  gained explicit rows for "Risk-scored decisions" and "Auto-response to anomalies" (each marked
+  as a first-class Aegis capability vs. DIY-on-CloudTrail-or-audit-devices elsewhere).
+  `docs/ARCHITECTURE.md` request-lifecycle Mermaid diagram now shows the `RiskScorer`,
+  `DecisionEngine`, `BaselineDetector`, and `AutoResponder` boxes wired through `AuditingKeyService` +
+  `TappedAuditSink`, with explanatory prose covering the additive-risk-overlay-vs-policy-floor
+  semantics and the "below-the-audit-decorator" no-recursion routing. `docs/getting-started/quickstart.md`
+  extended from 14 to 18 steps: Step 14 switches the running stack from `:0.1.1` to `:main` (so the
+  wedge demo actually exercises the new code — fixes the "I ran the quickstart and the auto-revoke
+  didn't fire" report where Steps 15–17 silently produced no risk context against the pre-W2 image);
+  Steps 15–17 are the **wedge demo** itself, tripping a `RateSpike`, showing the operator-grep-able
+  `aegis-system` auto-revoke audit row, and exercising the decision adapter's `PermissionDenied` path.
+  Time estimate updated 10 → 15 min, the introductory "What you'll have when you're done" callout
+  spells out the wedge-demo deliverable so newcomers know what makes Aegis different before they start.
+
+### Added
+
 - **Auto-responder — recommendations become actions (closes #17).** New `AutoResponder` in
   `aegis-agent-ai` is itself a `RecommendationSink`: it decorates the existing in-memory store, so
   every `AgentRecommendation` is persisted first, then matched against a configured `List[AutoResponseRule]`,

@@ -1,9 +1,17 @@
 # Quickstart
 
-**Goal:** in ~10 minutes, get Aegis-KMS running on your machine and exercise the full v0.1.x
+**Goal:** in ~15 minutes, get Aegis-KMS running on your machine and exercise the full v0.1.x
 operation surface — sign / verify, encrypt / decrypt (with AAD), wrap / unwrap a DEK, rotate, and
-compromise — plus the three observability surfaces (Swagger UI, Prometheus, OpenTelemetry). Step
-0 → Step 14, every command runnable, every output shown.
+compromise — plus the three observability surfaces (Swagger UI, Prometheus, OpenTelemetry), plus
+the **v0.2.0 preview**: switch to the `:main` Docker image, trip a rate-spike anomaly, and watch
+the auto-responder revoke the key in real time. Step 0 → Step 18, every command runnable, every
+output shown, every prerequisite spelled out — assume you've never touched this project before.
+
+**What you'll have when you're done:** a local Aegis-KMS instance, a key you created, a signed
+message + verified signature, an encrypted-and-decrypted payload, a wrapped DEK, a rotated key,
+a "compromised" key that refuses further use, a live audit log on stdout, a `/metrics` Prometheus
+endpoint, and a demonstration of Aegis's differentiator — risk-scored decisions and an auto-revoke
+when an actor exceeds their baseline.
 
 For a deeper tour covering CLI usage, JWT auth, and configuring AWS KMS as the Root of Trust, see
 the [full walkthrough](../USAGE.md) (~20 minutes).
@@ -417,7 +425,184 @@ container (`OTEL_TRACES_EXPORTER=otlp`, `OTEL_EXPORTER_OTLP_ENDPOINT=http://coll
 
 ---
 
-## Step 14 — Stop the server
+## Step 14 — Switch to the `:main` image (v0.2.0 preview)
+
+The features the wedge demo exercises — risk scorer, decision adapter, auto-responder — shipped to
+`main` after v0.1.1 and will land in the next tagged release. Until v0.2.0 is cut, you need the
+`:main` floating image (rebuilt by CI on every push to `main`).
+
+```bash
+docker compose -f deploy/docker/docker-compose.yml down
+IMAGE_TAG=main docker compose -f deploy/docker/docker-compose.yml up -d
+docker compose -f deploy/docker/docker-compose.yml logs -f aegis-server
+```
+
+If you'd rather build from source than pull `:main`, that path is:
+
+```bash
+sbt 'server / Docker / publishLocal'
+IMAGE_TAG=0.1.1-SNAPSHOT docker compose -f deploy/docker/docker-compose.yml up -d
+```
+
+(Requires JDK 21 + `sbt` locally. Replace `0.1.1-SNAPSHOT` with whatever `sbt-dynver` reports if
+your `main` is ahead of the last tag.)
+
+Re-export your shell vars from Step 4 if you opened a new terminal:
+
+```bash
+export AEGIS=http://localhost:8080
+export USER_HEADER="X-Aegis-User: alice"
+```
+
+---
+
+## Step 15 — Trigger a rate-spike anomaly
+
+This is what makes Aegis-KMS different from AWS KMS or Vault: every request is **scored** against
+the actor's behavioural baseline, and the auto-responder can **revoke the key in real time** when
+the score crosses a threshold. You'll trip the `RateSpike` detector by signing 100 messages in 60
+seconds, then watch Aegis revoke the key on its own.
+
+First, create a fresh, activated key for the demo:
+
+```bash
+WEDGE_ID=$(curl -s -X POST "$AEGIS/v1/keys" \
+  -H "$USER_HEADER" -H "Content-Type: application/json" \
+  -d '{"spec":{"name":"wedge-demo","algorithm":"RSA","sizeBits":2048,"objectType":"PrivateKey"}}' \
+  | jq -r '.id')
+curl -s -X POST "$AEGIS/v1/keys/$WEDGE_ID/activate" -H "$USER_HEADER" > /dev/null
+echo "WEDGE_ID=$WEDGE_ID — ready to fire"
+```
+
+Now sign 100 messages as fast as `curl` can issue them — this exceeds the default 30-requests-in-60s
+rate-spike threshold by 3×, which is the boundary at which the detector escalates to **High
+severity**:
+
+```bash
+MSG_B64=$(echo -n 'spike' | base64)
+
+for i in $(seq 1 100); do
+  curl -s -o /dev/null -X POST "$AEGIS/v1/keys/$WEDGE_ID/sign" \
+    -H "$USER_HEADER" -H "Content-Type: application/json" \
+    -d "{\"messageBase64\":\"$MSG_B64\",\"algorithm\":\"RsaPssSha256\"}"
+done
+echo "fired 100 sign requests"
+```
+
+Now look at your log-tail terminal. Scroll back through the burst and you'll see two new things
+in the audit rows that weren't there in Step 7:
+
+```
+{"ts":"...","actor":"alice","op":"Sign","keyId":"...","outcome":"Success",
+ "context":{
+   "risk.score":"0.13",
+   "risk.factors":"RateSpike:0.13"
+ }}
+```
+
+`risk.score` is the per-request risk roll-up in `[0.0, 1.0]`. `risk.factors` is the list of
+detectors that fired, each with its contribution. As you sign more messages in the window, the
+score climbs.
+
+---
+
+## Step 16 — Watch the auto-responder revoke the key
+
+Once the rate factor reaches 3× the threshold (≥ 90 requests in 60s), the `BaselineDetector`
+emits a `High` severity `RateSpike` recommendation, and the **AutoResponder** matches its default
+rule (`RateSpike + High → Revoke`) and revokes the key. Grep your log for the system-actor audit
+row:
+
+```bash
+docker compose -f deploy/docker/docker-compose.yml logs aegis-server \
+  | grep '"principal":{"subject":"aegis-system"'
+```
+
+Expected output:
+
+```
+{"ts":"...","principal":{"subject":"aegis-system","kind":"Service"},
+ "operation":"Revoke","resource":"key:8a3f1e25-...",
+ "outcome":"AnomalyAlert(detector=RateSpike, severity=High, rec=<uuid>, action=Revoke) Success revoked key=8a3f1e25-...",
+ "context":{
+   "auto.response.rule":"RateSpike:High:Revoke",
+   "auto.response.actor":"alice",
+   "auto.response.recId":"<uuid>",
+   "auto.response.detectorMsg":"100 requests in 60s (threshold=30)"
+ }}
+```
+
+A few things to notice in this row:
+
+- `principal.subject = "aegis-system"` — Aegis revoked the key under its own identity, not under
+  yours. This is greppable for operators reviewing what the responder did.
+- `operation = "Revoke"` — the actual KMIP operation that was performed.
+- `outcome` starts with `AnomalyAlert(...)` — a structured marker SIEM systems can route on.
+- `context.auto.response.actor = "alice"` — the offending actor whose behaviour tripped the rule.
+- The whole row is in the same audit stream as your manual `Sign` calls, so a SIEM ingesting
+  Aegis's audit log sees the alert and the response in the same timeline.
+
+Try to sign once more with the now-revoked key:
+
+```bash
+curl -s -X POST "$AEGIS/v1/keys/$WEDGE_ID/sign" \
+  -H "$USER_HEADER" -H "Content-Type: application/json" \
+  -d "{\"messageBase64\":\"$MSG_B64\",\"algorithm\":\"RsaPssSha256\"}" | jq
+```
+
+Expected output:
+
+```json
+{ "error": "IllegalOperation", "message": "Key 8a3f1e25-... is Deactivated" }
+```
+
+That's the full wedge demo: behavioural baseline → risk score → decision → audit → auto-action,
+all in one local docker-compose stack, no external dependencies, no AI required.
+
+---
+
+## Step 17 — See the risk-decision behaviour directly
+
+You don't have to wait for a rate-spike to see the decision adapter at work. The decision
+adapter has two thresholds: requests scoring `≥ 0.60` get `StepUp` (HTTP 401) and requests
+scoring `≥ 0.85` get `Deny` (HTTP 403, error code `PermissionDenied` with a `"risk: …"` prefix
+in the message).
+
+Watch the Prometheus error counter increment for the auto-responder-driven denials:
+
+```bash
+curl -s http://localhost:8080/metrics | grep '^aegis_keys_op_errors_total'
+```
+
+Expected output (after running the wedge demo above):
+
+```
+aegis_keys_op_errors_total{operation="Sign",code="IllegalOperation"} 1.0
+aegis_keys_op_errors_total{operation="Sign",code="PermissionDenied"} 0.0
+```
+
+The `PermissionDenied` counter will be non-zero on this label once you exercise a request that
+the **decision adapter** (not the post-revoke `IllegalOperation`) blocks. Try a fresh actor on
+many fresh keys to score high without burst:
+
+```bash
+# Burst a different actor against many keys — trips ScopeBaseline + RateSpike together
+for i in $(seq 1 50); do
+  KID=$(curl -s -X POST "$AEGIS/v1/keys" \
+    -H "X-Aegis-User: stranger-$i" -H "Content-Type: application/json" \
+    -d "{\"spec\":{\"name\":\"k$i\",\"algorithm\":\"AES\",\"sizeBits\":256,\"objectType\":\"SymmetricKey\"}}" \
+    | jq -r '.id')
+  curl -s -X POST "$AEGIS/v1/keys/$KID/activate" -H "X-Aegis-User: stranger-$i" > /dev/null
+done
+curl -s http://localhost:8080/metrics | grep '^aegis_keys_op_errors_total'
+```
+
+The full Prometheus / OTel / metrics tour is in
+[Operations → Observability](../operations/observability.md).
+
+---
+
+## Step 18 — Stop the server
 
 ```bash
 docker compose -f deploy/docker/docker-compose.yml down
@@ -433,7 +618,7 @@ docker compose -f deploy/docker/docker-compose.yml down -v
 
 ## What you just did
 
-In ~10 minutes you:
+In ~15 minutes you:
 
 - Booted Aegis-KMS with a Postgres event journal
 - Created a key (in safe `PreActive` state by default)
@@ -444,10 +629,14 @@ In ~10 minutes you:
 - Rotated the key and confirmed the prior signature still validates
 - Marked the key as `Compromised` and saw every subsequent crypto op refuse
 - Opened the Swagger UI, scraped `/metrics`, watched audit rows on stdout in real time
+- **Tripped the `RateSpike` anomaly detector and watched Aegis auto-revoke the offending key —
+  the wedge demo that distinguishes Aegis from every role-centric KMS**
 
-Every operation was attributed to `alice` (the principal you passed via `X-Aegis-User`),
-recorded in the audit journal, exposed as a Prometheus metric on `/metrics`, and traced as
-an OpenTelemetry span (when an OTel exporter is wired in).
+Every operation was attributed to a principal (`alice`, `stranger-N`, or the system actor
+`aegis-system`), scored against a behavioural baseline, gated by the risk decision adapter,
+recorded in the audit journal with `risk.score` + `outcome.decision` context, exposed as a
+Prometheus metric on `/metrics`, and traced as an OpenTelemetry span (when an OTel exporter is
+wired in).
 
 ## Where to next
 

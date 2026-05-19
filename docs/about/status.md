@@ -6,8 +6,10 @@ trust at this stage.
 
 ## Release status
 
-**v0.1.1 — pre-alpha.** First public, taggable release. Production-stable backends, KMIP, MCP,
-and the auto-response loop are designed and roadmapped, not shipped.
+**v0.1.1 — pre-alpha (last tagged release). v0.2.0 in progress on `main`.** The W2 risk scorer,
+W2.b decision adapter, and W3 auto-responder all landed since v0.1.1 and are tested on `main`;
+they ship with the next tag. Production-stable backends, KMIP, and MCP remain designed and
+roadmapped, not shipped.
 
 | Status | What it means |
 |---|---|
@@ -48,7 +50,7 @@ and the auto-response loop are designed and roadmapped, not shipped.
 | Append-only audit log | :material-check: Shipped | `AuditingKeyService` decorator |
 | Audit fan-out to stdout | :material-check: Shipped | Default sink |
 | Audit fan-out: Kafka / S3 / Webhook / Postgres | :material-blueprint: Designed | SPI in place, adapters in v0.2.0 |
-| Agent-aware audit fields populated end-to-end | :material-progress-clock: MVP | Algebra carries them; HTTP layer doesn't yet populate `source.ip` |
+| Agent-aware audit fields (`risk.score`, `risk.factors`, `outcome.decision`) | :material-check: Shipped | Stamped on every record by `AuditingKeyService`. `source.ip` plumbing through the HTTP layer is still pending. |
 | Prometheus `/metrics` | :material-check: Shipped | Per-op counters, latency histograms, errors-by-code |
 | OpenTelemetry tracing (auto-configured SDK) | :material-check: Shipped | `kms.<op>` spans with attributes |
 | OpenAPI 3.1 spec + Swagger UI | :material-check: Shipped | At `/docs/` |
@@ -59,8 +61,9 @@ and the auto-response loop are designed and roadmapped, not shipped.
 |---|---|---|
 | `BaselineDetector` — 5 detectors | :material-check: Shipped | Scope, rate-spike, op-histogram, time-of-day, source-IP |
 | `AgentRecommendation` events | :material-check: Shipped | Emitted on detection |
-| Risk scorer | :material-progress-clock: WIP | v0.2.0 (PR W2) |
-| Auto-responder (allow/deny/revoke/rotate) | :material-progress-clock: WIP | v0.2.0 (PR W3) |
+| Risk scorer (`RiskScorer` SPI + `BaselineRiskScorer`) | :material-check: Shipped | 5 baseline factors + 4 contextual factors → `RiskScore(value, factors)` |
+| Decision adapter (`Allow` / `StepUp` / `Deny`) | :material-check: Shipped | `ThresholdDecisionEngine`, denyAt=0.85, stepUpAt=0.60, destructive-op offset 0.15 |
+| Auto-responder (revoke / deactivate / freeze / alert) | :material-check: Shipped | Default rules: 5 detectors × High → Revoke + Medium → Alert. Per-(actor, action) 60 s cooldown. |
 | LLM advisor | :material-blueprint: Designed | v0.4.0 (PR W4) |
 
 ### Persistence
@@ -88,7 +91,7 @@ and the auto-response loop are designed and roadmapped, not shipped.
 | REST `/v1/keys/*` | :material-check: Shipped | Full surface, OpenAPI documented |
 | KMIP server (TCP + TLS) | :material-blueprint: Designed | Skeleton in `aegis-kmip`; v0.2.0 lands the wire |
 | MCP server (LLM tool surface) | :material-blueprint: Designed | Skeleton in `aegis-mcp-server`; v0.2.0 |
-| Agent-AI plane | :material-progress-clock: MVP | Detector ships; auto-response in v0.2.0 |
+| Agent-AI plane | :material-check: Shipped | Detector + risk scorer + decision adapter + auto-responder all wired in `Server.boot` |
 
 ### Distribution & deployment
 

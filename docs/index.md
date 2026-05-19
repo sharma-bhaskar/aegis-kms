@@ -52,12 +52,13 @@ GCP / Azure / Vault adapters in v0.2.0) and adds the four things role-centric KM
     Every decision, score, and detection lands in an immutable journal with full agent +
     parent attribution and full request context.
 
--   :material-flash:{ .lg .middle } **Real-time response** *(v0.2.0)*
+-   :material-flash:{ .lg .middle } **Real-time response**
 
     ---
 
-    Configurable wiring from detection to action: allow / step-up / deny / rotate / revoke /
-    alert, applied before the next request lands.
+    Risk scorer (`risk.score` + `risk.factors` on every audit row), decision adapter
+    (`Allow` / `StepUp` / `Deny`), and auto-responder (default High → `Revoke`) — all wired
+    end-to-end on `main`. Try it in the [wedge demo](getting-started/quickstart.md#step-15--trigger-a-rate-spike-anomaly).
 
 </div>
 
@@ -98,7 +99,10 @@ docker compose -f deploy/docker/docker-compose.yml up
 Server is now at `http://localhost:8080`. Swagger UI lives at `http://localhost:8080/docs/`.
 Full walkthrough → [Getting Started → Quickstart](getting-started/quickstart.md).
 
-## What ships in v0.1.1
+## What ships today
+
+This table reflects what's on `main` right now. v0.1.1 is the last released artifact; the rows
+marked "v0.2.0 in progress" are committed and tested on `main` and will land in the next tag.
 
 | Surface | Status |
 |---|---|
@@ -112,11 +116,14 @@ Full walkthrough → [Getting Started → Quickstart](getting-started/quickstart
 | OpenTelemetry tracing (auto-configured SDK) | :material-check: Shipped |
 | OpenAPI 3.1 spec + Swagger UI on `/docs/` | :material-check: Shipped |
 | `Resource[IO, Unit]` boot scope for graceful shutdown | :material-check: Shipped |
+| Risk scorer (`RiskScorer` SPI; baseline + contextual factors stamped on every audit row) | :material-check: Shipped (v0.2.0) |
+| Decision adapter (`Allow` / `StepUp` / `Deny`; HTTP 401 / 403 with reason) | :material-check: Shipped (v0.2.0) |
+| Auto-responder (default High → Revoke, Medium → Alert; configurable rules + 60 s cooldown) | :material-check: Shipped (v0.2.0) |
 | KMIP wire plane | :material-progress-clock: v0.2.0 |
 | MCP-native server | :material-progress-clock: v0.2.0 |
-| Agent-aware audit fields populated end-to-end | :material-progress-clock: v0.2.0 |
+| Agent-token issuance endpoint (`POST /v1/agents/issue`) + OIDC verifier | :material-progress-clock: v0.2.0 |
+| Source IP populated on audit records by the HTTP layer | :material-progress-clock: v0.2.0 |
 | GCP / Azure / Vault `RootOfTrust` adapters | :material-progress-clock: v0.2.0 |
-| Auto-response loop (revoke / step-up / rotate / alert) | :material-progress-clock: v0.2.0 |
 | SIEM / Kafka / Postgres audit fan-out | :material-progress-clock: v0.3.0 |
 | Helm chart, auto-rotation scheduler | :material-progress-clock: v0.3.0 |
 
