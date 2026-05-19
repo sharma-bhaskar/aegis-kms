@@ -4,10 +4,6 @@ import cats.effect.unsafe.IORuntime
 import dev.aegiskms.audit.InMemoryAuditSink
 import dev.aegiskms.core.{KeyService, Operation, Principal}
 import dev.aegiskms.iam.{AgentTokenIssuer, JwtClaims, JwtIssuer, JwtVerifier, PrincipalResolver}
-
-import java.time.Instant
-import java.time.temporal.ChronoUnit
-import java.util.UUID
 import io.circe.parser.parse
 import org.apache.pekko.http.scaladsl.model.*
 import org.apache.pekko.http.scaladsl.model.headers.RawHeader
@@ -15,6 +11,10 @@ import org.apache.pekko.http.scaladsl.server.Route
 import org.apache.pekko.http.scaladsl.testkit.ScalatestRouteTest
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatest.matchers.should.Matchers
+
+import java.time.Instant
+import java.time.temporal.ChronoUnit
+import java.util.UUID
 
 /** End-to-end HTTP tests for `POST /v1/agents/issue` (#18). Exercises the full path:
   *   - Dev-mode `X-Aegis-User` resolution → Human principal

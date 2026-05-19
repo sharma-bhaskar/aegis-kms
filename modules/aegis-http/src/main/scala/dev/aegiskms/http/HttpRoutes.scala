@@ -6,8 +6,6 @@ import dev.aegiskms.audit.{AuditRecord, AuditSink}
 import dev.aegiskms.core.*
 import dev.aegiskms.http.JsonCodecs.*
 import dev.aegiskms.iam.{AgentTokenIssuer, IssueAgentRequest as IamIssueAgentRequest, PrincipalResolver}
-
-import java.util.UUID
 import org.apache.pekko.http.scaladsl.server.Route
 import sttp.apispec.openapi.circe.yaml.*
 import sttp.model.StatusCode
@@ -16,6 +14,7 @@ import sttp.tapir.server.ServerEndpoint
 import sttp.tapir.server.pekkohttp.PekkoHttpServerInterpreter
 import sttp.tapir.swagger.bundle.SwaggerInterpreter
 
+import java.util.UUID
 import scala.concurrent.{ExecutionContext, Future}
 
 /** REST routes built on Tapir + pekko-http, backed by a `KeyService[IO]` from `aegis-core`.
