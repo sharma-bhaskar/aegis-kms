@@ -24,6 +24,16 @@ All notable changes to Aegis will be documented here. This project follows
   auth modes: `hmac` reuses `aegis.auth.hmac.secret`; `dev` mints a per-boot ephemeral 48-byte
   secret (logged with a warning so operators don't confuse dev tokens with production).
 
+- **`POST /v1/agents/issue` is audited.** Every call to the agent-issue endpoint — success
+  AND failure — now produces an `AuditRecord` written to the configured sink (operation =
+  `Create`, resource = `agent:<id>`, outcome carrying the agentId/jti/ttl/scopes). The JWT
+  itself is NEVER recorded in the audit row (it's a bearer credential; recording it in
+  plaintext would defeat its purpose). Test coverage asserts the JWT is absent from both
+  outcome and context. `HttpRoutes` gained an optional `auditSink: Option[AuditSink[IO]]`
+  constructor arg (no-op when not wired — the keys surface stays covered by
+  `AuditingKeyService`); `Server.boot` wires the same `stdoutSink` already used for the
+  keys-surface audit.
+
 - **`jti` (RFC 7519 token ID) on all Aegis-issued JWTs.** `JwtClaims.Human` and `JwtClaims.Agent`
   gained a required `jti: String` field; `JwtIssuer` sets the `jti` claim via `builder.id(...)`;
   `JwtVerifier` extracts it on parse (tolerating absent `jti` as empty string for

@@ -2,9 +2,12 @@ package dev.aegiskms.http
 
 import cats.effect.IO
 import cats.effect.unsafe.IORuntime
+import dev.aegiskms.audit.{AuditRecord, AuditSink}
 import dev.aegiskms.core.*
 import dev.aegiskms.http.JsonCodecs.*
 import dev.aegiskms.iam.{AgentTokenIssuer, IssueAgentRequest as IamIssueAgentRequest, PrincipalResolver}
+
+import java.util.UUID
 import org.apache.pekko.http.scaladsl.server.Route
 import sttp.apispec.openapi.circe.yaml.*
 import sttp.model.StatusCode
@@ -31,7 +34,13 @@ import scala.concurrent.{ExecutionContext, Future}
 final class HttpRoutes(
     svc: KeyService[IO],
     resolver: PrincipalResolver = PrincipalResolver.dev,
-    agentIssuer: Option[AgentTokenIssuer] = None
+    agentIssuer: Option[AgentTokenIssuer] = None,
+    /** Optional audit sink for non-`KeyService` endpoints. The keys surface is already audited by the
+      * `AuditingKeyService` decorator wrapped around `svc`; `/v1/agents/issue` (and any future non-keys
+      * endpoints) needs an explicit hookup because it bypasses that decorator. When `None`, agent issuances
+      * are not recorded — operators who care about forensics MUST wire this in production.
+      */
+    auditSink: Option[AuditSink[IO]] = None
 )(using runtime: IORuntime):
 
   private given ExecutionContext = runtime.compute
@@ -306,22 +315,73 @@ final class HttpRoutes(
                   body.ttlSeconds,
                   scala.concurrent.duration.SECONDS
                 ),
-                parent = body.parent,
-                callerSubject = Some(principal.subject)
+                parent = body.parent
               )
-              runIO(issuer.issue(principal, domainReq)).map {
-                case Left(err) => Left(errorOut(err))
-                case Right(token) =>
-                  Right(
-                    IssueAgentResponseDto(
-                      agentId = token.agentId,
-                      jwt = token.jwt,
-                      jti = token.jti,
-                      expiresAt = token.expiresAt
-                    )
+              val issueAndAudit: IO[Either[KmsError, IssueAgentResponseDto]] =
+                for
+                  result <- issuer.issue(principal, domainReq)
+                  _      <- writeAgentIssueAudit(principal, body, result)
+                yield result.map(token =>
+                  IssueAgentResponseDto(
+                    agentId = token.agentId,
+                    jwt = token.jwt,
+                    jti = token.jti,
+                    expiresAt = token.expiresAt
                   )
-              }
+                )
+              runIO(issueAndAudit).map(_.left.map(errorOut))
     }
+
+  /** Write one `AuditRecord` per `/v1/agents/issue` call — success OR failure — so operators have a forensic
+    * trail of every agent credential ever minted. The audit row captures the caller (the human who issued),
+    * the requested scopes + ttl + label (so reviewers can answer "what does this agent have access to"), and
+    * on success the `agentId` + `jti` (so a later auto-revoke or audit search can join back to the issuance).
+    * Bodies that *almost* contained a token never had one minted; their audit rows say "Failed code=...".
+    *
+    * The JWT itself is NEVER written — it's a bearer credential and recording it in plaintext defeats the
+    * purpose of having one.
+    *
+    * No-op when no sink is configured; the keys surface is already covered by `AuditingKeyService` so this
+    * method is only on the path for agent-issuance.
+    */
+  private def writeAgentIssueAudit(
+      caller: Principal,
+      body: IssueAgentRequestDto,
+      result: Either[KmsError, dev.aegiskms.iam.AgentToken]
+  ): IO[Unit] =
+    auditSink match
+      case None => IO.unit
+      case Some(sink) =>
+        for
+          now <- IO.realTimeInstant
+          corrId = UUID.randomUUID().toString
+          outcome = result match
+            case Right(token) =>
+              s"Success agentId=${token.agentId} jti=${token.jti} ttlSeconds=${body.ttlSeconds} scopes=${body.scopes.mkString(",")}"
+            case Left(err) =>
+              s"Failed code=${err.code} ttlSeconds=${body.ttlSeconds} scopes=${body.scopes.mkString(",")}"
+          record = AuditRecord(
+            at = now,
+            principal = caller,
+            // `Create` is the closest KMIP-aligned operation for "mint a new thing"; the audit
+            // row carries the agent-specific context in `outcome` + `context` so it's still
+            // distinguishable from a key Create.
+            operation = Operation.Create,
+            resource = result.toOption
+              .map(t => s"agent:${t.agentId}")
+              .getOrElse(s"agent:label=${body.label}"),
+            outcome = outcome,
+            correlationId = corrId,
+            context = Map(
+              "agent.issue.label"      -> body.label,
+              "agent.issue.scopes"     -> body.scopes.mkString(","),
+              "agent.issue.ttlSeconds" -> body.ttlSeconds.toString
+            ) ++ result.toOption
+              .map(t => Map("agent.id" -> t.agentId, "agent.jti" -> t.jti))
+              .getOrElse(Map.empty)
+          )
+          _ <- sink.write(record)
+        yield ()
 
   private def decodeSignRequest(
       req: SignRequest

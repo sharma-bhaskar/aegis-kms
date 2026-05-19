@@ -94,3 +94,28 @@ final class JwtRoundTripSpec extends AnyFunSuite:
     val ex = intercept[IllegalArgumentException](JwtVerifier.hmac("too-short"))
     assert(ex.getMessage.contains("≥32 bytes"))
   }
+
+  test("externally-minted token without a jti claim verifies; jti surfaces as empty string") {
+    // Mint a JWT directly via jjwt without calling builder.id(...) — simulates a token from an
+    // external IDP that doesn't set the JWT ID claim. The verifier docstring promises tolerance;
+    // this test pins that contract so the #24 JTI-blacklist consumer can rely on jti="" meaning
+    // "no blacklist match" rather than refusing every external token outright.
+    import io.jsonwebtoken.Jwts
+    import io.jsonwebtoken.security.Keys
+    import java.nio.charset.StandardCharsets
+    import java.util.Date
+
+    val key = Keys.hmacShaKeyFor(secret.getBytes(StandardCharsets.UTF_8))
+    val tokenWithoutJti = Jwts
+      .builder()
+      .subject("external-alice")
+      .issuedAt(Date.from(now))
+      .expiration(Date.from(now.plus(1, ChronoUnit.HOURS)))
+      .claim(JwtClaims.Claim.Kind, JwtClaims.Claim.KindHuman)
+      .signWith(key)
+      .compact()
+
+    val back = verifier.verify(tokenWithoutJti).toOption.get.asInstanceOf[JwtClaims.Human]
+    assert(back.subject == "external-alice")
+    assert(back.jti == "")
+  }

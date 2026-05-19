@@ -161,7 +161,11 @@ object Server extends IOApp.Simple:
       //    in-flight requests finish before the socket closes.
       appRoute =
         concat(
-          HttpRoutes(auditing, resolver, Some(agentIssuer)).routes,
+          // `auditSink = Some(stdoutSink)` so `/v1/agents/issue` records a forensic trail of every
+          // agent credential minted (the keys surface is already covered by `AuditingKeyService`
+          // wrapping `traced`, but agent issuance is not on the `KeyService` algebra and would
+          // otherwise be invisible to operators).
+          HttpRoutes(auditing, resolver, Some(agentIssuer), Some(stdoutSink)).routes,
           MetricsRoutes.route(metricsRegistry)
         )
       _ <- httpBindingResource(host, port, appRoute)

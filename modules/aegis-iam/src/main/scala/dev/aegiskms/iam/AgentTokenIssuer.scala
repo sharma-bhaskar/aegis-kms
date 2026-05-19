@@ -38,29 +38,52 @@ final class AgentTokenIssuer(
       caller: Principal,
       request: IssueAgentRequest
   ): IO[Either[KmsError, AgentToken]] =
-    authorize(caller) match
+    val checks =
+      for
+        human <- authorize(caller)
+        _     <- checkParentMatchesCaller(request, human)
+        req   <- validate(request)
+      yield (human, req)
+
+    checks match
       case Left(err) => IO.pure(Left(err))
-      case Right(human) =>
-        validate(request) match
-          case Left(err) => IO.pure(Left(err))
-          case Right(req) =>
-            now.map { issuedAt =>
-              val expiresAt = issuedAt.plus(Duration.ofSeconds(req.ttl.toSeconds))
-              val agentId   = s"agent-${UUID.randomUUID()}"
-              val jti       = UUID.randomUUID().toString
-              val claims = JwtClaims.Agent(
-                subject = agentId,
-                issuer = issuerName,
-                issuedAt = issuedAt,
-                expiresAt = expiresAt,
-                parentSubject = human.subject,
-                purpose = req.label,
-                allowedOps = req.scopes.map(_.toString),
-                jti = jti
-              )
-              val jwt = issuer.issue(claims)
-              Right(AgentToken(agentId, jwt, jti, expiresAt))
-            }
+      case Right((human, req)) =>
+        now.map { issuedAt =>
+          val expiresAt = issuedAt.plus(Duration.ofSeconds(req.ttl.toSeconds))
+          val agentId   = s"agent-${UUID.randomUUID()}"
+          val jti       = UUID.randomUUID().toString
+          val claims = JwtClaims.Agent(
+            subject = agentId,
+            issuer = issuerName,
+            issuedAt = issuedAt,
+            expiresAt = expiresAt,
+            parentSubject = human.subject,
+            purpose = req.label,
+            allowedOps = req.scopes.map(_.toString),
+            jti = jti
+          )
+          val jwt = issuer.issue(claims)
+          Right(AgentToken(agentId, jwt, jti, expiresAt))
+        }
+
+  /** When the request body sets `parent`, it MUST equal the authenticated caller's subject. Cross-principal
+    * issuance (alice issuing an agent on behalf of bob) is rejected in v0.2.0 — a delegation model is
+    * roadmapped but not designed. Lives outside `validate()` so the caller's subject doesn't need to be
+    * threaded through the request type as a "look internally I'm a public field but please don't use me"
+    * footgun.
+    */
+  private def checkParentMatchesCaller(
+      req: IssueAgentRequest,
+      caller: Principal.Human
+  ): Either[KmsError, Unit] =
+    req.parent match
+      case None                           => Right(())
+      case Some(p) if p == caller.subject => Right(())
+      case Some(_) =>
+        Left(KmsError(
+          ErrorCode.InvalidField,
+          "parent in the request body must match the authenticated caller (cross-principal issuance is not supported)"
+        ))
 
   private def authorize(caller: Principal): Either[KmsError, Principal.Human] =
     caller match
@@ -71,10 +94,21 @@ final class AgentTokenIssuer(
         Left(KmsError(ErrorCode.PermissionDenied, "agents cannot issue agents"))
 
   private def validate(req: IssueAgentRequest): Either[KmsError, ValidatedRequest] =
-    if req.label.trim.isEmpty then
+    val trimmedLabel = req.label.trim
+    if trimmedLabel.isEmpty then
       Left(KmsError(ErrorCode.InvalidField, "label must be non-empty"))
+    else if trimmedLabel.length > MaxLabelLength then
+      Left(KmsError(
+        ErrorCode.InvalidField,
+        s"label length ${trimmedLabel.length} exceeds maximum $MaxLabelLength characters"
+      ))
     else if req.scopes.isEmpty then
       Left(KmsError(ErrorCode.InvalidField, "scopes must include at least one operation"))
+    else if req.scopes.size > MaxScopesSize then
+      Left(KmsError(
+        ErrorCode.InvalidField,
+        s"scopes size ${req.scopes.size} exceeds maximum $MaxScopesSize entries"
+      ))
     else if req.ttl <= 0.nanos then
       Left(KmsError(ErrorCode.InvalidField, "ttl must be positive"))
     else if req.ttl > maxTtl then
@@ -82,16 +116,11 @@ final class AgentTokenIssuer(
         ErrorCode.InvalidField,
         s"ttl ${req.ttl.toSeconds}s exceeds maximum ${maxTtl.toSeconds}s"
       ))
-    else if req.parent.exists(_ != callerSubjectExpected(req)) && req.parent.nonEmpty then
-      // Caller specified a parent subject in the body; v0.2.0 requires it to match the caller.
-      // Cross-principal issuance (one human issues for another) lands when delegation is designed.
-      Left(KmsError(
-        ErrorCode.InvalidField,
-        "parent in the request body must match the authenticated caller (cross-principal issuance is not supported)"
-      ))
     else
       // Parse scopes into Operation values. Reject the request if any name doesn't resolve — better
       // to fail loudly than silently mint a token with a typo'd op the verifier would later reject.
+      // Names are case-sensitive (Operation enum cases are PascalCase) — this is intentional; a
+      // case-insensitive lookup would mask client bugs where "sign" silently gets remapped to "Sign".
       val parsedOps = req.scopes.foldLeft[Either[KmsError, List[Operation]]](Right(Nil)) {
         case (acc @ Left(_), _) => acc
         case (Right(ops), name) =>
@@ -100,14 +129,7 @@ final class AgentTokenIssuer(
             .toRight(KmsError(ErrorCode.InvalidField, s"unknown operation in scopes: '$name'"))
             .map(op => ops :+ op)
       }
-      parsedOps.map(ops => ValidatedRequest(req.label.trim, ops.toSet, req.ttl))
-
-  /** Caller-subject check helper. Used inside `validate` so the body-parent / caller-parent invariant stays a
-    * single readable expression. Returns the *expected* subject string — the actual value is compared against
-    * `req.parent`.
-    */
-  private def callerSubjectExpected(req: IssueAgentRequest): String =
-    req.callerSubject.getOrElse("")
+      parsedOps.map(ops => ValidatedRequest(trimmedLabel, ops.toSet, req.ttl))
 
 object AgentTokenIssuer:
 
@@ -116,6 +138,17 @@ object AgentTokenIssuer:
     * well beyond the operator's incident response window.
     */
   val DefaultMaxTtl: FiniteDuration = FiniteDuration(24L, HOURS)
+
+  /** Length cap on the `label` (after trimming). 256 chars is generous for a human-readable purpose
+    * ("claude-invoice-batch-q2") while preventing operators from accidentally minting tokens that embed a 10
+    * MB string into the JWT body.
+    */
+  val MaxLabelLength: Int = 256
+
+  /** Size cap on the `scopes` list. The `Operation` enum has ~17 values; anything larger is either a
+    * malformed client or an attempt to enumerate. 32 is roomy with margin for future ops.
+    */
+  val MaxScopesSize: Int = 32
 
   /** Validated, parsed view of the request after `validate()` passes. */
   final private case class ValidatedRequest(
@@ -128,21 +161,15 @@ object AgentTokenIssuer:
   * `aegis agent issue`, the SDK, future MCP / KMIP plumbing) can call the issuer directly. The HTTP layer
   * maps its wire body into this.
   *
-  * `parent` is optional and, when set, must equal the authenticated caller's subject — the field exists so
-  * callers can be explicit about who they're issuing on behalf of, but cross-principal issuance (alice
-  * issuing an agent on behalf of bob) is rejected in v0.2.0 (a delegation model is roadmapped for a later
-  * release).
-  *
-  * `callerSubject` is internal-only — the issuer reads it inside `validate` to compare against `parent`. The
-  * HTTP layer fills it from the resolved principal before calling `issue()`. Field is package-private only by
-  * convention; refactor to a sealed factory later if needed.
+  * `parent` is optional and, when set, must equal the authenticated caller's subject (enforced by
+  * `AgentTokenIssuer.issue`, not by the request type). The field exists so callers can be explicit about who
+  * they're issuing on behalf of; cross-principal issuance is rejected in v0.2.0.
   */
 final case class IssueAgentRequest(
     label: String,
     scopes: List[String],
     ttl: FiniteDuration,
-    parent: Option[String] = None,
-    callerSubject: Option[String] = None
+    parent: Option[String] = None
 )
 
 /** Output of `AgentTokenIssuer.issue` — exactly the shape returned over the wire by `POST /v1/agents/issue`,

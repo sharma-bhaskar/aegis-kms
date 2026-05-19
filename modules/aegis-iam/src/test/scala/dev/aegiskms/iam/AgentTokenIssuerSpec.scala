@@ -131,23 +131,98 @@ final class AgentTokenIssuerSpec extends AnyFunSuite with Matchers:
   }
 
   test("parent in the body matching the caller is accepted") {
-    val req = IssueAgentRequest(
-      "x",
-      List("Get"),
-      1.hour,
-      parent = Some("alice@org"),
-      callerSubject = Some("alice@org")
-    )
+    val req = IssueAgentRequest("x", List("Get"), 1.hour, parent = Some("alice@org"))
     val res = issuer().issue(alice, req).unsafeRunSync()
     res.isRight shouldBe true
   }
 
   test("parent in the body not matching the caller is rejected") {
-    val req =
-      IssueAgentRequest("x", List("Get"), 1.hour, parent = Some("bob@org"), callerSubject = Some("alice@org"))
+    val req = IssueAgentRequest("x", List("Get"), 1.hour, parent = Some("bob@org"))
     val res = issuer().issue(alice, req).unsafeRunSync()
     res.left.toOption.map(_.code) shouldBe Some(ErrorCode.InvalidField)
     res.left.toOption.get.message should include("cross-principal")
+  }
+
+  test("parent absent in the body defaults to the caller subject in the issued claims") {
+    val req = IssueAgentRequest("x", List("Get"), 1.hour, parent = None)
+    val res = issuer().issue(alice, req).unsafeRunSync()
+    res.isRight shouldBe true
+    val claims = verifier.verify(res.toOption.get.jwt).toOption.get.asInstanceOf[JwtClaims.Agent]
+    claims.parentSubject shouldBe "alice@org"
+  }
+
+  // ── Validation: TTL edge cases ────────────────────────────────────────────
+
+  test("negative TTL is rejected with InvalidField") {
+    val res = issuer().issue(alice, IssueAgentRequest("x", List("Get"), -5.seconds)).unsafeRunSync()
+    res.left.toOption.map(_.code) shouldBe Some(ErrorCode.InvalidField)
+    res.left.toOption.get.message should include("ttl")
+  }
+
+  // ── Validation: length caps ───────────────────────────────────────────────
+
+  test("label exceeding MaxLabelLength is rejected with InvalidField") {
+    val longLabel = "a" * (AgentTokenIssuer.MaxLabelLength + 1)
+    val res       = issuer().issue(alice, IssueAgentRequest(longLabel, List("Get"), 1.hour)).unsafeRunSync()
+    res.left.toOption.map(_.code) shouldBe Some(ErrorCode.InvalidField)
+    res.left.toOption.get.message should include("label length")
+  }
+
+  test("label exactly at MaxLabelLength is accepted (boundary check)") {
+    val boundary = "a" * AgentTokenIssuer.MaxLabelLength
+    val res      = issuer().issue(alice, IssueAgentRequest(boundary, List("Get"), 1.hour)).unsafeRunSync()
+    res.isRight shouldBe true
+  }
+
+  test("scopes exceeding MaxScopesSize is rejected with InvalidField") {
+    val tooMany = List.fill(AgentTokenIssuer.MaxScopesSize + 1)("Get")
+    val res     = issuer().issue(alice, IssueAgentRequest("x", tooMany, 1.hour)).unsafeRunSync()
+    res.left.toOption.map(_.code) shouldBe Some(ErrorCode.InvalidField)
+    res.left.toOption.get.message should include("scopes size")
+  }
+
+  test("scopes count exactly at MaxScopesSize is accepted (boundary check)") {
+    // All "Get" — dedupe collapses to Set("Get"), but the SIZE check runs against the input list,
+    // not the deduped set, so this exercises the boundary in validate() before dedup happens.
+    val atCap = List.fill(AgentTokenIssuer.MaxScopesSize)("Get")
+    val res   = issuer().issue(alice, IssueAgentRequest("x", atCap, 1.hour)).unsafeRunSync()
+    res.isRight shouldBe true
+  }
+
+  test("TTL exactly equal to maxTtl is accepted (boundary check)") {
+    val res = issuer(maxTtl = 1.hour)
+      .issue(alice, IssueAgentRequest("x", List("Get"), 1.hour))
+      .unsafeRunSync()
+    res.isRight shouldBe true
+  }
+
+  test("empty-string scope name is rejected — covers the [\"Sign\", \"\"] typo path") {
+    val res = issuer().issue(alice, IssueAgentRequest("x", List("Sign", ""), 1.hour)).unsafeRunSync()
+    res.left.toOption.map(_.code) shouldBe Some(ErrorCode.InvalidField)
+    res.left.toOption.get.message should include("unknown operation")
+  }
+
+  test("issuerName=None produces a token with no `iss` claim") {
+    val issuerNoName = new AgentTokenIssuer(signer, issuerName = None, now = IO.pure(fixedNow))
+    val token =
+      issuerNoName.issue(alice, IssueAgentRequest("x", List("Get"), 1.hour)).unsafeRunSync().toOption.get
+    val claims = verifier.verify(token.jwt).toOption.get
+    claims.issuer shouldBe None
+  }
+
+  // ── Validation: case sensitivity + dedup ──────────────────────────────────
+
+  test("scope names are case-sensitive — 'sign' (lowercase) is rejected") {
+    val res = issuer().issue(alice, IssueAgentRequest("x", List("sign"), 1.hour)).unsafeRunSync()
+    res.left.toOption.map(_.code) shouldBe Some(ErrorCode.InvalidField)
+    res.left.toOption.get.message should include("'sign'")
+  }
+
+  test("duplicate scope names dedupe into a Set in the issued claims") {
+    val req    = IssueAgentRequest("x", List("Sign", "Sign", "Get"), 1.hour)
+    val res    = issuer().issue(alice, req).unsafeRunSync()
+    val claims = verifier.verify(res.toOption.get.jwt).toOption.get.asInstanceOf[JwtClaims.Agent]
+    claims.allowedOps shouldBe Set("Sign", "Get")
   }
 
   test("agentId is fresh on every issuance (UUID, not constant)") {
