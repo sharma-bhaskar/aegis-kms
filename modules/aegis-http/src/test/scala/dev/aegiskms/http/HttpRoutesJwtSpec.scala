@@ -40,7 +40,14 @@ final class HttpRoutesJwtSpec extends AnyFunSuite with Matchers with ScalatestRo
 
   private def humanToken(subject: String, groups: Set[String] = Set("admins")): String =
     val now = Instant.now()
-    issuer.issue(JwtClaims.Human(subject, None, now, now.plus(1, ChronoUnit.HOURS), groups))
+    issuer.issue(JwtClaims.Human(
+      subject,
+      None,
+      now,
+      now.plus(1, ChronoUnit.HOURS),
+      groups,
+      java.util.UUID.randomUUID().toString
+    ))
 
   test("POST /v1/keys with a valid Bearer token succeeds (201)") {
     val token = humanToken("alice@org")
@@ -68,9 +75,16 @@ final class HttpRoutesJwtSpec extends AnyFunSuite with Matchers with ScalatestRo
   }
 
   test("POST /v1/keys with an expired token returns 401") {
-    val past   = Instant.now().minus(1, ChronoUnit.HOURS)
-    val claims = JwtClaims.Human("alice", None, past.minus(1, ChronoUnit.HOURS), past, Set("admins"))
-    val token  = issuer.issue(claims)
+    val past = Instant.now().minus(1, ChronoUnit.HOURS)
+    val claims = JwtClaims.Human(
+      "alice",
+      None,
+      past.minus(1, ChronoUnit.HOURS),
+      past,
+      Set("admins"),
+      java.util.UUID.randomUUID().toString
+    )
+    val token = issuer.issue(claims)
     val req = Post("/v1/keys", jsonEntity(createBody))
       .withHeaders(RawHeader("Authorization", s"Bearer $token"))
     req ~> jwtRoute() ~> check {
@@ -89,7 +103,14 @@ final class HttpRoutesJwtSpec extends AnyFunSuite with Matchers with ScalatestRo
   test("a token signed with a different secret is rejected") {
     val otherIssuer = JwtIssuer.hmac("a-different-32-byte-shared-secret-yo!")
     val now         = Instant.now()
-    val token       = otherIssuer.issue(JwtClaims.Human("alice", None, now, now.plusSeconds(60), Set.empty))
+    val token = otherIssuer.issue(JwtClaims.Human(
+      "alice",
+      None,
+      now,
+      now.plusSeconds(60),
+      Set.empty,
+      java.util.UUID.randomUUID().toString
+    ))
     val req = Post("/v1/keys", jsonEntity(createBody))
       .withHeaders(RawHeader("Authorization", s"Bearer $token"))
     req ~> jwtRoute() ~> check {

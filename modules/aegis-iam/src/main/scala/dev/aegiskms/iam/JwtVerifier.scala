@@ -60,13 +60,18 @@ object JwtVerifier:
     val issuer   = Option(claims.getIssuer)
     val issuedAt = Option(claims.getIssuedAt).map(_.toInstant).getOrElse(Instant.EPOCH)
     val expires  = Option(claims.getExpiration).map(_.toInstant).getOrElse(Instant.EPOCH)
+    // `jti` is conceptually required for every Aegis-issued token (see JwtClaims docs), but the
+    // verifier accepts tokens without it by falling back to an empty string — older externally-minted
+    // tokens that pre-date the jti rollout still need to validate. The JTI blacklist (#24) will treat
+    // an empty jti as "no blacklist match" rather than refusing the request.
+    val jti = Option(claims.getId).getOrElse("")
 
     if subject.isEmpty then Left(JwtError.InvalidClaims("missing required claim: sub"))
     else
       Option(claims.get(JwtClaims.Claim.Kind, classOf[String])) match
         case Some(JwtClaims.Claim.KindHuman) =>
           val groups = stringList(claims, JwtClaims.Claim.Groups).toSet
-          Right(JwtClaims.Human(subject, issuer, issuedAt, expires, groups))
+          Right(JwtClaims.Human(subject, issuer, issuedAt, expires, groups, jti))
         case Some(JwtClaims.Claim.KindAgent) =>
           for
             parent  <- requiredString(claims, JwtClaims.Claim.ParentSubject)
@@ -78,7 +83,8 @@ object JwtVerifier:
             expiresAt = expires,
             parentSubject = parent,
             purpose = purpose,
-            allowedOps = stringList(claims, JwtClaims.Claim.AllowedOps).toSet
+            allowedOps = stringList(claims, JwtClaims.Claim.AllowedOps).toSet,
+            jti = jti
           )
         case Some(other) =>
           Left(JwtError.InvalidClaims(s"unknown ${JwtClaims.Claim.Kind}=$other"))
