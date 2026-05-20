@@ -2,6 +2,7 @@ package dev.aegiskms.audit
 
 import cats.effect.IO
 import cats.effect.unsafe.IORuntime
+import cats.syntax.all.*
 import com.dimafeng.testcontainers.PostgreSQLContainer
 import dev.aegiskms.core.{Operation, Principal, TenantId}
 import doobie.*
@@ -261,5 +262,180 @@ final class PostgresAuditSinkSpec extends AnyFunSuite with Matchers:
       back.hcursor.downField("quotes").as[String].toOption shouldBe Some("she said \"hi\"")
       back.hcursor.downField("unicode").as[String].toOption shouldBe Some("café — açaí — 漢字")
       back.hcursor.downField("very.long.key.name.with.dots").as[String].toOption.get.length shouldBe 1000
+    }
+  }
+
+  // ── Query (#20: GET /v1/audit) ────────────────────────────────────────────
+
+  /** Seed `n` records spread evenly between three actors + four operations so each filter has something to
+    * match. Returns the seeded list in insertion order so tests can compare.
+    */
+  private def seedRecords(sink: PostgresAuditSink): IO[List[AuditRecord]] =
+    val recs = List(
+      record(baseTs.plusSeconds(0), alice, Operation.Sign, "key:invoice-2026"),
+      record(baseTs.plusSeconds(1), alice, Operation.Get, "key:invoice-2026"),
+      record(baseTs.plusSeconds(2), agent, Operation.Sign, "key:invoice-2026"),
+      record(baseTs.plusSeconds(3), agent, Operation.Get, "key:paystubs-2026"),
+      record(baseTs.plusSeconds(4), system, Operation.Revoke, "key:paystubs-2026"),
+      record(baseTs.plusSeconds(5), alice, Operation.Activate, "key:tax-2026"),
+      record(baseTs.plusSeconds(6), agent, Operation.Sign, "key:tax-2026")
+    )
+    recs.traverse_(sink.write).as(recs)
+
+  test("query with no filters returns all rows ordered by occurred_at DESC") {
+    withPostgres { xa =>
+      val program =
+        for
+          sink <- PostgresAuditSink.bootstrappedFor(xa)
+          _    <- seedRecords(sink)
+          page <- sink.query(AuditQuery.Filter())
+        yield page
+
+      val page = program.unsafeRunSync()
+      page.records.size shouldBe 7
+      page.hasMore shouldBe false
+      page.limit shouldBe AuditQuery.DefaultLimit
+      page.offset shouldBe 0
+      // DESC ordering on occurred_at — last seeded row comes first.
+      page.records.head.resource shouldBe "key:tax-2026"
+      page.records.head.operation shouldBe Operation.Sign
+      page.records.last.resource shouldBe "key:invoice-2026"
+    }
+  }
+
+  test("query filters by actor (exact match on actor_subject)") {
+    withPostgres { xa =>
+      val program =
+        for
+          sink <- PostgresAuditSink.bootstrappedFor(xa)
+          _    <- seedRecords(sink)
+          page <- sink.query(AuditQuery.Filter(actor = Some("alice@org")))
+        yield page
+
+      val page = program.unsafeRunSync()
+      page.records.size shouldBe 3
+      page.records.forall(_.principal.subject == "alice@org") shouldBe true
+    }
+  }
+
+  test("query filters by resource (exact match)") {
+    withPostgres { xa =>
+      val program =
+        for
+          sink <- PostgresAuditSink.bootstrappedFor(xa)
+          _    <- seedRecords(sink)
+          page <- sink.query(AuditQuery.Filter(resource = Some("key:paystubs-2026")))
+        yield page
+
+      val page = program.unsafeRunSync()
+      page.records.size shouldBe 2
+      page.records.forall(_.resource == "key:paystubs-2026") shouldBe true
+    }
+  }
+
+  test("query filters by operation") {
+    withPostgres { xa =>
+      val program =
+        for
+          sink <- PostgresAuditSink.bootstrappedFor(xa)
+          _    <- seedRecords(sink)
+          page <- sink.query(AuditQuery.Filter(operation = Some(Operation.Sign)))
+        yield page
+
+      val page = program.unsafeRunSync()
+      page.records.size shouldBe 3
+      page.records.forall(_.operation == Operation.Sign) shouldBe true
+    }
+  }
+
+  test("query filters by since (half-open) and until (exclusive)") {
+    withPostgres { xa =>
+      val program =
+        for
+          sink <- PostgresAuditSink.bootstrappedFor(xa)
+          _    <- seedRecords(sink)
+          page <- sink.query(AuditQuery.Filter(
+            since = Some(baseTs.plusSeconds(2)),
+            until = Some(baseTs.plusSeconds(5))
+          ))
+        yield page
+
+      // since is inclusive, until is exclusive → rows at +2, +3, +4 only (3 rows).
+      val page = program.unsafeRunSync()
+      page.records.size shouldBe 3
+      page.records.map(_.resource).toSet shouldBe Set("key:invoice-2026", "key:paystubs-2026")
+    }
+  }
+
+  test("query composes filters with AND") {
+    withPostgres { xa =>
+      val program =
+        for
+          sink <- PostgresAuditSink.bootstrappedFor(xa)
+          _    <- seedRecords(sink)
+          // actor=agent AND operation=Sign → 2 matching rows (key:invoice-2026 and key:tax-2026).
+          page <- sink.query(AuditQuery.Filter(
+            actor = Some("agent-7a3"),
+            operation = Some(Operation.Sign)
+          ))
+        yield page
+
+      val page = program.unsafeRunSync()
+      page.records.size shouldBe 2
+      page.records.forall(r =>
+        r.principal.subject == "agent-7a3" && r.operation == Operation.Sign
+      ) shouldBe true
+    }
+  }
+
+  test("query honours limit + offset and reports hasMore correctly") {
+    withPostgres { xa =>
+      val program =
+        for
+          sink  <- PostgresAuditSink.bootstrappedFor(xa)
+          _     <- seedRecords(sink) // 7 records
+          page1 <- sink.query(AuditQuery.Filter(limit = 3, offset = 0))
+          page2 <- sink.query(AuditQuery.Filter(limit = 3, offset = 3))
+          page3 <- sink.query(AuditQuery.Filter(limit = 3, offset = 6))
+        yield (page1, page2, page3)
+
+      val (p1, p2, p3) = program.unsafeRunSync()
+      p1.records.size shouldBe 3
+      p1.hasMore shouldBe true
+      p2.records.size shouldBe 3
+      p2.hasMore shouldBe true
+      p3.records.size shouldBe 1
+      p3.hasMore shouldBe false
+    }
+  }
+
+  test("query clamps limit to MaxLimit and offset to >= 0 (defensive against client input)") {
+    withPostgres { xa =>
+      val program =
+        for
+          sink <- PostgresAuditSink.bootstrappedFor(xa)
+          _    <- seedRecords(sink)
+          page <- sink.query(AuditQuery.Filter(limit = 10000, offset = -5))
+        yield page
+
+      val page = program.unsafeRunSync()
+      page.limit shouldBe AuditQuery.MaxLimit
+      page.offset shouldBe 0
+    }
+  }
+
+  test("query round-trips the context JSONB back into Map[String, String]") {
+    withPostgres { xa =>
+      val ctx = Map("risk.score" -> "0.42", "outcome.decision" -> "Allow")
+      val program =
+        for
+          sink <- PostgresAuditSink.bootstrappedFor(xa)
+          _    <- sink.write(record(baseTs, alice, Operation.Sign, "key:k1", context = ctx))
+          page <- sink.query(AuditQuery.Filter())
+        yield page
+
+      val page = program.unsafeRunSync()
+      page.records.size shouldBe 1
+      page.records.head.context shouldBe ctx
     }
   }

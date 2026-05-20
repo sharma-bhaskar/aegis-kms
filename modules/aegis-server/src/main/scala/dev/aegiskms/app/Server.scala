@@ -12,7 +12,7 @@ import dev.aegiskms.agent.{
   TappedAuditSink,
   ThresholdDecisionEngine
 }
-import dev.aegiskms.audit.{AuditSink, AuditingKeyService, PostgresAuditSink, StdoutAuditSink}
+import dev.aegiskms.audit.{AuditQuery, AuditSink, AuditingKeyService, PostgresAuditSink, StdoutAuditSink}
 import dev.aegiskms.http.HttpRoutes
 import dev.aegiskms.iam.{AgentTokenIssuer, AuthorizingKeyService, JwtIssuer, JwtVerifier, PrincipalResolver}
 import dev.aegiskms.persistence.{EventJournal, PostgresEventJournal, PostgresJournalConfig}
@@ -169,7 +169,19 @@ object Server extends IOApp.Simple:
           // agent credential minted (the keys surface is already covered by `AuditingKeyService`
           // wrapping `traced`, but agent issuance is not on the `KeyService` algebra and would
           // otherwise be invisible to operators).
-          HttpRoutes(auditing, resolver, Some(agentIssuer), Some(stdoutSink)).routes,
+          // Audit-read endpoint (#20): only wired when the sink is a `PostgresAuditSink` (the
+          // only impl that satisfies the `AuditQuery` SPI). With `aegis.audit.kind=stdout`,
+          // `GET /v1/audit` returns 501 NotImplemented — same shape as `/v1/agents/issue` when
+          // no issuer is configured.
+          HttpRoutes(
+            auditing,
+            resolver,
+            Some(agentIssuer),
+            Some(stdoutSink),
+            stdoutSink match
+              case q: AuditQuery[IO @unchecked] => Some(q)
+              case _                            => None
+          ).routes,
           MetricsRoutes.route(metricsRegistry)
         )
       _ <- httpBindingResource(host, port, appRoute)
