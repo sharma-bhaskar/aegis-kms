@@ -26,15 +26,21 @@ final class AgentTokenIssuerSpec extends AnyFunSuite with Matchers:
   private val signer   = JwtIssuer.hmac(secret)
   private val verifier = JwtVerifier.hmac(secret)
 
-  // Fixed clock so we can assert on exact expiresAt.
-  private val fixedNow = Instant.parse("2026-05-19T10:00:00Z")
+  // Wall-clock-based test "now", captured once at suite init so we can still assert on exact
+  // expiresAt within a single run. We deliberately do NOT use a hardcoded `Instant.parse(...)` —
+  // jjwt's verifier evaluates the `exp` claim against `Instant.now()` (no clock injection seam),
+  // so any past hardcoded value would mean every issued token is already expired by the time the
+  // verifier checks it, and tests that round-trip the JWT through `verifier.verify(...)` would
+  // fail the day after the hardcoded date. Using `Instant.now()` here keeps exp comfortably in
+  // the future for the whole test run regardless of what date you're running on.
+  private val testNow = Instant.now()
 
   private def issuer(maxTtl: FiniteDuration = AgentTokenIssuer.DefaultMaxTtl): AgentTokenIssuer =
     new AgentTokenIssuer(
       signer,
       issuerName = Some("https://aegis.local"),
       maxTtl = maxTtl,
-      now = IO.pure(fixedNow)
+      now = IO.pure(testNow)
     )
 
   private val alice: Principal.Human = Principal.Human("alice@org", Set("admins"))
@@ -51,7 +57,7 @@ final class AgentTokenIssuerSpec extends AnyFunSuite with Matchers:
 
     token.agentId should startWith("agent-")
     token.jti should not be empty
-    token.expiresAt shouldBe fixedNow.plusSeconds(3600)
+    token.expiresAt shouldBe testNow.plusSeconds(3600)
 
     // Verifier sees the right claims.
     val claims = verifier.verify(token.jwt).toOption.get.asInstanceOf[JwtClaims.Agent]
@@ -84,7 +90,7 @@ final class AgentTokenIssuerSpec extends AnyFunSuite with Matchers:
       subject = "agent-abc",
       operator = alice,
       purpose = "test",
-      issuedAt = fixedNow,
+      issuedAt = testNow,
       ttl = 1.hour,
       allowedOps = Set.empty,
       parent = None
@@ -203,7 +209,7 @@ final class AgentTokenIssuerSpec extends AnyFunSuite with Matchers:
   }
 
   test("issuerName=None produces a token with no `iss` claim") {
-    val issuerNoName = new AgentTokenIssuer(signer, issuerName = None, now = IO.pure(fixedNow))
+    val issuerNoName = new AgentTokenIssuer(signer, issuerName = None, now = IO.pure(testNow))
     val token =
       issuerNoName.issue(alice, IssueAgentRequest("x", List("Get"), 1.hour)).unsafeRunSync().toOption.get
     val claims = verifier.verify(token.jwt).toOption.get
