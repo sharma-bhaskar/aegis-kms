@@ -81,17 +81,20 @@ final class PostgresAuditSinkSpec extends AnyFunSuite with Matchers:
 
   // ── Schema + basic write ─────────────────────────────────────────────────
 
-  test("bootstrap creates table + 4 indexes idempotently") {
+  test("bootstrap creates table + 4 explicit indexes idempotently") {
     withPostgres { xa =>
       val program =
         for
           _    <- PostgresAuditSink.bootstrappedFor(xa) // first time creates
           _    <- PostgresAuditSink.bootstrappedFor(xa) // second time is a no-op
           rows <- sql"SELECT COUNT(*) FROM aegis_audit_events".query[Int].unique.transact(xa)
+          // Filter on the `_idx` suffix so we count ONLY our four explicit composite indexes.
+          // Postgres auto-creates a PRIMARY KEY index named `aegis_audit_events_pkey` which would
+          // otherwise be picked up by a plain `LIKE 'aegis_audit_events_%'` filter.
           idxCnt <- sql"""
                       SELECT COUNT(*) FROM pg_indexes
                       WHERE tablename = 'aegis_audit_events'
-                        AND indexname LIKE 'aegis_audit_events_%'
+                        AND indexname LIKE 'aegis_audit_events_%\_idx' ESCAPE '\'
                     """.query[Int].unique.transact(xa)
         yield (rows, idxCnt)
 
@@ -119,25 +122,31 @@ final class PostgresAuditSinkSpec extends AnyFunSuite with Matchers:
             )
           )
           _ <- sink.write(rec)
+          // Read context as JSONB (round-trip via circe) instead of `::text` substring matching.
+          // Postgres's `jsonb::text` cast inserts a space after `:` (`"risk.score": "0.42"`) which
+          // is annoying to assert against and brittle. Parsing the JSON and asserting on values
+          // is robust against future Postgres formatting tweaks.
           row <- sql"""
                    SELECT correlation_id, actor_subject, actor_kind, operation,
-                          resource, outcome, context::text
+                          resource, outcome, context
                    FROM aegis_audit_events
                  """
-            .query[(String, String, String, String, String, String, String)]
+            .query[(String, String, String, String, String, String, io.circe.Json)]
             .unique
             .transact(xa)
         yield (rec, row)
 
-      val (rec, (corr, actor, kind, op, res, outcome, ctx)) = program.unsafeRunSync()
+      val (rec, (corr, actor, kind, op, res, outcome, ctxJson)) = program.unsafeRunSync()
       corr shouldBe rec.correlationId
       actor shouldBe "alice@org"
       kind shouldBe "Human"
       op shouldBe "Sign"
       res shouldBe "key:abc-123"
       outcome should include("Success alg=RsaPssSha256")
-      ctx should include(""""risk.score":"0.42"""")
-      ctx should include(""""outcome.decision":"Allow"""")
+      ctxJson.hcursor.downField("risk.score").as[String].toOption shouldBe Some("0.42")
+      ctxJson.hcursor.downField("risk.factors").as[String].toOption shouldBe
+        Some("AgentPrincipal:0.2;DestructiveOp:0.1")
+      ctxJson.hcursor.downField("outcome.decision").as[String].toOption shouldBe Some("Allow")
     }
   }
 
@@ -169,10 +178,13 @@ final class PostgresAuditSinkSpec extends AnyFunSuite with Matchers:
         for
           sink <- PostgresAuditSink.bootstrappedFor(xa)
           _    <- sink.write(record(baseTs, alice, Operation.Get, "key:k1")) // context = Map.empty
-          ctx  <- sql"SELECT context::text FROM aegis_audit_events".query[String].unique.transact(xa)
+          ctx  <- sql"SELECT context FROM aegis_audit_events".query[io.circe.Json].unique.transact(xa)
         yield ctx
 
-      program.unsafeRunSync() shouldBe "{}"
+      // Parsed JSON shape rather than a stringly comparison — survives any future Postgres
+      // JSONB text-cast formatting change.
+      val ctxJson = program.unsafeRunSync()
+      ctxJson.asObject.map(_.isEmpty) shouldBe Some(true)
     }
   }
 
