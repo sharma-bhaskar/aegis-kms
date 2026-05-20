@@ -13,6 +13,8 @@ import dev.aegiskms.agent.{
   ThresholdDecisionEngine
 }
 import dev.aegiskms.audit.{AuditQuery, AuditSink, AuditingKeyService, PostgresAuditSink, StdoutAuditSink}
+import dev.aegiskms.crypto.RootOfTrust
+import dev.aegiskms.crypto.aws.AwsKmsRootOfTrust
 import dev.aegiskms.http.HttpRoutes
 import dev.aegiskms.iam.{AgentTokenIssuer, AuthorizingKeyService, JwtIssuer, JwtVerifier, PrincipalResolver}
 import dev.aegiskms.persistence.{EventJournal, PostgresEventJournal, PostgresJournalConfig}
@@ -105,11 +107,17 @@ object Server extends IOApp.Simple:
       given ActorSystem[KeyOpsActor.Command] = system
       given Scheduler                        = system.scheduler
 
+      // 3b. Root of Trust. `aegis.crypto.kind=in-memory` (default) uses the deterministic-MAC
+      //     dev backend — NOT a real KMS. `aegis.crypto.kind=aws-kms` uses `AwsKmsRootOfTrust`
+      //     with a Resource-managed `KmsClient` (closed on SIGTERM). The choice happens here so
+      //     ActorBackedKeyService stays unaware of which backend it's talking to.
+      rootOfTrust <- rootOfTrustResource(rootConfig)
+
       // 4. Decorate. Auth → metrics → tracing → audit; see the class docstring for why this order
       //    matters. Tracing sits between metrics and audit so the trace span measures auth + actor
       //    + journal as one unit; metrics record their own (smaller) timer next to it; audit stays
       //    the outermost layer so the audit row reflects the post-trace outcome.
-      actorBacked = new ActorBackedKeyService(system)
+      actorBacked = new ActorBackedKeyService(system, rootOfTrust)
       authorizing = new AuthorizingKeyService(actorBacked, new DevPolicyEngine)
       metered     = new MeteredKeyService(authorizing, metricsRegistry)
       traced      = new TracingKeyService(metered, tracer)
@@ -237,6 +245,51 @@ object Server extends IOApp.Simple:
       case other =>
         Resource.eval(IO.raiseError(new IllegalArgumentException(
           s"Unknown aegis.persistence.journal.kind=$other (expected 'in-memory' or 'postgres')"
+        )))
+
+  /** Root-of-Trust as a Resource — the crypto backend that does the actual sign / verify / wrap / unwrap work
+    * behind `KeyService`.
+    *
+    *   - `aegis.crypto.kind=in-memory` (default) — deterministic-MAC dev backend. **Not a real KMS** —
+    *     signatures are HMAC(KeyId, msg), encryption is XOR-with-stream. Suitable for local development, the
+    *     wedge demo, and integration tests; never for production data.
+    *   - `aegis.crypto.kind=aws-kms` — `AwsKmsRootOfTrust` against the configured AWS region with a
+    *     Resource-managed `KmsClient` (closed on SIGTERM). Requires `aegis.crypto.aws-kms.region` and
+    *     `aegis.crypto.aws-kms.kek-arn` to be set; the AWS SDK's default credential provider chain handles
+    *     authentication (env vars, instance metadata, SSO, etc. — see the AWS SDK docs).
+    *
+    * GCP / Azure / Vault / PKCS#11 adapters are roadmapped for v0.3.0 / v0.4.0; until they ship, this method
+    * only knows about `in-memory` and `aws-kms`. Misconfiguration fails fast at boot — silent fallback to the
+    * dev backend would be a security hole.
+    */
+  private def rootOfTrustResource(config: Config): Resource[IO, RootOfTrust[IO]] =
+    config.getString("aegis.crypto.kind") match
+      case "in-memory" =>
+        Resource.eval(IO {
+          logger.warn(
+            "crypto: in-memory (deterministic-MAC dev backend — NOT a real KMS). " +
+              "Set aegis.crypto.kind=aws-kms (with aegis.crypto.aws-kms.{region,kek-arn}) for production."
+          )
+          RootOfTrust.inMemory
+        })
+      case "aws-kms" =>
+        val region = config.getString("aegis.crypto.aws-kms.region")
+        val kekArn = config.getString("aegis.crypto.aws-kms.kek-arn")
+        if region.isEmpty then
+          Resource.eval(IO.raiseError(new IllegalArgumentException(
+            "aegis.crypto.kind=aws-kms requires aegis.crypto.aws-kms.region (set AEGIS_CRYPTO_AWS_KMS_REGION)"
+          )))
+        else if kekArn.isEmpty then
+          Resource.eval(IO.raiseError(new IllegalArgumentException(
+            "aegis.crypto.kind=aws-kms requires aegis.crypto.aws-kms.kek-arn (set AEGIS_CRYPTO_AWS_KMS_KEK_ARN)"
+          )))
+        else
+          Resource.eval(IO(logger.info(
+            s"crypto: aws-kms (region=$region, kek-arn=$kekArn)"
+          ))) *> AwsKmsRootOfTrust.resource(AwsKmsRootOfTrust.Config(region, kekArn)).widen
+      case other =>
+        Resource.eval(IO.raiseError(new IllegalArgumentException(
+          s"Unknown aegis.crypto.kind=$other (expected 'in-memory' or 'aws-kms')"
         )))
 
   /** Actor system as a Resource. `terminate()` returns `Future[Terminated]`; we bridge to `IO` so the

@@ -17,8 +17,8 @@ your decision matrix, not assume it.
 | **Agent identity in audit** | No | Workload identity (not agent-aware) | Workload identity | No | First-class (`agent_id`, `session_id`, `tool_name`) |
 | **Risk-scored decisions** | No | No | No | No | `Allow` / `StepUp` / `Deny` from a [0,1] risk score with structured reasoning (v0.2.0) |
 | **Auto-response to anomalies** | CloudTrail → Lambda (DIY) | Audit device → external pipeline (DIY) | Audit device → external pipeline (DIY) | Cloud Audit → Pub/Sub (DIY) | First-class `AutoResponder` with default rules + cooldown (v0.2.0) |
-| **KMIP** | No | Enterprise only | Roadmap | No | Designed (v0.2.0) |
-| **MCP-native** | No | No | No | No | Designed (v0.2.0) |
+| **KMIP** | No | Enterprise only | Roadmap | No | Designed (v0.4.0) |
+| **MCP-native** | No | No | No | No | Designed (v0.4.0) |
 | **Policy engine** | AWS IAM | Vault HCL policies | Vault HCL policies | Cloud IAM | Boolean policy (v0.1.x) + risk overlay (v0.2.0); richer policies (v0.3.0) |
 | **HSM-backed** | CloudHSM | Enterprise only | Roadmap | Cloud HSM | Via AWS KMS RoT today |
 | **OSS contributors** | N/A | 200+ | 100+ | N/A | <5 |

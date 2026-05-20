@@ -8,6 +8,42 @@ All notable changes to Aegis will be documented here. This project follows
 
 ### Added
 
+- **`AwsKmsRootOfTrust` wired into `Server.boot`.** Closes a doc-vs-code gap surfaced during the
+  v0.2.0 readiness audit. The AWS adapter has shipped in the `aegis-crypto` library since v0.1.x
+  (17 passing tests), but `Server.boot` was constructing `ActorBackedKeyService(system)` with the
+  default `RootOfTrust.inMemory` (deterministic-MAC dev backend) — meaning the published Docker
+  image used the dev backend regardless of how it was configured. The status / comparison docs
+  claimed "AWS KMS — Shipped" while the running server signed with HMAC. Fix:
+  - New `aegis.crypto.kind` HOCON key (`in-memory` (default) | `aws-kms`) with
+    `AEGIS_CRYPTO_KIND` env-var override.
+  - New `aegis.crypto.aws-kms.region` + `aegis.crypto.aws-kms.kek-arn` keys
+    (`AEGIS_CRYPTO_AWS_KMS_REGION` / `AEGIS_CRYPTO_AWS_KMS_KEK_ARN`); missing config fails fast
+    at boot, never silently falls back to dev.
+  - New `AwsKmsRootOfTrust.resource(cfg): Resource[IO, AwsKmsRootOfTrust]` factory wraps the
+    `KmsClient` in a cats-effect `Resource` so the SDK's connection pool / metric publisher /
+    background threads are released on SIGTERM. The pre-existing `fromConfig` is kept (with a
+    docstring warning about the leaked client) so single-shot scripts and embedder code that
+    manages its own KMS-client lifecycle stay supported.
+  - `Server.boot` gains a `rootOfTrustResource(config)` builder paralleling `journalResource`;
+    the in-memory branch logs a `warn` flagging "NOT a real KMS, set kind=aws-kms for
+    production" so operators can't accidentally rely on the dev backend.
+
+### Changed
+
+- **Doc drift cleanup, v0.2.0 readiness audit.**
+  - `CHANGELOG.md` removed duplicate `### Added` heading in the Unreleased section (merged into
+    a single Added block).
+  - `docs/about/status.md` corrected GCP KMS / Azure Key Vault / HashiCorp Vault Transit rows
+    from "v0.2.0" to "v0.3.0" (matches ROADMAP §3.0.a–c).
+  - `docs/about/status.md` corrected the OIDC / JWKS row from "WIP" to "Designed" (no commits
+    yet; the trait is in place but no implementation).
+  - `docs/about/status.md` AWS KMS row now explicitly states the `Server.boot` wiring path
+    instead of leaving it implicit.
+  - `docs/about/status.md` KMIP and MCP rows now reference v0.4.0 (matches ROADMAP §4.0.*)
+    instead of the previous v0.2.0 overclaim.
+  - `docs/about/comparison.md` KMIP and MCP-native rows corrected from "Designed (v0.2.0)" to
+    "Designed (v0.4.0)".
+
 - **Audit-read REST API: `GET /v1/audit` (closes #20).** New `AuditQuery[F[_]]` SPI in
   `aegis-audit` with `Filter` (since / until / actor / resource / operation / limit / offset)
   and `Page` (records / limit / offset / hasMore). `PostgresAuditSink` now implements both
@@ -114,8 +150,6 @@ All notable changes to Aegis will be documented here. This project follows
   `aegis-system` auto-revoke audit row, and exercising the decision adapter's `PermissionDenied` path.
   Time estimate updated 10 → 15 min, the introductory "What you'll have when you're done" callout
   spells out the wedge-demo deliverable so newcomers know what makes Aegis different before they start.
-
-### Added
 
 - **Auto-responder — recommendations become actions (closes #17).** New `AutoResponder` in
   `aegis-agent-ai` is itself a `RecommendationSink`: it decorates the existing in-memory store, so
