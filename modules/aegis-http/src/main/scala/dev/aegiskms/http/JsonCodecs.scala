@@ -218,3 +218,54 @@ object JsonCodecs:
   object IssueAgentResponseDto:
     given Encoder[IssueAgentResponseDto] = deriveEncoder
     given Decoder[IssueAgentResponseDto] = deriveDecoder
+
+  // ── Audit-read DTOs (#20) ─────────────────────────────────────────────────
+
+  /** One audit row over the wire. Mirrors `AuditRecord` minus the typed `Principal` (which doesn't round-trip
+    * cleanly — the wire format flattens to `actor` + `actorKind` strings) and the typed `Operation` (rendered
+    * as its enum-name string for symmetry with `actorKind`).
+    */
+  final case class AuditRecordDto(
+      at: Instant,
+      actor: String,
+      actorKind: String,
+      operation: String,
+      resource: String,
+      outcome: String,
+      correlationId: String,
+      context: Map[String, String]
+  )
+  object AuditRecordDto:
+    def fromCore(r: dev.aegiskms.audit.AuditRecord): AuditRecordDto =
+      val kind = r.principal match
+        case _: dev.aegiskms.core.Principal.Human   => "Human"
+        case _: dev.aegiskms.core.Principal.Service => "Service"
+        case _: dev.aegiskms.core.Principal.Agent   => "Agent"
+      AuditRecordDto(
+        at = r.at,
+        actor = r.principal.subject,
+        actorKind = kind,
+        operation = r.operation.toString,
+        resource = r.resource,
+        outcome = r.outcome,
+        correlationId = r.correlationId,
+        context = r.context
+      )
+
+    given Encoder[AuditRecordDto] = deriveEncoder
+    given Decoder[AuditRecordDto] = deriveDecoder
+
+  /** Wire response for `GET /v1/audit`. `hasMore = true` means at least one more matching row exists past
+    * `offset + limit`; clients can paginate by repeating with `offset = offset + limit`. No total-count field
+    * — that would force a separate (expensive) `COUNT(*)` per page; the existence flag is enough for "Load
+    * more" UX.
+    */
+  final case class AuditQueryResponseDto(
+      records: List[AuditRecordDto],
+      limit: Int,
+      offset: Int,
+      hasMore: Boolean
+  )
+  object AuditQueryResponseDto:
+    given Encoder[AuditQueryResponseDto] = deriveEncoder
+    given Decoder[AuditQueryResponseDto] = deriveDecoder

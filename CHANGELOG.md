@@ -8,6 +8,27 @@ All notable changes to Aegis will be documented here. This project follows
 
 ### Added
 
+- **Audit-read REST API: `GET /v1/audit` (closes #20).** New `AuditQuery[F[_]]` SPI in
+  `aegis-audit` with `Filter` (since / until / actor / resource / operation / limit / offset)
+  and `Page` (records / limit / offset / hasMore). `PostgresAuditSink` now implements both
+  `AuditSink` AND `AuditQuery` — one impl, two responsibilities. The query composes optional
+  filters with `AND`, uses the "LIMIT n+1" trick to derive `hasMore` without a separate
+  `COUNT(*)`, clamps `limit` to `[1, 1000]` and `offset` to `>= 0` defensively, and rebuilds
+  `AuditRecord` instances from the row (including JSONB `context` round-trip back to
+  `Map[String, String]`). New Tapir endpoint
+  `GET /v1/audit?since&until&actor&key&op&limit&offset` returns
+  `{records, limit, offset, hasMore}`. Authz: human principals only — agents and services are
+  refused with `403 PermissionDenied` (v0.2.0 simplification of the future "audit:read permission
+  via policy engine" model). Unknown `op` names reject with `400 InvalidField` rather than
+  silently producing an empty result. When the server isn't wired with a query-capable sink
+  (`aegis.audit.kind=stdout`), the endpoint returns `501 FeatureNotSupported` — same pattern as
+  `/v1/agents/issue` when its dependency is missing. New tests: 8 Postgres-backed cases in
+  `PostgresAuditSinkSpec` (filter by actor / resource / op / since-until, AND composition,
+  pagination with `hasMore`, defensive clamping, JSONB round-trip) + 8 HTTP-level cases in
+  `HttpRoutesAuditQuerySpec` (response shape, record round-trip, filter parsing, op-name
+  validation, human JWT happy path, agent 403, no-reader 501, pagination propagation). Backs
+  the `aegis audit tail` CLI stub that ships next.
+
 - **Postgres audit table with indexed schema + retention (closes #19).** New
   `PostgresAuditSink` in `aegis-audit` writes every `AuditRecord` into a Doobie-backed
   `aegis_audit_events` table with one composite index per #20 audit-read filter

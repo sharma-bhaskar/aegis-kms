@@ -6,6 +6,8 @@ import sttp.tapir.*
 import sttp.tapir.generic.auto.*
 import sttp.tapir.json.circe.*
 
+import java.time.Instant
+
 /** Pure Tapir endpoint definitions. No server logic, no Pekko types — these can be reused by the OpenAPI
   * generator, by sttp clients in `aegis-sdk-scala`, and by the test stub interpreter.
   *
@@ -255,6 +257,65 @@ object Endpoints:
           "deliberately short because the only revocation mechanism is the JTI blacklist that lands in #24)."
       )
 
+  // ── Audit read (#20) ──────────────────────────────────────────────────────
+
+  /** Common base for the audit-read surface — `/v1/audit`, same auth headers, same error contract, distinct
+    * OpenAPI tag so Swagger groups the endpoint with future audit-read additions.
+    */
+  private val auditBase =
+    endpoint
+      .in("v1" / "audit")
+      .in(authHeader)
+      .in(devUserHeader)
+      .errorOut(statusCode and jsonBody[KmsErrorDto].description("Failure detail"))
+      .tag("audit")
+
+  /** `GET /v1/audit` — paginated read of `aegis_audit_events`. Filters compose with AND. Only
+    * `Principal.Human` callers are permitted (Service and Agent return 403); this is a deliberate v0.2.0
+    * simplification of the future "audit:read permission via policy engine" model.
+    *
+    * Query parameters:
+    *   - `since` — ISO-8601 instant; rows with `occurred_at >= since` (inclusive).
+    *   - `until` — ISO-8601 instant; rows with `occurred_at < until` (exclusive).
+    *   - `actor` — exact match on `actor_subject`.
+    *   - `key` — exact match on `resource` (e.g. `"key:abc-123"` or `"agent:agent-7a3"`).
+    *   - `op` — KMIP Operation enum name (`Sign`, `Get`, …).
+    *   - `limit` — page size, default 100, max 1000.
+    *   - `offset` — starting row offset, default 0.
+    */
+  val queryAudit: PublicEndpoint[
+    (
+        Option[String],
+        Option[String],
+        Option[Instant],
+        Option[Instant],
+        Option[String],
+        Option[String],
+        Option[String],
+        Option[Int],
+        Option[Int]
+    ),
+    (StatusCode, KmsErrorDto),
+    AuditQueryResponseDto,
+    Any
+  ] =
+    auditBase.get
+      .in(query[Option[Instant]]("since").description("ISO-8601 lower bound (inclusive) on occurred_at"))
+      .in(query[Option[Instant]]("until").description("ISO-8601 upper bound (exclusive) on occurred_at"))
+      .in(query[Option[String]]("actor").description(
+        "Exact match on actor_subject (e.g. 'alice@org', 'agent-7a3', 'aegis-system')"
+      ))
+      .in(query[Option[String]]("key").description("Exact match on resource (e.g. 'key:abc-123')"))
+      .in(query[Option[String]]("op").description("KMIP Operation enum name (Sign / Get / Encrypt / …)"))
+      .in(query[Option[Int]]("limit").description("Page size; defaults to 100, capped at 1000"))
+      .in(query[Option[Int]]("offset").description("Starting row offset for paging; defaults to 0"))
+      .out(jsonBody[AuditQueryResponseDto])
+      .summary("Query the audit log")
+      .description(
+        "Paginated read of `aegis_audit_events`. Filters compose with AND. Caller must be a " +
+          "human principal — service and agent principals are refused with 403."
+      )
+
   /** All endpoint definitions. Used by the OpenAPI generator and tests. */
   val all: List[AnyEndpoint] =
     List(
@@ -270,5 +331,6 @@ object Endpoints:
       unwrapKey,
       compromiseKey,
       rotateKey,
-      issueAgent
+      issueAgent,
+      queryAudit
     )

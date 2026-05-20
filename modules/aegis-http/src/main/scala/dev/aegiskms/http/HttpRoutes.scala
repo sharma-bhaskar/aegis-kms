@@ -2,7 +2,7 @@ package dev.aegiskms.http
 
 import cats.effect.IO
 import cats.effect.unsafe.IORuntime
-import dev.aegiskms.audit.{AuditRecord, AuditSink}
+import dev.aegiskms.audit.{AuditQuery, AuditRecord, AuditSink}
 import dev.aegiskms.core.*
 import dev.aegiskms.http.JsonCodecs.*
 import dev.aegiskms.iam.{AgentTokenIssuer, IssueAgentRequest as IamIssueAgentRequest, PrincipalResolver}
@@ -39,7 +39,12 @@ final class HttpRoutes(
       * endpoints) needs an explicit hookup because it bypasses that decorator. When `None`, agent issuances
       * are not recorded — operators who care about forensics MUST wire this in production.
       */
-    auditSink: Option[AuditSink[IO]] = None
+    auditSink: Option[AuditSink[IO]] = None,
+    /** Optional `AuditQuery` backing the `GET /v1/audit` audit-read endpoint. Provided by `Server.boot` only
+      * when `aegis.audit.kind=postgres` (the only sink that implements `AuditQuery`). When `None`, `GET
+      * /v1/audit` returns `501 FeatureNotSupported`.
+      */
+    auditReader: Option[AuditQuery[IO]] = None
 )(using runtime: IORuntime):
 
   private given ExecutionContext = runtime.compute
@@ -331,6 +336,71 @@ final class HttpRoutes(
               runIO(issueAndAudit).map(_.left.map(errorOut))
     }
 
+  /** `GET /v1/audit` — paginated read of `aegis_audit_events`. Caller must be a `Principal.Human` (Service +
+    * Agent return 403). When the server isn't wired with an `AuditQuery` (i.e. audit kind ≠ postgres), this
+    * returns 501 NotImplemented.
+    */
+  private val queryAuditSE: ServerEndpoint[Any, Future] =
+    Endpoints.queryAudit.serverLogic { case (auth, devHdr, since, until, actor, key, op, limit, offset) =>
+      principalOf(auth, devHdr) match
+        case Left(e) => Future.successful(Left(e))
+        case Right(principal) =>
+          principal match
+            case _: Principal.Human =>
+              auditReader match
+                case None =>
+                  // Audit-read isn't wired (e.g. aegis.audit.kind=stdout). Surface the same way
+                  // we do for /agents/issue when its dependency is missing.
+                  Future.successful(Left(
+                    StatusCode.NotImplemented -> KmsErrorDto.of(
+                      ErrorCode.FeatureNotSupported,
+                      "audit query is not enabled on this server (set aegis.audit.kind=postgres)"
+                    )
+                  ))
+                case Some(reader) =>
+                  // Parse the optional `op` filter. Unknown op names are user error → 400, not
+                  // an empty result (silent empty would mask the typo).
+                  val parsedOp: Either[(StatusCode, KmsErrorDto), Option[Operation]] = op match
+                    case None => Right(None)
+                    case Some(name) =>
+                      Operation.values
+                        .find(_.toString == name)
+                        .toRight(StatusCode.BadRequest -> KmsErrorDto.of(
+                          ErrorCode.InvalidField,
+                          s"unknown op '$name'; expected one of: ${Operation.values.map(_.toString).mkString(", ")}"
+                        ))
+                        .map(Some(_))
+                  parsedOp match
+                    case Left(e) => Future.successful(Left(e))
+                    case Right(opVal) =>
+                      val filter = AuditQuery.Filter(
+                        since = since,
+                        until = until,
+                        actor = actor,
+                        resource = key,
+                        operation = opVal,
+                        limit = limit.getOrElse(AuditQuery.DefaultLimit),
+                        offset = offset.getOrElse(0)
+                      )
+                      runIO(reader.query(filter)).map { page =>
+                        Right(AuditQueryResponseDto(
+                          records = page.records.map(AuditRecordDto.fromCore),
+                          limit = page.limit,
+                          offset = page.offset,
+                          hasMore = page.hasMore
+                        ))
+                      }
+            case _ =>
+              // Service + Agent are refused. v0.2.0 simplification of the future
+              // "audit:read permission via policy engine" model.
+              Future.successful(Left(
+                StatusCode.Forbidden -> KmsErrorDto.of(
+                  ErrorCode.PermissionDenied,
+                  "audit read is restricted to human principals"
+                )
+              ))
+    }
+
   /** Write one `AuditRecord` per `/v1/agents/issue` call — success OR failure — so operators have a forensic
     * trail of every agent credential ever minted. The audit row captures the caller (the human who issued),
     * the requested scopes + ttl + label (so reviewers can answer "what does this agent have access to"), and
@@ -429,7 +499,8 @@ final class HttpRoutes(
       unwrapSE,
       compromiseSE,
       rotateSE,
-      issueAgentSE
+      issueAgentSE,
+      queryAuditSE
     )
 
   /** Render the live endpoint set as an OpenAPI 3.1 document. The build-time guarantee here is the same one
