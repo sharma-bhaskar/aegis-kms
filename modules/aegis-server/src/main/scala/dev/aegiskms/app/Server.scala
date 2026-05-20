@@ -12,7 +12,7 @@ import dev.aegiskms.agent.{
   TappedAuditSink,
   ThresholdDecisionEngine
 }
-import dev.aegiskms.audit.{AuditingKeyService, StdoutAuditSink}
+import dev.aegiskms.audit.{AuditSink, AuditingKeyService, PostgresAuditSink, StdoutAuditSink}
 import dev.aegiskms.http.HttpRoutes
 import dev.aegiskms.iam.{AgentTokenIssuer, AuthorizingKeyService, JwtIssuer, JwtVerifier, PrincipalResolver}
 import dev.aegiskms.persistence.{EventJournal, PostgresEventJournal, PostgresJournalConfig}
@@ -115,7 +115,11 @@ object Server extends IOApp.Simple:
       traced      = new TracingKeyService(metered, tracer)
       recStore <- Resource.eval(InMemoryRecommendationSink.make)
       detector <- Resource.eval(BaselineDetector.make())
-      stdoutSink = StdoutAuditSink()
+      // Audit sink (#19): `aegis.audit.kind=stdout` (default) writes to console; `postgres`
+      // persists to the indexed `aegis_audit_events` table backing the audit-read API (#20).
+      // `stdoutSink` is kept as the variable name across both modes so the existing references
+      // downstream (auto-responder, HttpRoutes auditSink) stay readable — only the impl changes.
+      stdoutSink <- auditSinkResource(rootConfig)
       // Auto-responder (#17 / W3): decorates the recommendation sink. Every recommendation is first
       // persisted to `recStore` (full alert history retained), then matched against `DefaultRules`
       // (High → Revoke, Medium → Alert), then executed with a per-(actor,action) 60 s cooldown. The
@@ -270,6 +274,68 @@ object Server extends IOApp.Simple:
       password = pg.getString("password"),
       poolSize = pg.getInt("pool-size")
     )
+
+  /** Build the audit sink (#19). Resource-scoped so a Postgres-backed sink's connection pool is released
+    * cleanly on shutdown. Also starts the retention fiber if the sink supports `pruneBefore` (Postgres does;
+    * stdout doesn't).
+    *
+    *   - `aegis.audit.kind=stdout` — `StdoutAuditSink` writes to console. No retention.
+    *   - `aegis.audit.kind=postgres` — `PostgresAuditSink` against the configured journal credentials (the
+    *     audit table lives in the same database as the event journal). A daily retention fiber prunes rows
+    *     older than `aegis.audit.retention.days`.
+    */
+  private def auditSinkResource(config: Config): Resource[IO, AuditSink[IO]] =
+    config.getString("aegis.audit.kind") match
+      case "stdout" =>
+        Resource.eval(IO {
+          logger.info("audit: stdout (set aegis.audit.kind=postgres to enable indexed audit storage)")
+          StdoutAuditSink()
+        })
+      case "postgres" =>
+        val pgConfig   = readPostgresJournalConfig(config)
+        val retentionD = config.getInt("aegis.audit.retention.days")
+        for
+          _ <- Resource.eval(IO(logger.info(
+            s"audit: postgres at ${pgConfig.jdbcUrl} (retention=${retentionD}d)"
+          )))
+          sink <- PostgresAuditSink.make(pgConfig)
+          // Retention fiber: every 24h, delete rows older than `retentionD` days. Skip when
+          // retentionD <= 0 (operator opt-out — audit grows unbounded). The fiber lives for the
+          // life of the boot Resource and is cancelled when the server shuts down.
+          _ <- retentionFiberResource(sink, retentionD)
+        yield sink
+      case other =>
+        Resource.eval(IO.raiseError(new IllegalArgumentException(
+          s"Unknown aegis.audit.kind=$other (expected 'stdout' or 'postgres')"
+        )))
+
+  /** Background fiber that prunes audit rows older than `retentionDays` once a day. No-op when `retentionDays
+    * <= 0`. Cancellation on Resource release stops the fiber cleanly.
+    */
+  private def retentionFiberResource(
+      sink: PostgresAuditSink,
+      retentionDays: Int
+  ): Resource[IO, Unit] =
+    if retentionDays <= 0 then
+      Resource.eval(IO(logger.warn(
+        "audit retention disabled (aegis.audit.retention.days=0) — table will grow unbounded"
+      )))
+    else
+      val loop: IO[Unit] =
+        val tick: IO[Unit] =
+          for
+            now <- IO.realTimeInstant
+            cutoff = now.minus(java.time.Duration.ofDays(retentionDays.toLong))
+            deleted <- sink.pruneBefore(cutoff).handleErrorWith { t =>
+              IO(logger.warn(s"audit retention prune failed: ${t.getMessage}", t)).as(0L)
+            }
+            _ <- IO(logger.info(s"audit retention: pruned $deleted rows older than $cutoff"))
+          yield ()
+        // Forever loop: 24h sleep, then prune. Initial delay so the first prune doesn't compete
+        // with the rest of boot.
+        (IO.sleep(scala.concurrent.duration.FiniteDuration(24L, scala.concurrent.duration.HOURS))
+          *> tick).foreverM
+      Resource.make(loop.start)(fiber => fiber.cancel).void
 
   /** Build the `AgentTokenIssuer` that backs `POST /v1/agents/issue`.
     *

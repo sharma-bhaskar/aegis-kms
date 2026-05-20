@@ -8,6 +8,26 @@ All notable changes to Aegis will be documented here. This project follows
 
 ### Added
 
+- **Postgres audit table with indexed schema + retention (closes #19).** New
+  `PostgresAuditSink` in `aegis-audit` writes every `AuditRecord` into a Doobie-backed
+  `aegis_audit_events` table with one composite index per #20 audit-read filter
+  (`actor_subject`, `resource`, `operation`, each paired with `occurred_at DESC`) plus a plain
+  `occurred_at` index for retention scans. `context` is stored as JSONB so the existing
+  `risk.score` / `outcome.decision` / `agent.jti` / etc. context keys survive without DDL churn —
+  SIEM consumers query individual fields via `context->>'risk.score'`. Schema bootstraps on
+  startup via `CREATE TABLE IF NOT EXISTS` + `CREATE INDEX IF NOT EXISTS` (idempotent; no Flyway
+  dep yet). `actor_kind` column denormalises the `Principal` ADT discriminator
+  (`Human` / `Service` / `Agent`) for fast filter scans. Retention via a `pruneBefore(cutoff)`
+  method on the sink; `Server.boot` starts a background fiber that runs once daily and deletes
+  rows older than `aegis.audit.retention.days` (default 365). Set `AEGIS_AUDIT_KIND=postgres` to
+  enable; the existing `AEGIS_JDBC_URL` / `_USERNAME` / `_PASSWORD` env vars are reused (audit
+  table lives in the same database as the event journal — operators configure one set of
+  credentials). New `PostgresAuditSinkSpec` covers 8 Testcontainers cases (idempotent bootstrap,
+  every-column write fidelity, principal-kind discrimination, empty-context default,
+  insertion-order preservation, retention `pruneBefore` with strict `<` cutoff semantics +
+  empty-table case, JSONB round-trip with newlines / quotes / unicode / long strings),
+  Docker-gated via the existing `assume(dockerAvailable, ...)` pattern.
+
 - **Agent-token issuance endpoint `POST /v1/agents/issue` (closes #18).** Exposes the existing
   `JwtIssuer` over REST so operators (and the upcoming `aegis agent issue` CLI) can mint
   short-lived agent JWTs programmatically. New `AgentTokenIssuer` in `aegis-iam` wraps the issuer

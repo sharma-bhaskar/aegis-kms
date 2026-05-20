@@ -104,7 +104,11 @@ lazy val audit = (project in file("modules/aegis-audit"))
     commonSettings,
     name := "aegis-audit",
     description :=
-      "Append-only audit sink SPI for Aegis-KMS plus the stdout / in-memory implementations."
+      "Append-only audit sink SPI for Aegis-KMS plus the stdout / in-memory / Postgres implementations.",
+    // Doobie is available transitively via `persistence`, but the Postgres audit sink (#19) reads
+    // doobie types in its own .scala file — declaring them explicitly here makes the dependency
+    // load-bearing rather than incidental.
+    libraryDependencies ++= Dependencies.persistence ++ Dependencies.testcontainersPostgres
   )
 
 lazy val sdkScala = (project in file("modules/aegis-sdk-scala"))
