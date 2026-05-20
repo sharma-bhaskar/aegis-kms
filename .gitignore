@@ -38,3 +38,10 @@ site/
 .venv-docs/
 __pycache__/
 *.pyc
+
+# Internal / non-public paths — never push these to the public repo.
+# `CLAUDE.md` is the Claude Code project guide (assistant-only context, not user docs).
+# `marketing/` holds internal investor + launch content (pitch decks, target lists, draft posts);
+# files stay in the working tree for local editing but must never land in the public repo.
+CLAUDE.md
+marketing/
