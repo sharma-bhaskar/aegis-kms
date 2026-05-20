@@ -39,7 +39,7 @@ roadmapped, not shipped.
 | `Principal.Human` / `Principal.Agent` ADT | :material-check: Shipped | Sealed trait, total case analysis |
 | Dev-mode `X-Aegis-User` header | :material-check: Shipped | Workstation only |
 | JWT bearer auth (HS256) | :material-check: Shipped | Configurable secret |
-| OIDC / JWKS verification | :material-progress-clock: WIP | v0.2.0 |
+| OIDC / JWKS verification + RS256/ES256 | :material-blueprint: Designed | v0.2.0 (#25 — trait in place, no impl) |
 | Agent-token issuance endpoint | :material-blueprint: Designed | v0.2.0 |
 | Policy engine (rules richer than allow/deny per principal) | :material-blueprint: Designed | v0.3.0 |
 
@@ -78,10 +78,10 @@ roadmapped, not shipped.
 
 | Capability | Status | Detail |
 |---|---|---|
-| AWS KMS | :material-check: Shipped | Full sign/verify/encrypt/decrypt/wrap/unwrap |
-| GCP KMS | :material-blueprint: Designed | v0.2.0 |
-| Azure Key Vault | :material-blueprint: Designed | v0.2.0 |
-| HashiCorp Vault Transit | :material-blueprint: Designed | v0.2.0 |
+| AWS KMS | :material-check: Shipped | Full sign/verify/encrypt/decrypt/wrap/unwrap. `Server.boot` wires it when `aegis.crypto.kind=aws-kms` (with region + KEK ARN env vars). |
+| GCP KMS | :material-blueprint: Designed | v0.3.0 (per ROADMAP §3.0.a) |
+| Azure Key Vault | :material-blueprint: Designed | v0.3.0 (per ROADMAP §3.0.b) |
+| HashiCorp Vault Transit | :material-blueprint: Designed | v0.3.0 (per ROADMAP §3.0.c) |
 | PKCS#11 / HSM | :material-blueprint: Designed | v0.4.0 |
 
 ### Wire planes
@@ -89,8 +89,8 @@ roadmapped, not shipped.
 | Capability | Status | Detail |
 |---|---|---|
 | REST `/v1/keys/*` | :material-check: Shipped | Full surface, OpenAPI documented |
-| KMIP server (TCP + TLS) | :material-blueprint: Designed | Skeleton in `aegis-kmip`; v0.2.0 lands the wire |
-| MCP server (LLM tool surface) | :material-blueprint: Designed | Skeleton in `aegis-mcp-server`; v0.2.0 |
+| KMIP server (TCP + TLS) | :material-blueprint: Designed | Trait + DTO skeleton in `aegis-kmip`; v0.4.0 lands the wire (per ROADMAP §4.0.a–c) |
+| MCP server (LLM tool surface) | :material-blueprint: Designed | Skeleton (`tools` list only) in `aegis-mcp-server`; v0.4.0 (per ROADMAP §4.0.e) |
 | Agent-AI plane | :material-check: Shipped | Detector + risk scorer + decision adapter + auto-responder all wired in `Server.boot` |
 
 ### Distribution & deployment

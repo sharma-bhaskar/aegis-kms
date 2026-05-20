@@ -1,6 +1,6 @@
 package dev.aegiskms.crypto.aws
 
-import cats.effect.IO
+import cats.effect.{IO, Resource}
 import dev.aegiskms.core.{
   Algorithm,
   Ciphertext,
@@ -156,9 +156,28 @@ object AwsKmsRootOfTrust:
   def withPort(port: AwsKmsPort, kekArn: String): AwsKmsRootOfTrust =
     new AwsKmsRootOfTrust(port, kekArn)
 
-  /** Build a default AWS-region-configured client and wrap. Suitable for production. */
+  /** Build a default AWS-region-configured client and wrap. Suitable for production.
+    *
+    * The returned `AwsKmsRootOfTrust` owns a `KmsClient` that is **never closed**. Use this only for one-shot
+    * scripts, embedder code that manages its own KMS-client lifecycle, or tests. Long-running servers should
+    * use [[resource]] instead, which wraps the client in a cats-effect `Resource` and closes it on shutdown.
+    */
   def fromConfig(cfg: Config): AwsKmsRootOfTrust =
     val client: KmsClient = KmsClient.builder()
       .region(software.amazon.awssdk.regions.Region.of(cfg.region))
       .build()
     new AwsKmsRootOfTrust(AwsKmsPort.fromClient(client), cfg.kekArn)
+
+  /** Resource-managed builder for `AwsKmsRootOfTrust`. The underlying `KmsClient` is `AutoCloseable` and is
+    * registered with cats-effect `Resource` so the connection-pool / metric-publisher / SDK background
+    * threads inside the client are released on `SIGTERM`. This is the right constructor for `Server.boot`.
+    */
+  def resource(cfg: Config): Resource[IO, AwsKmsRootOfTrust] =
+    Resource
+      .fromAutoCloseable(IO {
+        KmsClient
+          .builder()
+          .region(software.amazon.awssdk.regions.Region.of(cfg.region))
+          .build()
+      })
+      .map(client => new AwsKmsRootOfTrust(AwsKmsPort.fromClient(client), cfg.kekArn))
