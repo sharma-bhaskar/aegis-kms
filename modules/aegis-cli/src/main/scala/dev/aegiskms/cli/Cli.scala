@@ -28,8 +28,34 @@ object Cli:
       case "keys" :: subcmd :: rest =>
         keysCommand(subcmd, rest, cfg, makeClient)
 
-      case "agent" :: "issue" :: _  => Commands.agentIssue
-      case "audit" :: "tail" :: _   => Commands.auditTail
+      case "agent" :: "issue" :: rest =>
+        parseAgentIssue(rest) match
+          case Right((label, scopes, ttl, parent)) =>
+            Commands.agentIssue(makeClient(cfg), label, scopes, ttl, parent)
+          case Left(msg) => CommandResult.err(s"$msg\n\n${agentIssueHelp}")
+
+      case "audit" :: "tail" :: rest =>
+        parseAuditTail(rest) match
+          case Right(filter) =>
+            if filter.watch then
+              // Watch mode is the only place `Cli` does real-time IO (it polls every 2 s,
+              // shifting `since` forward on each tick). We accept the impurity here because
+              // the alternative — pushing the loop into `Commands` — would either pollute
+              // every command with a streaming hook or require a second abstraction layer.
+              runAuditWatch(makeClient(cfg), filter)
+            else
+              Commands.auditTail(
+                makeClient(cfg),
+                filter.since,
+                filter.until,
+                filter.actor,
+                filter.key,
+                filter.op,
+                filter.limit,
+                filter.offset
+              )
+          case Left(msg) => CommandResult.err(s"$msg\n\n${auditTailHelp}")
+
       case "advisor" :: "scan" :: _ => Commands.advisorScan
 
       case unknown =>
@@ -258,6 +284,131 @@ object Cli:
       case List(k, v) if k.startsWith("--") => k -> v
     }.toMap
 
+  /** Detect boolean flags (`--watch`, etc.) that take no value. The pair-stride parser above skips these; we
+    * look for them with a separate pass.
+    */
+  private def hasFlag(args: List[String], name: String): Boolean = args.contains(name)
+
+  /** Parse `aegis agent issue --label … --scopes Sign,Get --ttl 3600 [--parent alice@org]`.
+    *
+    * Scopes are comma-separated `Operation` enum names — the server validates them. TTL is in seconds. Parent
+    * is optional; when omitted the server uses the calling principal's subject.
+    */
+  private[cli] def parseAgentIssue(
+      args: List[String]
+  ): Either[String, (String, List[String], Long, Option[String])] =
+    val flags = parseFlags(args)
+    for
+      label <- flags.get("--label").filter(_.nonEmpty)
+        .toRight("agent issue: --label <text> is required (non-empty)")
+      scopesRaw <- flags.get("--scopes").filter(_.nonEmpty)
+        .toRight("agent issue: --scopes <Op,Op,…> is required (non-empty)")
+      ttlRaw <- flags.get("--ttl").toRight("agent issue: --ttl <seconds> is required")
+      ttl <- ttlRaw.toLongOption.filter(_ > 0)
+        .toRight(s"agent issue: --ttl must be a positive integer (was '$ttlRaw')")
+    yield
+      val scopes = scopesRaw.split(",").iterator.map(_.trim).filter(_.nonEmpty).toList
+      val parent = flags.get("--parent").filter(_.nonEmpty)
+      (label, scopes, ttl, parent)
+
+  /** Filter type for the `audit tail` parser. Kept as a small case class instead of a 7-tuple so the
+    * `Cli.run` dispatch site reads cleanly.
+    */
+  final private[cli] case class AuditTailFilter(
+      since: Option[String],
+      until: Option[String],
+      actor: Option[String],
+      key: Option[String],
+      op: Option[String],
+      limit: Option[Int],
+      offset: Option[Int],
+      watch: Boolean
+  )
+
+  /** Parse `aegis audit tail [--since …] [--until …] [--actor …] [--key …] [--op …] [--limit n] [--offset n]
+    * [--watch]`.
+    *
+    * All flags are optional. `--limit` and `--offset` must parse as positive integers if provided. `--watch`
+    * is a boolean flag (no value) — when present, `Cli.run` runs the polling loop.
+    */
+  private[cli] def parseAuditTail(args: List[String]): Either[String, AuditTailFilter] =
+    // Strip `--watch` before the pair-stride parser so it doesn't accidentally consume the next
+    // flag as its value.
+    val watch  = hasFlag(args, "--watch")
+    val rest   = args.filterNot(_ == "--watch")
+    val flags  = parseFlags(rest)
+    val since  = flags.get("--since").filter(_.nonEmpty)
+    val until  = flags.get("--until").filter(_.nonEmpty)
+    val actor  = flags.get("--actor").filter(_.nonEmpty)
+    val key    = flags.get("--key").filter(_.nonEmpty)
+    val op     = flags.get("--op").filter(_.nonEmpty)
+    val limit  = flags.get("--limit")
+    val offset = flags.get("--offset")
+    for
+      l <- limit match
+        case None => Right(None)
+        case Some(v) =>
+          v.toIntOption.filter(_ > 0).map(Some(_))
+            .toRight(s"audit tail: --limit must be a positive integer (was '$v')")
+      o <- offset match
+        case None => Right(None)
+        case Some(v) =>
+          v.toIntOption.filter(_ >= 0).map(Some(_))
+            .toRight(s"audit tail: --offset must be a non-negative integer (was '$v')")
+    yield AuditTailFilter(since, until, actor, key, op, l, o, watch)
+
+  /** Watch-mode loop: print one page, then poll every 2 s for new records (using the last seen `at` as the
+    * new `since`). Runs indefinitely until the JVM is killed. Sleeps via `Thread.sleep` because the CLI is
+    * synchronous; the rest of the codebase uses cats-effect but dragging IO/IOApp into the CLI's startup path
+    * doubles its boot time.
+    *
+    * Returns a `CommandResult` only if the initial query fails — once we're in the polling loop the process
+    * runs until SIGINT.
+    */
+  private def runAuditWatch(client: AegisHttpClient, initial: AuditTailFilter): CommandResult =
+    var since = initial.since
+    var first = true
+    while true do
+      Commands.auditTail(
+        client,
+        since,
+        initial.until,
+        initial.actor,
+        initial.key,
+        initial.op,
+        initial.limit,
+        initial.offset
+      ) match
+        case res if res.exitCode == 0 =>
+          if res.stdout.nonEmpty then println(res.stdout)
+          // Advance `since` to the highest `at` we just saw. If the page was empty we keep the
+          // previous `since` so we don't lose ground.
+          val nextSince = extractMaxAt(res.stdout).orElse(since)
+          since = nextSince
+          first = false
+          Thread.sleep(2000)
+        case failure =>
+          // Surface the first failure as the CLI exit. Subsequent transient failures would just
+          // keep retrying — in v0.2.0 we keep it simple and exit on the first one.
+          if first then return failure
+          else
+            System.err.println(failure.stderr)
+            Thread.sleep(5000) // back off on errors during a watch session
+    // Unreachable; satisfies the type checker.
+    CommandResult.out("")
+
+  /** Pull the latest `at:` timestamp out of an `audit tail` page render so the next watch tick uses it as the
+    * new `since`. Returns `None` if the page didn't contain any `at:` lines — which is the case for the
+    * empty-page footer.
+    */
+  private def extractMaxAt(rendered: String): Option[String] =
+    val atLines = rendered.linesIterator
+      .map(_.trim)
+      .filter(_.startsWith("at:"))
+      .map(_.stripPrefix("at:").trim)
+      .toList
+    if atLines.isEmpty then None else Some(atLines.max)
+
   // ── Help text ──────────────────────────────────────────────────────────────
 
   private def help: CommandResult = CommandResult.out(
@@ -278,8 +429,9 @@ object Cli:
       |  aegis keys unwrap --id <id> --wrapped <b64>
       |  aegis keys compromise --id <id> --reason "<text>"
       |  aegis keys rotate --id <id> [--policy Manual|TimeBased:7days|OpCountBased:N]
-      |  aegis agent issue        (planned — PR A1)
-      |  aegis audit tail         (planned — PR F2.b)
+      |  aegis agent issue --label <text> --scopes Op,Op,… --ttl <seconds> [--parent <subject>]
+      |  aegis audit tail [--since <ISO>] [--until <ISO>] [--actor <subject>] [--key <id>]
+      |                   [--op <name>] [--limit <n>] [--offset <n>] [--watch]
       |  aegis advisor scan       (planned — PR W4)
       |
       |Config: $AEGIS_CONFIG, or ~/.aegis/config.json
@@ -287,6 +439,24 @@ object Cli:
   )
 
   private val loginHelp: String = "Usage: aegis login --server <url> [--principal <subject>]"
+  private val agentIssueHelp: String =
+    """Usage: aegis agent issue --label <text> --scopes Op,Op,… --ttl <seconds> [--parent <subject>]
+      |
+      |  --label   Human-readable purpose (e.g. claude-invoice-batch-q2)
+      |  --scopes  Comma-separated KMIP Operation names (Sign,Get,Encrypt,…)
+      |  --ttl     Token lifetime in seconds (1–86400)
+      |  --parent  Optional; defaults to the calling principal's subject""".stripMargin
+  private val auditTailHelp: String =
+    """Usage: aegis audit tail [filters] [--watch]
+      |
+      |  --since <ISO>   Half-open lower bound on occurred_at (inclusive)
+      |  --until <ISO>   Half-open upper bound on occurred_at (exclusive)
+      |  --actor <sub>   Exact match on actor_subject (e.g. alice@org, agent-7a3)
+      |  --key <id>      Exact match on resource (e.g. key:abc-123)
+      |  --op <name>     KMIP Operation enum name (Sign, Get, Encrypt, …)
+      |  --limit <n>     Page size; default 100, max 1000
+      |  --offset <n>    Starting row offset; default 0
+      |  --watch         Poll every 2 s for new records (tail -f UX)""".stripMargin
   private val keysHelp: String =
     """Usage:
       |  aegis keys create --alg <ALG> --name <NAME>

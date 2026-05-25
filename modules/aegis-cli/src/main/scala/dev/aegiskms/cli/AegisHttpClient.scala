@@ -110,6 +110,47 @@ final class AegisHttpClient(http: HttpPort, baseUrl: String, principal: Option[S
       case 200    => decodeBody[ManagedKeyDto](res.body)
       case status => Left(toError(status, res.body))
 
+  /** POST /v1/agents/issue — mint an agent JWT for the calling human. */
+  def issueAgent(req: IssueAgentRequestDto): Either[ClientError, IssueAgentResponseDto] =
+    val body    = req.asJson.noSpaces
+    val headers = baseHeaders + ("Content-Type" -> "application/json")
+    val res     = http.execute(HttpPort.Request("POST", url("/v1/agents/issue"), headers, Some(body)))
+    res.status match
+      case 201    => decodeBody[IssueAgentResponseDto](res.body)
+      case status => Left(toError(status, res.body))
+
+  /** GET /v1/audit — paginated audit-read with filters. Each filter is encoded as a query param iff the
+    * caller supplied it; absent filters are omitted entirely so the server's defaults kick in.
+    */
+  def queryAudit(
+      since: Option[String] = None,
+      until: Option[String] = None,
+      actor: Option[String] = None,
+      key: Option[String] = None,
+      op: Option[String] = None,
+      limit: Option[Int] = None,
+      offset: Option[Int] = None
+  ): Either[ClientError, AuditQueryResponseDto] =
+    val params = List(
+      since.map(v => "since" -> v),
+      until.map(v => "until" -> v),
+      actor.map(v => "actor" -> v),
+      key.map(v => "key" -> v),
+      op.map(v => "op" -> v),
+      limit.map(v => "limit" -> v.toString),
+      offset.map(v => "offset" -> v.toString)
+    ).flatten
+    val qs =
+      if params.isEmpty then ""
+      else
+        params.map { case (k, v) =>
+          s"$k=${java.net.URLEncoder.encode(v, java.nio.charset.StandardCharsets.UTF_8)}"
+        }.mkString("?", "&", "")
+    val res = http.execute(HttpPort.Request("GET", url(s"/v1/audit$qs"), baseHeaders, None))
+    res.status match
+      case 200    => decodeBody[AuditQueryResponseDto](res.body)
+      case status => Left(toError(status, res.body))
+
   // ── Helpers ────────────────────────────────────────────────────────────────
 
   private def url(path: String): String =

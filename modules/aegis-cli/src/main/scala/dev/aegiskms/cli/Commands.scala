@@ -2,11 +2,13 @@ package dev.aegiskms.cli
 
 import dev.aegiskms.cli.AegisHttpClient.{ClientError, renderError}
 import dev.aegiskms.cli.WireFormats.{
+  AuditRecordDto,
   CompromiseRequest,
   DecryptRequest,
   DecryptResponse,
   EncryptRequest,
   EncryptResponse,
+  IssueAgentRequestDto,
   KeySpecDto,
   ManagedKeyDto,
   RotateRequest,
@@ -225,24 +227,60 @@ object Commands:
         )
       case Left(err) => CommandResult.err(renderError(err), exitCodeFor(err))
 
-  // ── placeholders for agent-native commands (backends arrive in later PRs) ──
+  // ── Agent issuance (#18 backend, #79 CLI) ────────────────────────────────
 
-  /** `aegis agent issue` — issues a scoped agent token. Real implementation lands once the agent-token
-    * issuance endpoint exists (PR A1). This stub at least makes the command discoverable in `--help` and
-    * produces a clear "not yet wired up" message instead of an obscure 404.
+  /** `aegis agent issue --label … --scopes Sign,Get --ttl 3600 [--parent …]` — mint a short-lived agent JWT
+    * against `POST /v1/agents/issue`. The output is shell-substitution friendly: each field on its own line
+    * so a user can `eval $(aegis agent issue … | grep '^export')` if they want, or copy individual values.
     */
-  def agentIssue: CommandResult =
-    CommandResult.err(
-      "agent issue: not yet wired up — the agent-token issuance endpoint ships in PR A1.",
-      code = 2
-    )
+  def agentIssue(
+      client: AegisHttpClient,
+      label: String,
+      scopes: List[String],
+      ttlSeconds: Long,
+      parent: Option[String]
+  ): CommandResult =
+    val req = IssueAgentRequestDto(label, scopes, ttlSeconds, parent)
+    client.issueAgent(req) match
+      case Right(resp) =>
+        CommandResult.out(
+          s"""agentId:   ${resp.agentId}
+             |jti:       ${resp.jti}
+             |expiresAt: ${resp.expiresAt}
+             |jwt:       ${resp.jwt}""".stripMargin
+        )
+      case Left(err) => CommandResult.err(renderError(err), exitCodeFor(err))
 
-  /** `aegis audit tail` — streams the audit feed. Awaiting an audit-streaming endpoint (PR F2.b). */
-  def auditTail: CommandResult =
-    CommandResult.err(
-      "audit tail: not yet wired up — server-side audit streaming ships in PR F2.b.",
-      code = 2
-    )
+  // ── Audit-read (#20 backend, #79 CLI) ─────────────────────────────────────
+
+  /** `aegis audit tail [--since …] [--actor …] [--key …] [--op …] [--limit n] [--offset n] [--watch]`
+    *
+    * Single-shot mode (default): one `GET /v1/audit` call, print the page, exit. Watch mode is orchestrated
+    * by `Cli.scala` (it loops, calling this method repeatedly with an updated `--since` to emulate `tail
+    * -f`); the `Commands` layer stays a pure single-call shape so it remains unit-testable.
+    */
+  def auditTail(
+      client: AegisHttpClient,
+      since: Option[String],
+      until: Option[String],
+      actor: Option[String],
+      key: Option[String],
+      op: Option[String],
+      limit: Option[Int],
+      offset: Option[Int]
+  ): CommandResult =
+    client.queryAudit(since, until, actor, key, op, limit, offset) match
+      case Right(page) =>
+        if page.records.isEmpty then
+          CommandResult.out(s"(no records; offset=${page.offset}, limit=${page.limit})")
+        else
+          val body = page.records.map(formatAuditRecord).mkString("\n---\n")
+          val footer =
+            s"\n---\n(${page.records.size} record(s); offset=${page.offset}, limit=${page.limit}, hasMore=${page.hasMore})"
+          CommandResult.out(body + footer)
+      case Left(err) => CommandResult.err(renderError(err), exitCodeFor(err))
+
+  // ── Placeholder for AI advisor (W4, deferred) ─────────────────────────────
 
   /** `aegis advisor scan` — runs the LLM advisor against recent audit data. Awaits PR W4. */
   def advisorScan: CommandResult =
@@ -250,6 +288,24 @@ object Commands:
       "advisor scan: not yet wired up — the LLM advisor ships in PR W4.",
       code = 2
     )
+
+  /** Render a single audit record for terminal output. Multi-line; the leading field labels are
+    * column-aligned so a glance picks out the actor / operation / outcome quickly.
+    */
+  private def formatAuditRecord(r: AuditRecordDto): String =
+    val ctxLine =
+      if r.context.isEmpty then ""
+      else
+        "\ncontext:    " + r.context.toSeq
+          .sortBy(_._1)
+          .map { case (k, v) => s"$k=$v" }
+          .mkString(", ")
+    s"""at:         ${r.at}
+       |actor:      ${r.actor} (${r.actorKind})
+       |operation:  ${r.operation}
+       |resource:   ${r.resource}
+       |outcome:    ${r.outcome}
+       |corrId:     ${r.correlationId}$ctxLine""".stripMargin
 
   // ── Helpers ────────────────────────────────────────────────────────────────
 

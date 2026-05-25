@@ -8,6 +8,29 @@ All notable changes to Aegis will be documented here. This project follows
 
 ### Added
 
+- **CLI `agent issue` + `audit tail` subcommands (closes #79).** The two demo-critical CLI
+  surfaces moved from stubs (`(planned — PR A1)` / `(planned — PR F2.b)`) to real
+  implementations against the v0.2.0 backends.
+  - **`aegis agent issue --label … --scopes Op,Op,… --ttl <seconds> [--parent <subject>]`** —
+    POSTs to `/v1/agents/issue` and prints `agentId`, `jti`, `expiresAt`, and the bearer JWT
+    on separate lines so a shell user can copy individual values or grep them out.
+  - **`aegis audit tail [--since] [--until] [--actor] [--key] [--op] [--limit] [--offset]
+    [--watch]`** — GETs `/v1/audit` with the supplied filters URL-encoded. Default mode
+    prints one page; `--watch` polls every 2 s, advancing `--since` to the highest `at:`
+    seen so far (basic `tail -f` UX without dragging cats-effect into the CLI's startup
+    path).
+  - **`IssueAgentRequestDto` / `IssueAgentResponseDto` / `AuditRecordDto` /
+    `AuditQueryResponseDto`** mirrored into `aegis-cli/WireFormats.scala` (duplicated from
+    `aegis-http` on purpose — `aegis-cli` does not depend on Tapir + pekko-http to keep its
+    boot time low).
+  - **`AegisHttpClient`** gains `issueAgent` and `queryAudit` methods with the same
+    `Either[ClientError, A]` shape as the other endpoint wrappers, including the standard
+    `PermissionDenied → exit 5` / `ItemNotFound → exit 4` mapping.
+  - **Tests**: 11 new `CliSpec` cases covering required-flag errors, scope splitting/trimming,
+    URL encoding of query params (e.g. `actor=alice%40org`), the empty-page footer, and the
+    `--watch` boolean-flag parsing. Existing "agent/audit placeholder" assertions in
+    `CommandsSpec` and `CliSpec` updated — `advisor scan` is now the only remaining stub.
+
 - **Redis-backed JWT revocation list — JTI blacklist (closes #24).** The kill-switch
   primitive the auto-responder's "Revoke" action will use to invalidate an agent's bearer
   token before its natural expiry.

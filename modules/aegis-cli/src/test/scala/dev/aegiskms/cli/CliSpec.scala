@@ -160,11 +160,238 @@ final class CliSpec extends AnyFunSuite with Matchers:
     r.stderr should include("aegis keys create")
   }
 
-  test("placeholder commands still surface a clear non-zero exit so scripts notice") {
+  test("'advisor scan' is still a placeholder and surfaces a clear non-zero exit") {
+    // The only remaining stub in the CLI surface — `agent issue` and `audit tail` are wired up
+    // in #79; `advisor scan` waits for the AI advisor (PR W4).
     val factory = fakeClientFactory(200, sampleKey.asJson.noSpaces)
-    Cli.run(List("agent", "issue"), cfg, factory).exitCode should not be 0
-    Cli.run(List("audit", "tail"), cfg, factory).exitCode should not be 0
     Cli.run(List("advisor", "scan"), cfg, factory).exitCode should not be 0
+  }
+
+  // ── #79: agent issue ──────────────────────────────────────────────────────
+
+  test("'agent issue' missing --label reports a usage error and exits 1") {
+    val r = Cli.run(
+      List("agent", "issue", "--scopes", "Sign", "--ttl", "60"),
+      cfg,
+      fakeClientFactory(200, sampleKey.asJson.noSpaces)
+    )
+    r.exitCode shouldBe 1
+    r.stderr should include("--label")
+  }
+
+  test("'agent issue' rejects a non-positive --ttl with a clear error") {
+    val r = Cli.run(
+      List("agent", "issue", "--label", "demo", "--scopes", "Sign", "--ttl", "0"),
+      cfg,
+      fakeClientFactory(200, sampleKey.asJson.noSpaces)
+    )
+    r.exitCode shouldBe 1
+    r.stderr should include("--ttl")
+  }
+
+  test("'agent issue --label … --scopes … --ttl …' POSTs to /v1/agents/issue with parsed scopes") {
+    var captured: Option[HttpPort.Request] = None
+    val responseBody =
+      IssueAgentResponseDto(
+        agentId = "agent-7a3",
+        jwt = "eyJ.fake.jwt",
+        jti = "0000-jti",
+        expiresAt = Instant.parse("2026-05-25T10:00:00Z")
+      ).asJson.noSpaces
+    val r = Cli.run(
+      List(
+        "agent",
+        "issue",
+        "--label",
+        "claude-invoice-batch",
+        "--scopes",
+        "Sign, Get , Encrypt",
+        "--ttl",
+        "3600",
+        "--parent",
+        "alice@org"
+      ),
+      cfg,
+      captureFactory(req => captured = Some(req), responseBody, status = 201)
+    )
+    r.exitCode shouldBe 0
+    captured.get.method shouldBe "POST"
+    captured.get.url should endWith("/v1/agents/issue")
+    val body = captured.get.body.get
+    body should include("\"label\":\"claude-invoice-batch\"")
+    body should include("\"ttlSeconds\":3600")
+    body should include("\"parent\":\"alice@org\"")
+    // Scopes are split + trimmed, so the server sees a clean list rather than a single string.
+    body should include("\"scopes\":[\"Sign\",\"Get\",\"Encrypt\"]")
+    r.stdout should include("agentId:   agent-7a3")
+    r.stdout should include("jti:       0000-jti")
+    r.stdout should include("jwt:       eyJ.fake.jwt")
+  }
+
+  test("'agent issue' parser test: scopes are split, trimmed, and empty tokens dropped") {
+    val r = Cli.parseAgentIssue(
+      List("--label", "x", "--scopes", "Sign,, Get ,", "--ttl", "60")
+    )
+    r shouldBe Right(("x", List("Sign", "Get"), 60L, None))
+  }
+
+  test("'agent issue' renders server 403 with a PermissionDenied exit code (5)") {
+    val errBody =
+      KmsErrorDto("PermissionDenied", "only Humans may issue agent tokens").asJson.noSpaces
+    val r = Cli.run(
+      List("agent", "issue", "--label", "x", "--scopes", "Sign", "--ttl", "60"),
+      cfg,
+      fakeClientFactory(403, errBody)
+    )
+    r.exitCode shouldBe 5
+    r.stderr should include("PermissionDenied")
+  }
+
+  // ── #79: audit tail ───────────────────────────────────────────────────────
+
+  test("'audit tail' parser test: all flags default to None and watch=false") {
+    val r = Cli.parseAuditTail(Nil)
+    r shouldBe Right(
+      Cli.AuditTailFilter(None, None, None, None, None, None, None, watch = false)
+    )
+  }
+
+  test("'audit tail' parser test: --limit / --offset must parse as integers") {
+    Cli.parseAuditTail(List("--limit", "abc")).isLeft shouldBe true
+    Cli.parseAuditTail(List("--limit", "-1")).isLeft shouldBe true
+    Cli.parseAuditTail(List("--offset", "-1")).isLeft shouldBe true
+    Cli.parseAuditTail(List("--limit", "50", "--offset", "100")).map(f =>
+      (f.limit, f.offset)
+    ) shouldBe Right((Some(50), Some(100)))
+  }
+
+  test("'audit tail' parser test: --watch is recognised as a boolean flag") {
+    val r = Cli.parseAuditTail(List("--watch", "--actor", "alice@org"))
+    r.map(_.watch) shouldBe Right(true)
+    r.map(_.actor) shouldBe Right(Some("alice@org"))
+  }
+
+  test("'audit tail --actor alice --op Sign' issues a GET /v1/audit with url-encoded query params") {
+    var captured: Option[HttpPort.Request] = None
+    val responseBody = AuditQueryResponseDto(
+      records = List(
+        AuditRecordDto(
+          at = Instant.parse("2026-05-25T09:00:00Z"),
+          actor = "alice@org",
+          actorKind = "Human",
+          operation = "Sign",
+          resource = "key:abc",
+          outcome = "Allowed",
+          correlationId = "corr-1",
+          context = Map("source.ip" -> "10.0.0.1")
+        )
+      ),
+      limit = 100,
+      offset = 0,
+      hasMore = false
+    ).asJson.noSpaces
+    val r = Cli.run(
+      List("audit", "tail", "--actor", "alice@org", "--op", "Sign", "--limit", "50"),
+      cfg,
+      captureFactory(req => captured = Some(req), responseBody, status = 200)
+    )
+    r.exitCode shouldBe 0
+    captured.get.method shouldBe "GET"
+    captured.get.url should include("/v1/audit?")
+    captured.get.url should include("actor=alice%40org")
+    captured.get.url should include("op=Sign")
+    captured.get.url should include("limit=50")
+    r.stdout should include("actor:      alice@org (Human)")
+    r.stdout should include("operation:  Sign")
+    r.stdout should include("source.ip=10.0.0.1")
+  }
+
+  test("'agent issue' happy path without --parent omits the parent field on the wire") {
+    var captured: Option[HttpPort.Request] = None
+    val responseBody =
+      IssueAgentResponseDto(
+        agentId = "agent-no-parent",
+        jwt = "eyJ.fake",
+        jti = "j-1",
+        expiresAt = Instant.parse("2026-05-25T11:00:00Z")
+      ).asJson.noSpaces
+    val r = Cli.run(
+      List("agent", "issue", "--label", "demo", "--scopes", "Sign", "--ttl", "60"),
+      cfg,
+      captureFactory(req => captured = Some(req), responseBody, status = 201)
+    )
+    r.exitCode shouldBe 0
+    // `parent: Option[String]` is encoded as `"parent":null` by default circe — we want the
+    // server to apply its caller-subject default, so make sure we either omit the field or
+    // send null (both shapes are fine; we just lock in current behavior).
+    val body = captured.get.body.get
+    body should (include("\"parent\":null").or(not include "\"parent\":"))
+    r.stdout should include("agentId:   agent-no-parent")
+  }
+
+  test("'audit tail' renders multiple records separated by '---' with a record-count footer") {
+    val now = Instant.parse("2026-05-25T09:00:00Z")
+    val responseBody = AuditQueryResponseDto(
+      records = List(
+        AuditRecordDto(now, "alice@org", "Human", "Sign", "key:a", "Allowed", "c-1", Map.empty),
+        AuditRecordDto(
+          now.plusSeconds(1),
+          "agent-7a3",
+          "Agent",
+          "Get",
+          "key:b",
+          "Denied",
+          "c-2",
+          Map("reason" -> "stepUpRequired")
+        )
+      ),
+      limit = 100,
+      offset = 0,
+      hasMore = false
+    ).asJson.noSpaces
+    val r = Cli.run(List("audit", "tail"), cfg, fakeClientFactory(200, responseBody))
+    r.exitCode shouldBe 0
+    r.stdout should include("alice@org (Human)")
+    r.stdout should include("agent-7a3 (Agent)")
+    r.stdout should include("operation:  Get")
+    r.stdout should include("reason=stepUpRequired")
+    // Two records → exactly one separator between them (the footer adds one more).
+    r.stdout.split("\n---\n").length shouldBe 3
+    r.stdout should include("2 record(s)")
+  }
+
+  test("'audit tail' surfaces hasMore=true in the footer so users know to paginate") {
+    val responseBody = AuditQueryResponseDto(
+      records = List(
+        AuditRecordDto(
+          Instant.parse("2026-05-25T09:00:00Z"),
+          "alice@org",
+          "Human",
+          "Sign",
+          "key:a",
+          "Allowed",
+          "c-1",
+          Map.empty
+        )
+      ),
+      limit = 1,
+      offset = 0,
+      hasMore = true
+    ).asJson.noSpaces
+    val r = Cli.run(List("audit", "tail", "--limit", "1"), cfg, fakeClientFactory(200, responseBody))
+    r.exitCode shouldBe 0
+    r.stdout should include("hasMore=true")
+  }
+
+  test("'audit tail' on an empty page prints a friendly empty-state line, not a blank") {
+    val responseBody = AuditQueryResponseDto(Nil, 100, 0, hasMore = false).asJson.noSpaces
+    val r = Cli.run(
+      List("audit", "tail"),
+      cfg,
+      fakeClientFactory(200, responseBody)
+    )
+    r.exitCode shouldBe 0
+    r.stdout should include("(no records")
   }
 
   test("entirely unknown command produces an error and includes the help block") {
