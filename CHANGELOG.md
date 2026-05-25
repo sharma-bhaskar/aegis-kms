@@ -8,6 +8,46 @@ All notable changes to Aegis will be documented here. This project follows
 
 ### Added
 
+- **OIDC verifier + JWKS rotation + RS256/ES256 (closes #25).** Production-grade auth path.
+  Previously the server could only accept HS256 JWTs signed with a single shared secret
+  (`aegis.auth.kind=hmac`) — disqualifying for any real evaluator. New
+  `aegis.auth.kind=oidc` mode verifies tokens against an OIDC provider's JWKS endpoint
+  (RS256 / RS384 / RS512 / ES256 / ES384 / ES512). Components shipped:
+  - **`JwksProvider` SPI** in `aegis-iam` with `http(uri, ttl)` (production) +
+    `static(set)` (tests). The HTTP impl caches the `JwkSet` with a configurable TTL and
+    refreshes lazily on `kid` miss — handles provider key rotation without operator action
+    or Aegis restart. Uses `java.net.http.HttpClient` so the library tier doesn't pick up
+    Pekko / sttp / http4s as a transitive dep.
+  - **`JwkSet`** value type holding parsed `java.security.PublicKey` values keyed by `kid`,
+    parsed from RFC 7517 JWKS JSON via jjwt's `Jwks.parser()` (gives RSA / EC support for
+    free).
+  - **`OidcJwtVerifier`** implements the existing `JwtVerifier` trait. Per-verify flow: read
+    `kid` from the token header, look up the key in the cached JWKS (refresh on miss),
+    verify the signature with the resolved public key via `Jwts.parser().keyLocator(...)`,
+    validate `iss` against `expectedIssuer` (defends against token substitution across
+    shared cloud-IDP key sets), validate `aud` against `expectedAudience` if configured,
+    extract the `aegis_kind` / `aegis_groups` / `aegis_*` extension claims into the existing
+    `JwtClaims.Human` / `JwtClaims.Agent` shape.
+  - **Algorithm-confusion defence.** Passing a `PublicKey` to `verifyWith` makes jjwt refuse
+    `HS256` tokens forged against the public key bytes — the classic
+    "alg=RS256→alg=HS256 with public key as HMAC secret" attack is impossible.
+    `parseSignedClaims` also refuses `alg=none`.
+  - **`OidcJwtVerifier.fromIssuer(issuerUri, audience, ttl)`** — one-step factory that
+    fetches `/.well-known/openid-configuration`, extracts `jwks_uri`, builds the verifier.
+  - **`Server.boot`** wires `aegis.auth.kind=oidc` with the new HOCON keys
+    `aegis.auth.oidc.issuer-uri` (`AEGIS_AUTH_OIDC_ISSUER_URI`), `aegis.auth.oidc.audience`
+    (`AEGIS_AUTH_OIDC_AUDIENCE`, optional), and `aegis.auth.oidc.jwks-cache-ttl-seconds`
+    (`AEGIS_AUTH_OIDC_JWKS_CACHE_TTL_SECONDS`, default 3600). Empty / missing `issuer-uri`
+    fails fast at boot — never silently falls back to dev. `buildResolver` is now
+    `IO[PrincipalResolver]` (was synchronous) so the OIDC path can hit the network during
+    boot.
+  - **Tests:** 11 cases in `OidcJwtVerifierSpec` covering RS256 + ES256 happy paths,
+    Agent-claim round-trip, audience-None opt-out, issuer mismatch, audience mismatch,
+    expired token, kid-not-in-JWKS, wrong-key-same-kid signature mismatch, malformed
+    garbage, missing `aegis_kind`. Keycloak Testcontainers integration is deferred to a
+    follow-up — the unit tests with hand-rolled RSA/EC keypairs exercise the verification
+    logic comprehensively without the CI cost of a Keycloak container.
+
 - **`AwsKmsRootOfTrust` wired into `Server.boot`.** Closes a doc-vs-code gap surfaced during the
   v0.2.0 readiness audit. The AWS adapter has shipped in the `aegis-crypto` library since v0.1.x
   (17 passing tests), but `Server.boot` was constructing `ActorBackedKeyService(system)` with the
