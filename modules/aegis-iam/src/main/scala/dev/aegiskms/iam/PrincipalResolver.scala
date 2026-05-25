@@ -93,3 +93,4 @@ object PrincipalResolver:
     case JwtError.SignatureInvalid      => "JWT signature invalid"
     case JwtError.Expired               => "JWT expired"
     case JwtError.InvalidClaims(reason) => s"invalid JWT claims: $reason"
+    case JwtError.Revoked(jti)          => s"JWT revoked (jti=$jti)"

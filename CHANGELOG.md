@@ -8,6 +8,41 @@ All notable changes to Aegis will be documented here. This project follows
 
 ### Added
 
+- **Redis-backed JWT revocation list — JTI blacklist (closes #24).** The kill-switch
+  primitive the auto-responder's "Revoke" action will use to invalidate an agent's bearer
+  token before its natural expiry.
+  - **`RevocationList[F[_]]` SPI** in `aegis-iam`: `isRevoked(jti)` + `revoke(jti, expiresAt)`.
+    Three impls ship: `RevocationList.noop` (never revoked), `RevocationList.inMemory`
+    (process-local `Ref[Map[jti, expiresAt]]`, lazy TTL evict on read + prune on revoke), and
+    `RedisRevocationList` (in `aegis-server`, Lettuce-backed, key-per-jti with `PEXPIREAT`).
+  - **`RevocationAwareJwtVerifier`** decorator wraps any inner `JwtVerifier` and consults the
+    list after signature + claims validation passes. Inner rejections (Expired,
+    SignatureInvalid, …) short-circuit before the lookup — saves a Redis round-trip on
+    already-bad tokens. Tokens without a `jti` (legacy / non-Aegis-issued) pass through
+    unchecked.
+  - **`JwtError.Revoked(jti)`** variant. `PrincipalResolver.jwt` maps it to
+    `AuthenticationNotSuccessful` with a `"JWT revoked (jti=…)"` message so operators can
+    distinguish "expired naturally" from "killed by auto-responder / admin revoke".
+  - **Fail-open on Redis outage.** `isRevoked` returns `false` if the Redis call throws,
+    logging a `warn`. Bounded security gap = token TTL; the alternative (fail-closed)
+    would create a global outage on a partial-store failure. Operators who need
+    fail-closed semantics can wrap the impl.
+  - **`Server.boot` wiring.** New `aegis.iam.revocation.kind` HOCON key
+    (`none` | `in-memory` (default) | `redis`) + `AEGIS_REVOCATION_KIND` /
+    `AEGIS_REVOCATION_REDIS_URI` / `AEGIS_REVOCATION_REDIS_KEY_PREFIX` env vars. Empty
+    Redis URI when `kind=redis` fails fast at boot — no silent fallback.
+    `buildResolver` now takes the `RevocationList` and wraps the constructed verifier
+    (HMAC / OIDC) with `RevocationAwareJwtVerifier` automatically.
+  - **Lettuce-based Redis client** (`io.lettuce:lettuce-core` 6.4.0). Single-jar dep,
+    synchronous `RedisCommands` wrapped in `IO.blocking` — lighter on the Docker image
+    than redis4cats (which pulls all of cats-effect-redis + Reactor).
+  - **Tests:** 7 unit cases in `RevocationListSpec` (noop, in-memory revoke + lookup,
+    expired-on-read, idempotent revoke, prune-on-revoke, no-store-on-past-expiry, helper);
+    5 decorator cases in `RevocationAwareJwtVerifierSpec` (passthrough, Revoked outcome,
+    no-jti bypass, inner-rejection short-circuit, idempotent double-wrap); 8 Testcontainers
+    cases in `RedisRevocationListSpec` (Docker-gated — basic write/read, TTL eviction,
+    idempotency, prefix isolation, multi-jti lookups, fail-open on closed connection, …).
+
 - **OIDC verifier + JWKS rotation + RS256/ES256 (closes #25).** Production-grade auth path.
   Previously the server could only accept HS256 JWTs signed with a single shared secret
   (`aegis.auth.kind=hmac`) — disqualifying for any real evaluator. New

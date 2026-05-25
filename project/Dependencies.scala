@@ -62,6 +62,19 @@ object Dependencies {
     "com.dimafeng" %% "testcontainers-scala-postgresql" % V.testcontainers % Test
   )
 
+  /** Lettuce is the Java async Redis client. Single-jar dep — we use the lower-level `RedisCommands` (sync)
+    * wrapped via `IO.blocking` so we don't bring in Reactor or Project Loom. Used by the Redis JWT revocation
+    * list (#24) wired in `aegis-server`.
+    */
+  val redis: Seq[ModuleID] = Seq(
+    "io.lettuce" % "lettuce-core" % "6.4.0.RELEASE"
+  )
+
+  /** Test-only dep for spinning up a real Redis in Docker during integration tests. */
+  val testcontainersRedis: Seq[ModuleID] = Seq(
+    "com.dimafeng" %% "testcontainers-scala-scalatest" % V.testcontainers % Test
+  )
+
   val crypto: Seq[ModuleID] = Seq(
     "software.amazon.awssdk" % "kms" % V.aws
   )
