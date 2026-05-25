@@ -109,10 +109,9 @@ final class CommandsSpec extends AnyFunSuite with Matchers:
     r.stderr should include("boom")
   }
 
-  test("agent/audit/advisor placeholders exit non-zero with a clear 'not yet wired' message") {
-    Commands.agentIssue.exitCode should not be 0
-    Commands.agentIssue.stderr should include("PR A1")
-    Commands.auditTail.stderr should include("PR F2.b")
+  test("advisor scan is still a placeholder and exits non-zero with a clear message") {
+    // `agent issue` and `audit tail` are real in #79; only `advisor scan` (PR W4) remains a stub.
+    Commands.advisorScan.exitCode should not be 0
     Commands.advisorScan.stderr should include("PR W4")
   }
 

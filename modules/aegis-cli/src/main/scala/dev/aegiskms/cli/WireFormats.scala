@@ -35,6 +35,54 @@ object WireFormats:
     given Encoder[ManagedKeyDto] = deriveEncoder
     given Decoder[ManagedKeyDto] = deriveDecoder
 
+  // ── Agent issuance DTOs (mirrors aegis-http/JsonCodecs.IssueAgentRequestDto + Response) ──
+
+  final case class IssueAgentRequestDto(
+      label: String,
+      scopes: List[String],
+      ttlSeconds: Long,
+      parent: Option[String] = None
+  )
+  object IssueAgentRequestDto:
+    given Encoder[IssueAgentRequestDto] = deriveEncoder
+    given Decoder[IssueAgentRequestDto] = deriveDecoder
+
+  final case class IssueAgentResponseDto(
+      agentId: String,
+      jwt: String,
+      jti: String,
+      expiresAt: Instant
+  )
+  object IssueAgentResponseDto:
+    given Encoder[IssueAgentResponseDto] = deriveEncoder
+    given Decoder[IssueAgentResponseDto] = deriveDecoder
+
+  // ── Audit-read DTOs (mirrors aegis-http/JsonCodecs.AuditRecordDto + QueryResponse) ──
+
+  final case class AuditRecordDto(
+      at: Instant,
+      actor: String,
+      actorKind: String,
+      operation: String,
+      resource: String,
+      outcome: String,
+      correlationId: String,
+      context: Map[String, String]
+  )
+  object AuditRecordDto:
+    given Encoder[AuditRecordDto] = deriveEncoder
+    given Decoder[AuditRecordDto] = deriveDecoder
+
+  final case class AuditQueryResponseDto(
+      records: List[AuditRecordDto],
+      limit: Int,
+      offset: Int,
+      hasMore: Boolean
+  )
+  object AuditQueryResponseDto:
+    given Encoder[AuditQueryResponseDto] = deriveEncoder
+    given Decoder[AuditQueryResponseDto] = deriveDecoder
+
   final case class KmsErrorDto(code: String, message: String)
   object KmsErrorDto:
     given Encoder[KmsErrorDto] = deriveEncoder
