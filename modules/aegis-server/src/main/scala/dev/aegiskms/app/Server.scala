@@ -16,7 +16,14 @@ import dev.aegiskms.audit.{AuditQuery, AuditSink, AuditingKeyService, PostgresAu
 import dev.aegiskms.crypto.RootOfTrust
 import dev.aegiskms.crypto.aws.AwsKmsRootOfTrust
 import dev.aegiskms.http.HttpRoutes
-import dev.aegiskms.iam.{AgentTokenIssuer, AuthorizingKeyService, JwtIssuer, JwtVerifier, PrincipalResolver}
+import dev.aegiskms.iam.{
+  AgentTokenIssuer,
+  AuthorizingKeyService,
+  JwtIssuer,
+  JwtVerifier,
+  OidcJwtVerifier,
+  PrincipalResolver
+}
 import dev.aegiskms.persistence.{EventJournal, PostgresEventJournal, PostgresJournalConfig}
 import io.micrometer.prometheusmetrics.PrometheusMeterRegistry
 import org.apache.pekko.actor.typed.{ActorSystem, Scheduler}
@@ -153,7 +160,7 @@ object Server extends IOApp.Simple:
       decisionEngine = ThresholdDecisionEngine.make()
       auditing       = new AuditingKeyService(traced, sink, Some(riskScorer), Some(decisionEngine))
 
-      resolver = buildResolver(rootConfig)
+      resolver <- Resource.eval(buildResolver(rootConfig))
       // Agent-token issuer (#18). Needs a JwtIssuer with the HMAC secret. We share the same secret
       // the verifier uses when `aegis.auth.kind=hmac`; in dev mode we mint a stable per-boot secret
       // (logged below) so the demo can issue + verify agent tokens within a single server lifetime.
@@ -436,24 +443,56 @@ object Server extends IOApp.Simple:
   }
 
   /** Build the principal resolver from `aegis.auth.kind`. Misconfiguration fails fast at boot — silent
-    * fallback to dev would be a security hole.
+    * fallback to dev would be a security hole. Returns `IO` because the OIDC path needs to hit the network
+    * during boot (discovery document + initial JWKS warm-up).
+    *
+    *   - `dev` — `PrincipalResolver.dev` (workstation-only).
+    *   - `hmac` — `JwtVerifier.hmac(secret)` (single-secret HS256 — embedder / self-issued path).
+    *   - `oidc` — `OidcJwtVerifier` against the configured issuer with JWKS caching (production path; closes
+    *     #25).
     */
-  private def buildResolver(config: Config): PrincipalResolver =
+  private def buildResolver(config: Config)(using IORuntime): IO[PrincipalResolver] =
     config.getString("aegis.auth.kind") match
       case "dev" =>
-        logger.warn(
-          "auth: DEV MODE — accepting X-Aegis-User as the principal. Do not expose this server to a network you do not control."
-        )
-        PrincipalResolver.dev
-      case "hmac" =>
-        val secret = config.getString("aegis.auth.hmac.secret")
-        if secret.isEmpty then
-          throw new IllegalArgumentException(
-            "aegis.auth.kind=hmac requires aegis.auth.hmac.secret (set AEGIS_AUTH_HMAC_SECRET)"
+        IO {
+          logger.warn(
+            "auth: DEV MODE — accepting X-Aegis-User as the principal. " +
+              "Do not expose this server to a network you do not control."
           )
-        logger.info("auth: hmac (HS256) — verifying Authorization: Bearer <jwt>")
-        PrincipalResolver.jwt(JwtVerifier.hmac(secret))
+          PrincipalResolver.dev
+        }
+      case "hmac" =>
+        IO {
+          val secret = config.getString("aegis.auth.hmac.secret")
+          if secret.isEmpty then
+            throw new IllegalArgumentException(
+              "aegis.auth.kind=hmac requires aegis.auth.hmac.secret (set AEGIS_AUTH_HMAC_SECRET)"
+            )
+          logger.info("auth: hmac (HS256) — verifying Authorization: Bearer <jwt>")
+          PrincipalResolver.jwt(JwtVerifier.hmac(secret))
+        }
+      case "oidc" =>
+        val issuerUri = config.getString("aegis.auth.oidc.issuer-uri")
+        val audience =
+          Option(config.getString("aegis.auth.oidc.audience")).filter(_.nonEmpty)
+        val ttlSecs = config.getLong("aegis.auth.oidc.jwks-cache-ttl-seconds")
+        if issuerUri.isEmpty then
+          IO.raiseError(new IllegalArgumentException(
+            "aegis.auth.kind=oidc requires aegis.auth.oidc.issuer-uri (set AEGIS_AUTH_OIDC_ISSUER_URI)"
+          ))
+        else
+          IO(logger.info(
+            s"auth: oidc — issuer=$issuerUri, audience=${audience.getOrElse("(any)")}, " +
+              s"jwks-cache-ttl=${ttlSecs}s"
+          )) *>
+            OidcJwtVerifier
+              .fromIssuer(
+                issuerUri,
+                audience,
+                scala.concurrent.duration.FiniteDuration(ttlSecs, scala.concurrent.duration.SECONDS)
+              )
+              .map(verifier => PrincipalResolver.jwt(verifier))
       case other =>
-        throw new IllegalArgumentException(
-          s"Unknown aegis.auth.kind=$other (expected 'dev' or 'hmac')"
-        )
+        IO.raiseError(new IllegalArgumentException(
+          s"Unknown aegis.auth.kind=$other (expected 'dev', 'hmac', or 'oidc')"
+        ))
