@@ -399,9 +399,10 @@ object Cli:
 
   /** Pull the latest `at:` timestamp out of an `audit tail` page render so the next watch tick uses it as the
     * new `since`. Returns `None` if the page didn't contain any `at:` lines — which is the case for the
-    * empty-page footer.
+    * empty-page footer. Package-private so `CliSpec` can pin watch-mode forward-progress logic without
+    * spinning up the polling loop itself.
     */
-  private def extractMaxAt(rendered: String): Option[String] =
+  private[cli] def extractMaxAt(rendered: String): Option[String] =
     val atLines = rendered.linesIterator
       .map(_.trim)
       .filter(_.startsWith("at:"))

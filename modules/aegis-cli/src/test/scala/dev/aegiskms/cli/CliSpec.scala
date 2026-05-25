@@ -179,6 +179,37 @@ final class CliSpec extends AnyFunSuite with Matchers:
     r.stderr should include("--label")
   }
 
+  test("'agent issue' missing --scopes reports a usage error and exits 1") {
+    val r = Cli.run(
+      List("agent", "issue", "--label", "demo", "--ttl", "60"),
+      cfg,
+      fakeClientFactory(200, sampleKey.asJson.noSpaces)
+    )
+    r.exitCode shouldBe 1
+    r.stderr should include("--scopes")
+  }
+
+  test("'agent issue' missing --ttl reports a usage error and exits 1") {
+    val r = Cli.run(
+      List("agent", "issue", "--label", "demo", "--scopes", "Sign"),
+      cfg,
+      fakeClientFactory(200, sampleKey.asJson.noSpaces)
+    )
+    r.exitCode shouldBe 1
+    r.stderr should include("--ttl")
+  }
+
+  test("'agent issue' rejects a non-numeric --ttl with a clear error") {
+    val r = Cli.run(
+      List("agent", "issue", "--label", "demo", "--scopes", "Sign", "--ttl", "abc"),
+      cfg,
+      fakeClientFactory(200, sampleKey.asJson.noSpaces)
+    )
+    r.exitCode shouldBe 1
+    r.stderr should include("--ttl")
+    r.stderr should include("abc")
+  }
+
   test("'agent issue' rejects a non-positive --ttl with a clear error") {
     val r = Cli.run(
       List("agent", "issue", "--label", "demo", "--scopes", "Sign", "--ttl", "0"),
@@ -381,6 +412,35 @@ final class CliSpec extends AnyFunSuite with Matchers:
     val r = Cli.run(List("audit", "tail", "--limit", "1"), cfg, fakeClientFactory(200, responseBody))
     r.exitCode shouldBe 0
     r.stdout should include("hasMore=true")
+  }
+
+  // ── #79: watch-mode helper (`extractMaxAt`) ───────────────────────────────
+
+  test("extractMaxAt returns None on the empty-state footer (so --since doesn't regress)") {
+    Cli.extractMaxAt("(no records; offset=0, limit=100)") shouldBe None
+  }
+
+  test("extractMaxAt picks the max ISO timestamp across multiple records, ignoring order") {
+    // Two records on one page; the later `at:` value should win even though it appears first.
+    val rendered =
+      """at:         2026-05-25T09:00:05Z
+        |actor:      alice@org (Human)
+        |operation:  Sign
+        |---
+        |at:         2026-05-25T09:00:01Z
+        |actor:      bob@org (Human)
+        |operation:  Get""".stripMargin
+    Cli.extractMaxAt(rendered) shouldBe Some("2026-05-25T09:00:05Z")
+  }
+
+  test("extractMaxAt ignores non-at lines (actor:, operation:, footer)") {
+    val rendered =
+      """at:         2026-05-25T09:00:00Z
+        |actor:      alice (Human)
+        |operation:  Sign
+        |context:    at=annotation (a red herring)""".stripMargin
+    // The `context: at=annotation` line starts with `context:`, not `at:` — must not be picked up.
+    Cli.extractMaxAt(rendered) shouldBe Some("2026-05-25T09:00:00Z")
   }
 
   test("'audit tail' on an empty page prints a friendly empty-state line, not a blank") {
