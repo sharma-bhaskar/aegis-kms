@@ -179,7 +179,8 @@ lazy val server = (project in file("modules/aegis-server"))
       "Standalone Aegis-KMS server: wires HTTP / KMIP / MCP / Agent-AI planes around the audited KeyService. Published as a Docker image, not a Maven library.",
     publish / skip := true, // server is shipped as a Docker image, not a Maven artifact
     libraryDependencies ++=
-      pekkoHttp ++ Dependencies.tapir ++ Dependencies.metrics ++ Dependencies.tracing,
+      pekkoHttp ++ Dependencies.tapir ++ Dependencies.metrics ++ Dependencies.tracing ++
+        Dependencies.redis ++ Dependencies.testcontainersRedis,
     Docker / packageName := "aegis-server",
     dockerBaseImage      := "eclipse-temurin:21-jre",
     // Fork `sbt 'server/run'` into its own JVM. Without this, sbt's in-process classloader and

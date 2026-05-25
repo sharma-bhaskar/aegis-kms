@@ -29,6 +29,12 @@ enum JwtError:
   case Expired
   case InvalidClaims(message: String)
 
+  /** The token's signature and claims are valid, but its `jti` is on the revocation list. Returned by
+    * `RevocationAwareJwtVerifier` and surfaced to operators as a 401 with a clear reason — lets them
+    * distinguish "expired naturally" from "killed early via the auto-responder / agent-revoke endpoint."
+    */
+  case Revoked(jti: String)
+
 object JwtVerifier:
 
   /** Build a verifier that accepts `HS256` JWTs signed with the supplied shared secret.

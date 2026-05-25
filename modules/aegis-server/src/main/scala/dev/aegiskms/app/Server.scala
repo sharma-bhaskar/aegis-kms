@@ -22,7 +22,9 @@ import dev.aegiskms.iam.{
   JwtIssuer,
   JwtVerifier,
   OidcJwtVerifier,
-  PrincipalResolver
+  PrincipalResolver,
+  RevocationAwareJwtVerifier,
+  RevocationList
 }
 import dev.aegiskms.persistence.{EventJournal, PostgresEventJournal, PostgresJournalConfig}
 import io.micrometer.prometheusmetrics.PrometheusMeterRegistry
@@ -160,7 +162,14 @@ object Server extends IOApp.Simple:
       decisionEngine = ThresholdDecisionEngine.make()
       auditing       = new AuditingKeyService(traced, sink, Some(riskScorer), Some(decisionEngine))
 
-      resolver <- Resource.eval(buildResolver(rootConfig))
+      // JWT revocation list (#24). Selected by `aegis.iam.revocation.kind`:
+      //   - `none`      → no-op; tokens revoke only when they expire naturally.
+      //   - `in-memory` → process-local Ref-backed list; suits dev/single-node, lost on restart.
+      //   - `redis`     → durable, multi-node. Closes the auto-responder's kill-switch story.
+      // The list is wrapped around whatever inner verifier `buildResolver` constructs (HMAC /
+      // OIDC) via `RevocationAwareJwtVerifier`. Dev resolver (no JWT) bypasses the list.
+      revocation <- revocationListResource(rootConfig)
+      resolver   <- Resource.eval(buildResolver(rootConfig, revocation))
       // Agent-token issuer (#18). Needs a JwtIssuer with the HMAC secret. We share the same secret
       // the verifier uses when `aegis.auth.kind=hmac`; in dev mode we mint a stable per-boot secret
       // (logged below) so the demo can issue + verify agent tokens within a single server lifetime.
@@ -451,7 +460,10 @@ object Server extends IOApp.Simple:
     *   - `oidc` — `OidcJwtVerifier` against the configured issuer with JWKS caching (production path; closes
     *     #25).
     */
-  private def buildResolver(config: Config)(using IORuntime): IO[PrincipalResolver] =
+  private def buildResolver(
+      config: Config,
+      revocation: RevocationList[IO]
+  )(using IORuntime): IO[PrincipalResolver] =
     config.getString("aegis.auth.kind") match
       case "dev" =>
         IO {
@@ -469,7 +481,9 @@ object Server extends IOApp.Simple:
               "aegis.auth.kind=hmac requires aegis.auth.hmac.secret (set AEGIS_AUTH_HMAC_SECRET)"
             )
           logger.info("auth: hmac (HS256) — verifying Authorization: Bearer <jwt>")
-          PrincipalResolver.jwt(JwtVerifier.hmac(secret))
+          val base    = JwtVerifier.hmac(secret)
+          val wrapped = new RevocationAwareJwtVerifier(base, revocation)
+          PrincipalResolver.jwt(wrapped)
         }
       case "oidc" =>
         val issuerUri = config.getString("aegis.auth.oidc.issuer-uri")
@@ -491,8 +505,44 @@ object Server extends IOApp.Simple:
                 audience,
                 scala.concurrent.duration.FiniteDuration(ttlSecs, scala.concurrent.duration.SECONDS)
               )
-              .map(verifier => PrincipalResolver.jwt(verifier))
+              .map { base =>
+                val wrapped = new RevocationAwareJwtVerifier(base, revocation)
+                PrincipalResolver.jwt(wrapped)
+              }
       case other =>
         IO.raiseError(new IllegalArgumentException(
           s"Unknown aegis.auth.kind=$other (expected 'dev', 'hmac', or 'oidc')"
         ))
+
+  /** Build the JWT revocation list (#24). Selection by `aegis.iam.revocation.kind`:
+    *
+    *   - `none` — `RevocationList.noop`. Nothing is ever revoked; tokens expire naturally.
+    *   - `in-memory` — process-local Ref-backed list. Suits single-node dev / testing.
+    *   - `redis` — `RedisRevocationList` against the configured Redis URI. Production path.
+    */
+  private def revocationListResource(config: Config): Resource[IO, RevocationList[IO]] =
+    config.getString("aegis.iam.revocation.kind") match
+      case "none" =>
+        Resource.eval(IO {
+          logger.info("revocation: none — no JTI kill-switch (tokens expire naturally)")
+          RevocationList.noop
+        })
+      case "in-memory" =>
+        Resource.eval(IO(logger.info(
+          "revocation: in-memory (process-local; set aegis.iam.revocation.kind=redis for production)"
+        ))) *> Resource.eval(RevocationList.inMemory)
+      case "redis" =>
+        val uri = config.getString("aegis.iam.revocation.redis.uri")
+        if uri.isEmpty then
+          Resource.eval(IO.raiseError(new IllegalArgumentException(
+            "aegis.iam.revocation.kind=redis requires aegis.iam.revocation.redis.uri " +
+              "(set AEGIS_REVOCATION_REDIS_URI; e.g. redis://localhost:6379)"
+          )))
+        else
+          val prefix = config.getString("aegis.iam.revocation.redis.key-prefix")
+          Resource.eval(IO(logger.info(s"revocation: redis at $uri (key-prefix=$prefix)"))) *>
+            RedisRevocationList.make(uri, prefix).map(impl => impl: RevocationList[IO])
+      case other =>
+        Resource.eval(IO.raiseError(new IllegalArgumentException(
+          s"Unknown aegis.iam.revocation.kind=$other (expected 'none', 'in-memory', or 'redis')"
+        )))
