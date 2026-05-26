@@ -40,7 +40,13 @@ final class AuditingKeyService(
     inner: KeyService[IO],
     sink: AuditSink[IO],
     scorer: Option[RiskScorer[IO]] = None,
-    engine: Option[DecisionEngine[IO]] = None
+    engine: Option[DecisionEngine[IO]] = None,
+    /** Per-request context bag (typically the HTTP layer's `source.ip`, MCP session id, etc.). Defaults to
+      * [[RequestContext.empty]] so existing callers compile unchanged. When wired with
+      * `RequestContext.fromIOLocal`, every audit record's `context` map merges in whatever the transport
+      * layer stamped onto the IOLocal for this request.
+      */
+    requestContext: RequestContext = RequestContext.empty
 ) extends KeyService[IO]:
 
   def create(spec: KeySpec, by: Principal): IO[Either[KmsError, ManagedKey]] =
@@ -70,10 +76,11 @@ final class AuditingKeyService(
     // discovery separately.
     val resource = s"pattern:$namePattern"
     for
-      corr  <- IO(freshCorrelationId())
-      now   <- IO.realTimeInstant
-      score <- scoreOpt(by, Operation.Locate, None, now)
-      ctx = preflightContext(score, None)
+      corr   <- IO(freshCorrelationId())
+      now    <- IO.realTimeInstant
+      reqCtx <- requestContext.current
+      score  <- scoreOpt(by, Operation.Locate, None, now)
+      ctx = preflightContext(score, None, reqCtx)
       list <- inner.locate(namePattern, by)
       _ <- sink.write(
         AuditRecord(now, by, Operation.Locate, resource, s"Hits=${list.size}", corr, ctx)
@@ -232,9 +239,10 @@ final class AuditingKeyService(
     for
       corr     <- IO(freshCorrelationId())
       now0     <- IO.realTimeInstant
+      reqCtx   <- requestContext.current
       score    <- scoreOpt(by, op, keyId, now0)
       decision <- decideOpt(score, by, op)
-      ctx = preflightContext(score, decision)
+      ctx = preflightContext(score, decision, reqCtx)
       result <- shortCircuitOr(decision, action)
       now    <- IO.realTimeInstant
       _      <- sink.write(record(now, corr, ctx, result))
@@ -273,16 +281,21 @@ final class AuditingKeyService(
       case (Some(s), Some(e)) => e.decide(s, by, op).map(Some(_))
       case _                  => IO.pure(None)
 
-  /** Build the `AuditRecord.context` fragment from the score + decision. Stamps:
+  /** Build the `AuditRecord.context` fragment from the score, decision, and the per-request context bag
+    * stamped by the transport layer (typically `source.ip`). Stamps:
     *
     *   - `risk.score` — present iff scorer was configured
     *   - `risk.factors` — present iff scorer was configured
     *   - `outcome.decision` — present iff engine was configured ("Allow" / "StepUp" / "Deny")
     *   - `outcome.decision.reason` — present iff engine was configured AND decision != Allow
+    *   - any keys present on the request context (e.g. `source.ip`) — merged last so an explicit
+    *     transport-supplied value overrides a same-key value from score/decision (unlikely but defines an
+    *     unambiguous precedence).
     */
   private def preflightContext(
       score: Option[RiskScore],
-      decision: Option[Decision]
+      decision: Option[Decision],
+      requestCtx: Map[String, String]
   ): Map[String, String] =
     val builder = Map.newBuilder[String, String]
     score.foreach { rs =>
@@ -296,6 +309,7 @@ final class AuditingKeyService(
       val reason                                = d.reasonOrEmpty
       if reason.nonEmpty then builder += ("outcome.decision.reason" -> reason)
     }
+    builder ++= requestCtx
     builder.result()
 
   private def resourceForCreate(spec: KeySpec): String =

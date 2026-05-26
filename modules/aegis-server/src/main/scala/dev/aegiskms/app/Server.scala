@@ -1,7 +1,7 @@
 package dev.aegiskms.app
 
 import cats.effect.unsafe.IORuntime
-import cats.effect.{IO, IOApp, Resource}
+import cats.effect.{IO, IOApp, IOLocal, Resource}
 import cats.syntax.all.*
 import com.typesafe.config.{Config, ConfigFactory}
 import dev.aegiskms.agent.{
@@ -12,7 +12,14 @@ import dev.aegiskms.agent.{
   TappedAuditSink,
   ThresholdDecisionEngine
 }
-import dev.aegiskms.audit.{AuditQuery, AuditSink, AuditingKeyService, PostgresAuditSink, StdoutAuditSink}
+import dev.aegiskms.audit.{
+  AuditQuery,
+  AuditSink,
+  AuditingKeyService,
+  PostgresAuditSink,
+  RequestContext,
+  StdoutAuditSink
+}
 import dev.aegiskms.crypto.RootOfTrust
 import dev.aegiskms.crypto.aws.AwsKmsRootOfTrust
 import dev.aegiskms.http.HttpRoutes
@@ -160,7 +167,19 @@ object Server extends IOApp.Simple:
       // step-up, a composite trips deny, and destructive ops (Rotate / Compromise / Destroy / Revoke)
       // are gated harder by 0.15. Operator-tuned thresholds via HOCON land later.
       decisionEngine = ThresholdDecisionEngine.make()
-      auditing       = new AuditingKeyService(traced, sink, Some(riskScorer), Some(decisionEngine))
+      // Per-request context bag (#78). The HTTP layer stamps `source.ip` onto this IOLocal as
+      // the first IO step of each request; `AuditingKeyService` reads it back via `current` and
+      // merges it into `AuditRecord.context`, activating the `SourceIpBaseline` detector. Both
+      // ends MUST share the same `IOLocal` — separate locals would leave the read empty.
+      sourceContextLocal <- Resource.eval(IOLocal(Map.empty[String, String]))
+      reqContext = RequestContext.fromIOLocal(sourceContextLocal)
+      auditing = new AuditingKeyService(
+        traced,
+        sink,
+        Some(riskScorer),
+        Some(decisionEngine),
+        reqContext
+      )
 
       // JWT revocation list (#24). Selected by `aegis.iam.revocation.kind`:
       //   - `none`      → no-op; tokens revoke only when they expire naturally.
@@ -204,7 +223,8 @@ object Server extends IOApp.Simple:
             Some(stdoutSink),
             stdoutSink match
               case q: AuditQuery[IO @unchecked] => Some(q)
-              case _                            => None
+              case _                            => None,
+            reqContext
           ).routes,
           MetricsRoutes.route(metricsRegistry)
         )

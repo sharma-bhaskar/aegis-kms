@@ -34,18 +34,50 @@ object Endpoints:
     header[Option[String]]("X-Aegis-User")
       .description("Dev-mode principal subject. Honoured ONLY under `aegis.auth.kind=dev`.")
 
-  /** Common path + headers + error contract shared by every keys endpoint. */
+  /** Server-side-only extraction of the remote IP address. `extractFromRequest` does NOT appear in the
+    * OpenAPI document — it's a pure server-internal input — so adding it here keeps the wire shape and SDK
+    * contracts identical while giving every serverLogic body access to the source IP. The HTTP layer stamps
+    * it onto the per-request `RequestContext`, which `AuditingKeyService` then merges into
+    * `AuditRecord.context("source.ip")`, activating the `SourceIpBaseline` detector that has been inert since
+    * v0.1.0 (closes #78).
+    *
+    * Implementation note: Tapir's pekko-http adapter hardcodes `ServerRequest.connectionInfo` to
+    * `ConnectionInfo(None, None, None)`, so we cannot use `req.connectionInfo.remote` directly. Instead we go
+    * through `req.underlying`, which the adapter exposes as the pekko `RequestContext`, and read pekko's
+    * `AttributeKeys.remoteAddress` attribute. That attribute is set automatically when
+    * `pekko.http.server.remote-address-attribute = on` (set in `aegis-server/application.conf`); tests
+    * synthesize it with `HttpRequest.addAttribute`.
+    *
+    * Returns `None` when the request has no detectable remote address (test stubs without the attribute,
+    * loopback bridges, in-process invocations).
+    */
+  private[http] val sourceIpInput: EndpointInput[Option[String]] =
+    extractFromRequest { req =>
+      req.underlying match
+        case ctx: org.apache.pekko.http.scaladsl.server.RequestContext =>
+          ctx.request
+            .attribute(org.apache.pekko.http.scaladsl.model.AttributeKeys.remoteAddress)
+            .flatMap(_.toOption)
+            .map(_.getHostAddress)
+        case _ => None
+    }
+
+  /** Common path + headers + error contract shared by every keys endpoint. The `sourceIpInput` is a
+    * server-only extractor (does not appear in OpenAPI), so OpenAPI clients are unaffected; every keys
+    * serverLogic signature gains an extra `Option[String]` slot for the remote IP.
+    */
   private val keysBase =
     endpoint
       .in("v1" / "keys")
       .in(authHeader)
       .in(devUserHeader)
+      .in(sourceIpInput)
       .errorOut(statusCode and jsonBody[KmsErrorDto].description("Failure detail"))
       .tag("keys")
 
   /** `POST /v1/keys` — create a new managed key. Returns 201 with the new key in PreActive state. */
   val createKey: PublicEndpoint[
-    (Option[String], Option[String], CreateKeyRequest),
+    (Option[String], Option[String], Option[String], CreateKeyRequest),
     (StatusCode, KmsErrorDto),
     ManagedKeyDto,
     Any
@@ -59,7 +91,7 @@ object Endpoints:
 
   /** `GET /v1/keys/{id}` — fetch a key by id. */
   val getKey: PublicEndpoint[
-    (Option[String], Option[String], String),
+    (Option[String], Option[String], Option[String], String),
     (StatusCode, KmsErrorDto),
     ManagedKeyDto,
     Any
@@ -71,7 +103,7 @@ object Endpoints:
 
   /** `POST /v1/keys/{id}/activate` — transition PreActive → Active. */
   val activateKey: PublicEndpoint[
-    (Option[String], Option[String], String),
+    (Option[String], Option[String], Option[String], String),
     (StatusCode, KmsErrorDto),
     ManagedKeyDto,
     Any
@@ -83,7 +115,7 @@ object Endpoints:
 
   /** `DELETE /v1/keys/{id}` — destroy a key. Returns 204 on success. */
   val destroyKey: PublicEndpoint[
-    (Option[String], Option[String], String),
+    (Option[String], Option[String], Option[String], String),
     (StatusCode, KmsErrorDto),
     Unit,
     Any
@@ -95,7 +127,7 @@ object Endpoints:
 
   /** `POST /v1/keys/{id}/sign` — sign a base64-encoded message with the named key. Key must be `Active`. */
   val signKey: PublicEndpoint[
-    (Option[String], Option[String], String, SignRequest),
+    (Option[String], Option[String], Option[String], String, SignRequest),
     (StatusCode, KmsErrorDto),
     SignResponse,
     Any
@@ -109,7 +141,7 @@ object Endpoints:
 
   /** `POST /v1/keys/{id}/verify` — verify a signature over a message. */
   val verifyKey: PublicEndpoint[
-    (Option[String], Option[String], String, VerifyRequest),
+    (Option[String], Option[String], Option[String], String, VerifyRequest),
     (StatusCode, KmsErrorDto),
     VerifyResponse,
     Any
@@ -125,7 +157,7 @@ object Endpoints:
     * context is bound as AAD; the same context must be supplied at decrypt time.
     */
   val encryptKey: PublicEndpoint[
-    (Option[String], Option[String], String, EncryptRequest),
+    (Option[String], Option[String], Option[String], String, EncryptRequest),
     (StatusCode, KmsErrorDto),
     EncryptResponse,
     Any
@@ -141,7 +173,7 @@ object Endpoints:
 
   /** `POST /v1/keys/{id}/decrypt` — decrypt a ciphertext produced by /encrypt. Same context required. */
   val decryptKey: PublicEndpoint[
-    (Option[String], Option[String], String, DecryptRequest),
+    (Option[String], Option[String], Option[String], String, DecryptRequest),
     (StatusCode, KmsErrorDto),
     DecryptResponse,
     Any
@@ -155,7 +187,7 @@ object Endpoints:
 
   /** `POST /v1/keys/{id}/wrap` — wrap a data-encryption key under the named KEK. Key must be `Active`. */
   val wrapKey: PublicEndpoint[
-    (Option[String], Option[String], String, WrapRequest),
+    (Option[String], Option[String], Option[String], String, WrapRequest),
     (StatusCode, KmsErrorDto),
     WrapResponse,
     Any
@@ -171,7 +203,7 @@ object Endpoints:
 
   /** `POST /v1/keys/{id}/unwrap` — unwrap a previously wrapped DEK. Permitted on Active + Deactivated. */
   val unwrapKey: PublicEndpoint[
-    (Option[String], Option[String], String, UnwrapRequest),
+    (Option[String], Option[String], Option[String], String, UnwrapRequest),
     (StatusCode, KmsErrorDto),
     UnwrapResponse,
     Any
@@ -187,7 +219,7 @@ object Endpoints:
     * refuses every cryptographic operation thereafter.
     */
   val compromiseKey: PublicEndpoint[
-    (Option[String], Option[String], String, CompromiseRequest),
+    (Option[String], Option[String], Option[String], String, CompromiseRequest),
     (StatusCode, KmsErrorDto),
     ManagedKeyDto,
     Any
@@ -204,7 +236,7 @@ object Endpoints:
 
   /** `POST /v1/keys/{id}/rotate` — bump the key's `currentVersion`. Legal source state is `Active` only. */
   val rotateKey: PublicEndpoint[
-    (Option[String], Option[String], String, RotateRequest),
+    (Option[String], Option[String], Option[String], String, RotateRequest),
     (StatusCode, KmsErrorDto),
     ManagedKeyDto,
     Any
@@ -230,6 +262,7 @@ object Endpoints:
       .in("v1" / "agents")
       .in(authHeader)
       .in(devUserHeader)
+      .in(sourceIpInput)
       .errorOut(statusCode and jsonBody[KmsErrorDto].description("Failure detail"))
       .tag("agents")
 
@@ -239,7 +272,7 @@ object Endpoints:
     * Request body: `{ label, scopes, ttlSeconds, parent? }` Response: `{ agentId, jwt, jti, expiresAt }`
     */
   val issueAgent: PublicEndpoint[
-    (Option[String], Option[String], IssueAgentRequestDto),
+    (Option[String], Option[String], Option[String], IssueAgentRequestDto),
     (StatusCode, KmsErrorDto),
     IssueAgentResponseDto,
     Any
@@ -267,6 +300,7 @@ object Endpoints:
       .in("v1" / "audit")
       .in(authHeader)
       .in(devUserHeader)
+      .in(sourceIpInput)
       .errorOut(statusCode and jsonBody[KmsErrorDto].description("Failure detail"))
       .tag("audit")
 
@@ -285,6 +319,7 @@ object Endpoints:
     */
   val queryAudit: PublicEndpoint[
     (
+        Option[String],
         Option[String],
         Option[String],
         Option[Instant],

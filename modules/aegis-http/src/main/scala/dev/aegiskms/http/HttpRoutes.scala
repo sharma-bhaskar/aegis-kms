@@ -2,7 +2,7 @@ package dev.aegiskms.http
 
 import cats.effect.IO
 import cats.effect.unsafe.IORuntime
-import dev.aegiskms.audit.{AuditQuery, AuditRecord, AuditSink}
+import dev.aegiskms.audit.{AuditQuery, AuditRecord, AuditSink, RequestContext}
 import dev.aegiskms.core.*
 import dev.aegiskms.http.JsonCodecs.*
 import dev.aegiskms.iam.{AgentTokenIssuer, IssueAgentRequest as IamIssueAgentRequest, PrincipalResolver}
@@ -44,7 +44,16 @@ final class HttpRoutes(
       * when `aegis.audit.kind=postgres` (the only sink that implements `AuditQuery`). When `None`, `GET
       * /v1/audit` returns `501 FeatureNotSupported`.
       */
-    auditReader: Option[AuditQuery[IO]] = None
+    auditReader: Option[AuditQuery[IO]] = None,
+    /** Per-request context bag shared with the same `AuditingKeyService` decorator wrapping `svc`. Every
+      * `runIO` call writes `source.ip` to it as the first IO step, before the user-facing work runs, so the
+      * downstream `AuditingKeyService.preflightContext` reads the IP back via `current` and stamps it into
+      * `AuditRecord.context("source.ip")` (activates `SourceIpBaseline` — closes #78).
+      *
+      * Defaults to [[RequestContext.empty]] so existing tests that construct `HttpRoutes` without the IOLocal
+      * compile unchanged — the production wiring in `Server.boot` swaps in the real one.
+      */
+    requestContext: RequestContext = RequestContext.empty
 )(using runtime: IORuntime):
 
   private given ExecutionContext = runtime.compute
@@ -78,12 +87,24 @@ final class HttpRoutes(
       StatusCode.BadRequest -> KmsErrorDto.of(ErrorCode.InvalidField, msg)
     }
 
-  private def runIO[A](io: IO[A]): Future[A] = io.unsafeToFuture()
+  /** Run an IO and bridge to Future for Tapir, stamping `source.ip` into the shared `RequestContext` as the
+    * first IO step. Setting the IOLocal inside the IO chain (rather than the calling thread) is what makes
+    * the value visible to deeper IO consumers — every subsequent `flatMap` in the fiber inherits it,
+    * including the read inside `AuditingKeyService.preflightContext`.
+    *
+    * When `clientIp` is `None` the context is left untouched so background fibers and tests that never set it
+    * observe an empty map (rather than a stale value from a prior request).
+    */
+  private def runIO[A](clientIp: Option[String])(io: IO[A]): Future[A] =
+    val withCtx = clientIp match
+      case Some(ip) => requestContext.set(Map("source.ip" -> ip)) *> io
+      case None     => requestContext.set(Map.empty) *> io
+    withCtx.unsafeToFuture()
 
   // ── Server endpoints ───────────────────────────────────────────────────────
 
   private val createSE: ServerEndpoint[Any, Future] =
-    Endpoints.createKey.serverLogic { case (auth, devHdr, req) =>
+    Endpoints.createKey.serverLogic { case (auth, devHdr, clientIp, req) =>
       principalOf(auth, devHdr) match
         case Left(e) => Future.successful(Left(e))
         case Right(principal) =>
@@ -93,56 +114,56 @@ final class HttpRoutes(
                 Left(StatusCode.BadRequest -> KmsErrorDto.of(ErrorCode.InvalidField, msg))
               )
             case Right(spec) =>
-              runIO(svc.create(spec, principal)).map {
+              runIO(clientIp)(svc.create(spec, principal)).map {
                 case Left(err) => Left(errorOut(err))
                 case Right(k)  => Right(ManagedKeyDto.fromCore(k))
               }
     }
 
   private val getSE: ServerEndpoint[Any, Future] =
-    Endpoints.getKey.serverLogic { case (auth, devHdr, idStr) =>
+    Endpoints.getKey.serverLogic { case (auth, devHdr, clientIp, idStr) =>
       principalOf(auth, devHdr) match
         case Left(e) => Future.successful(Left(e))
         case Right(principal) =>
           parseId(idStr) match
             case Left(e) => Future.successful(Left(e))
             case Right(id) =>
-              runIO(svc.get(id, principal)).map {
+              runIO(clientIp)(svc.get(id, principal)).map {
                 case Left(err) => Left(errorOut(err))
                 case Right(k)  => Right(ManagedKeyDto.fromCore(k))
               }
     }
 
   private val activateSE: ServerEndpoint[Any, Future] =
-    Endpoints.activateKey.serverLogic { case (auth, devHdr, idStr) =>
+    Endpoints.activateKey.serverLogic { case (auth, devHdr, clientIp, idStr) =>
       principalOf(auth, devHdr) match
         case Left(e) => Future.successful(Left(e))
         case Right(principal) =>
           parseId(idStr) match
             case Left(e) => Future.successful(Left(e))
             case Right(id) =>
-              runIO(svc.activate(id, principal)).map {
+              runIO(clientIp)(svc.activate(id, principal)).map {
                 case Left(err) => Left(errorOut(err))
                 case Right(k)  => Right(ManagedKeyDto.fromCore(k))
               }
     }
 
   private val destroySE: ServerEndpoint[Any, Future] =
-    Endpoints.destroyKey.serverLogic { case (auth, devHdr, idStr) =>
+    Endpoints.destroyKey.serverLogic { case (auth, devHdr, clientIp, idStr) =>
       principalOf(auth, devHdr) match
         case Left(e) => Future.successful(Left(e))
         case Right(principal) =>
           parseId(idStr) match
             case Left(e) => Future.successful(Left(e))
             case Right(id) =>
-              runIO(svc.destroy(id, principal)).map {
+              runIO(clientIp)(svc.destroy(id, principal)).map {
                 case Left(err) => Left(errorOut(err))
                 case Right(_)  => Right(())
               }
     }
 
   private val signSE: ServerEndpoint[Any, Future] =
-    Endpoints.signKey.serverLogic { case (auth, devHdr, idStr, req) =>
+    Endpoints.signKey.serverLogic { case (auth, devHdr, clientIp, idStr, req) =>
       principalOf(auth, devHdr) match
         case Left(e) => Future.successful(Left(e))
         case Right(principal) =>
@@ -152,14 +173,14 @@ final class HttpRoutes(
               decodeSignRequest(req) match
                 case Left(e) => Future.successful(Left(e))
                 case Right((message, alg)) =>
-                  runIO(svc.sign(id, message, alg, principal)).map {
+                  runIO(clientIp)(svc.sign(id, message, alg, principal)).map {
                     case Left(err)  => Left(errorOut(err))
                     case Right(sig) => Right(SignResponse.fromCore(sig))
                   }
     }
 
   private val verifySE: ServerEndpoint[Any, Future] =
-    Endpoints.verifyKey.serverLogic { case (auth, devHdr, idStr, req) =>
+    Endpoints.verifyKey.serverLogic { case (auth, devHdr, clientIp, idStr, req) =>
       principalOf(auth, devHdr) match
         case Left(e) => Future.successful(Left(e))
         case Right(principal) =>
@@ -169,14 +190,14 @@ final class HttpRoutes(
               decodeVerifyRequest(req) match
                 case Left(e) => Future.successful(Left(e))
                 case Right((message, signature)) =>
-                  runIO(svc.verify(id, message, signature, principal)).map {
+                  runIO(clientIp)(svc.verify(id, message, signature, principal)).map {
                     case Left(err) => Left(errorOut(err))
                     case Right(ok) => Right(VerifyResponse(ok, signature.algorithm.toString))
                   }
     }
 
   private val encryptSE: ServerEndpoint[Any, Future] =
-    Endpoints.encryptKey.serverLogic { case (auth, devHdr, idStr, req) =>
+    Endpoints.encryptKey.serverLogic { case (auth, devHdr, clientIp, idStr, req) =>
       principalOf(auth, devHdr) match
         case Left(e) => Future.successful(Left(e))
         case Right(principal) =>
@@ -186,14 +207,14 @@ final class HttpRoutes(
               decodeBase64(req.plaintextBase64, "plaintextBase64") match
                 case Left(e) => Future.successful(Left(e))
                 case Right(plaintext) =>
-                  runIO(svc.encrypt(id, plaintext, req.context, principal)).map {
+                  runIO(clientIp)(svc.encrypt(id, plaintext, req.context, principal)).map {
                     case Left(err) => Left(errorOut(err))
                     case Right(ct) => Right(EncryptResponse.of(ct, req.context))
                   }
     }
 
   private val decryptSE: ServerEndpoint[Any, Future] =
-    Endpoints.decryptKey.serverLogic { case (auth, devHdr, idStr, req) =>
+    Endpoints.decryptKey.serverLogic { case (auth, devHdr, clientIp, idStr, req) =>
       principalOf(auth, devHdr) match
         case Left(e) => Future.successful(Left(e))
         case Right(principal) =>
@@ -206,7 +227,7 @@ final class HttpRoutes(
                     Left(StatusCode.BadRequest -> KmsErrorDto.of(ErrorCode.InvalidField, msg))
                   )
                 case Right(ct) =>
-                  runIO(svc.decrypt(id, ct, req.context, principal)).map {
+                  runIO(clientIp)(svc.decrypt(id, ct, req.context, principal)).map {
                     case Left(err) => Left(errorOut(err))
                     case Right(pt) =>
                       Right(DecryptResponse(java.util.Base64.getEncoder.encodeToString(pt), req.context))
@@ -214,7 +235,7 @@ final class HttpRoutes(
     }
 
   private val wrapSE: ServerEndpoint[Any, Future] =
-    Endpoints.wrapKey.serverLogic { case (auth, devHdr, idStr, req) =>
+    Endpoints.wrapKey.serverLogic { case (auth, devHdr, clientIp, idStr, req) =>
       principalOf(auth, devHdr) match
         case Left(e) => Future.successful(Left(e))
         case Right(principal) =>
@@ -224,14 +245,14 @@ final class HttpRoutes(
               decodeBase64(req.dekBase64, "dekBase64") match
                 case Left(e) => Future.successful(Left(e))
                 case Right(dek) =>
-                  runIO(svc.wrap(id, dek, principal)).map {
+                  runIO(clientIp)(svc.wrap(id, dek, principal)).map {
                     case Left(err) => Left(errorOut(err))
                     case Right(w)  => Right(WrapResponse.of(w))
                   }
     }
 
   private val unwrapSE: ServerEndpoint[Any, Future] =
-    Endpoints.unwrapKey.serverLogic { case (auth, devHdr, idStr, req) =>
+    Endpoints.unwrapKey.serverLogic { case (auth, devHdr, clientIp, idStr, req) =>
       principalOf(auth, devHdr) match
         case Left(e) => Future.successful(Left(e))
         case Right(principal) =>
@@ -244,7 +265,7 @@ final class HttpRoutes(
                     Left(StatusCode.BadRequest -> KmsErrorDto.of(ErrorCode.InvalidField, msg))
                   )
                 case Right(w) =>
-                  runIO(svc.unwrap(id, w, principal)).map {
+                  runIO(clientIp)(svc.unwrap(id, w, principal)).map {
                     case Left(err) => Left(errorOut(err))
                     case Right(dek) =>
                       Right(UnwrapResponse(java.util.Base64.getEncoder.encodeToString(dek)))
@@ -252,7 +273,7 @@ final class HttpRoutes(
     }
 
   private val compromiseSE: ServerEndpoint[Any, Future] =
-    Endpoints.compromiseKey.serverLogic { case (auth, devHdr, idStr, req) =>
+    Endpoints.compromiseKey.serverLogic { case (auth, devHdr, clientIp, idStr, req) =>
       principalOf(auth, devHdr) match
         case Left(e) => Future.successful(Left(e))
         case Right(principal) =>
@@ -267,14 +288,14 @@ final class HttpRoutes(
                   ))
                 )
               else
-                runIO(svc.compromise(id, req.reason, principal)).map {
+                runIO(clientIp)(svc.compromise(id, req.reason, principal)).map {
                   case Left(err) => Left(errorOut(err))
                   case Right(k)  => Right(ManagedKeyDto.fromCore(k))
                 }
     }
 
   private val rotateSE: ServerEndpoint[Any, Future] =
-    Endpoints.rotateKey.serverLogic { case (auth, devHdr, idStr, req) =>
+    Endpoints.rotateKey.serverLogic { case (auth, devHdr, clientIp, idStr, req) =>
       principalOf(auth, devHdr) match
         case Left(e) => Future.successful(Left(e))
         case Right(principal) =>
@@ -287,14 +308,14 @@ final class HttpRoutes(
                     Left(StatusCode.BadRequest -> KmsErrorDto.of(ErrorCode.InvalidField, msg))
                   )
                 case Right(policy) =>
-                  runIO(svc.rotate(id, policy, principal)).map {
+                  runIO(clientIp)(svc.rotate(id, policy, principal)).map {
                     case Left(err) => Left(errorOut(err))
                     case Right(k)  => Right(ManagedKeyDto.fromCore(k))
                   }
     }
 
   private val issueAgentSE: ServerEndpoint[Any, Future] =
-    Endpoints.issueAgent.serverLogic { case (auth, devHdr, body) =>
+    Endpoints.issueAgent.serverLogic { case (auth, devHdr, clientIp, body) =>
       principalOf(auth, devHdr) match
         case Left(e) => Future.successful(Left(e))
         case Right(principal) =>
@@ -333,7 +354,7 @@ final class HttpRoutes(
                     expiresAt = token.expiresAt
                   )
                 )
-              runIO(issueAndAudit).map(_.left.map(errorOut))
+              runIO(clientIp)(issueAndAudit).map(_.left.map(errorOut))
     }
 
   /** `GET /v1/audit` — paginated read of `aegis_audit_events`. Caller must be a `Principal.Human` (Service +
@@ -341,64 +362,65 @@ final class HttpRoutes(
     * returns 501 NotImplemented.
     */
   private val queryAuditSE: ServerEndpoint[Any, Future] =
-    Endpoints.queryAudit.serverLogic { case (auth, devHdr, since, until, actor, key, op, limit, offset) =>
-      principalOf(auth, devHdr) match
-        case Left(e) => Future.successful(Left(e))
-        case Right(principal) =>
-          principal match
-            case _: Principal.Human =>
-              auditReader match
-                case None =>
-                  // Audit-read isn't wired (e.g. aegis.audit.kind=stdout). Surface the same way
-                  // we do for /agents/issue when its dependency is missing.
-                  Future.successful(Left(
-                    StatusCode.NotImplemented -> KmsErrorDto.of(
-                      ErrorCode.FeatureNotSupported,
-                      "audit query is not enabled on this server (set aegis.audit.kind=postgres)"
-                    )
-                  ))
-                case Some(reader) =>
-                  // Parse the optional `op` filter. Unknown op names are user error → 400, not
-                  // an empty result (silent empty would mask the typo).
-                  val parsedOp: Either[(StatusCode, KmsErrorDto), Option[Operation]] = op match
-                    case None => Right(None)
-                    case Some(name) =>
-                      Operation.values
-                        .find(_.toString == name)
-                        .toRight(StatusCode.BadRequest -> KmsErrorDto.of(
-                          ErrorCode.InvalidField,
-                          s"unknown op '$name'; expected one of: ${Operation.values.map(_.toString).mkString(", ")}"
-                        ))
-                        .map(Some(_))
-                  parsedOp match
-                    case Left(e) => Future.successful(Left(e))
-                    case Right(opVal) =>
-                      val filter = AuditQuery.Filter(
-                        since = since,
-                        until = until,
-                        actor = actor,
-                        resource = key,
-                        operation = opVal,
-                        limit = limit.getOrElse(AuditQuery.DefaultLimit),
-                        offset = offset.getOrElse(0)
+    Endpoints.queryAudit.serverLogic {
+      case (auth, devHdr, clientIp, since, until, actor, key, op, limit, offset) =>
+        principalOf(auth, devHdr) match
+          case Left(e) => Future.successful(Left(e))
+          case Right(principal) =>
+            principal match
+              case _: Principal.Human =>
+                auditReader match
+                  case None =>
+                    // Audit-read isn't wired (e.g. aegis.audit.kind=stdout). Surface the same way
+                    // we do for /agents/issue when its dependency is missing.
+                    Future.successful(Left(
+                      StatusCode.NotImplemented -> KmsErrorDto.of(
+                        ErrorCode.FeatureNotSupported,
+                        "audit query is not enabled on this server (set aegis.audit.kind=postgres)"
                       )
-                      runIO(reader.query(filter)).map { page =>
-                        Right(AuditQueryResponseDto(
-                          records = page.records.map(AuditRecordDto.fromCore),
-                          limit = page.limit,
-                          offset = page.offset,
-                          hasMore = page.hasMore
-                        ))
-                      }
-            case _ =>
-              // Service + Agent are refused. v0.2.0 simplification of the future
-              // "audit:read permission via policy engine" model.
-              Future.successful(Left(
-                StatusCode.Forbidden -> KmsErrorDto.of(
-                  ErrorCode.PermissionDenied,
-                  "audit read is restricted to human principals"
-                )
-              ))
+                    ))
+                  case Some(reader) =>
+                    // Parse the optional `op` filter. Unknown op names are user error → 400, not
+                    // an empty result (silent empty would mask the typo).
+                    val parsedOp: Either[(StatusCode, KmsErrorDto), Option[Operation]] = op match
+                      case None => Right(None)
+                      case Some(name) =>
+                        Operation.values
+                          .find(_.toString == name)
+                          .toRight(StatusCode.BadRequest -> KmsErrorDto.of(
+                            ErrorCode.InvalidField,
+                            s"unknown op '$name'; expected one of: ${Operation.values.map(_.toString).mkString(", ")}"
+                          ))
+                          .map(Some(_))
+                    parsedOp match
+                      case Left(e) => Future.successful(Left(e))
+                      case Right(opVal) =>
+                        val filter = AuditQuery.Filter(
+                          since = since,
+                          until = until,
+                          actor = actor,
+                          resource = key,
+                          operation = opVal,
+                          limit = limit.getOrElse(AuditQuery.DefaultLimit),
+                          offset = offset.getOrElse(0)
+                        )
+                        runIO(clientIp)(reader.query(filter)).map { page =>
+                          Right(AuditQueryResponseDto(
+                            records = page.records.map(AuditRecordDto.fromCore),
+                            limit = page.limit,
+                            offset = page.offset,
+                            hasMore = page.hasMore
+                          ))
+                        }
+              case _ =>
+                // Service + Agent are refused. v0.2.0 simplification of the future
+                // "audit:read permission via policy engine" model.
+                Future.successful(Left(
+                  StatusCode.Forbidden -> KmsErrorDto.of(
+                    ErrorCode.PermissionDenied,
+                    "audit read is restricted to human principals"
+                  )
+                ))
     }
 
   /** Write one `AuditRecord` per `/v1/agents/issue` call — success OR failure — so operators have a forensic
