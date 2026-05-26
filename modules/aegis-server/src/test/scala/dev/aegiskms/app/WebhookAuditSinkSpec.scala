@@ -229,6 +229,40 @@ final class WebhookAuditSinkSpec extends AnyFunSuite with Matchers with BeforeAn
     dlqLines.get(0) should include(""""correlationId":"c-refused"""")
   }
 
+  test("5xx then 2xx: retry succeeds, record is ack'd, NO DLQ entry (transient-blip recovery)") {
+    // The most common production scenario for retry: SIEM hiccups for a couple of attempts then
+    // recovers. The sink must NOT DLQ the record when a later attempt succeeds — that would
+    // double-deliver after manual re-replay from the DLQ.
+    val attempts = new AtomicInteger(0)
+    val dlq      = freshDlqPath()
+    val route: Route = entity(as[String]) { _ =>
+      // First two attempts → 503, third attempt → 200.
+      val n = attempts.incrementAndGet()
+      if n < 3 then complete(StatusCodes.custom(503, ""))
+      else complete(StatusCodes.custom(200, ""))
+    }
+
+    val program: IO[Unit] =
+      bindServer(route).bracket { case (url, _) =>
+        // maxRetries=2 → 1 initial + 2 retries = 3 attempts. Third one succeeds.
+        WebhookAuditSink.make(baseConfig(url, dlq)).use { sink =>
+          sink.write(sampleRecord("c-flaky")) *> IO {
+            // Wait until either DLQ shows up (failure) or all 3 attempts complete (success).
+            waitUntil(5.seconds)(attempts.get >= 3 || Files.exists(dlq))
+            // Small extra wait for the post-2xx ack path to settle (no fiber action after success,
+            // but guard against the test asserting DLQ-absence before the sink would have written
+            // one if the success classifier broke).
+            Thread.sleep(150)
+          }
+        }
+      } { case (_, binding) => unbind(binding) }
+    program.unsafeRunSync()
+
+    attempts.get shouldBe 3
+    // Critical: NO DLQ entry — the 2xx ack'd the record.
+    Files.exists(dlq) shouldBe false
+  }
+
   test("dead-letter file is JSONL — one record per line, parseable") {
     import io.circe.parser
     val dlq = freshDlqPath()

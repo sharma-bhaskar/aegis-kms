@@ -5,6 +5,7 @@ import cats.effect.unsafe.IORuntime
 import com.typesafe.config.{Config, ConfigFactory}
 import dev.aegiskms.core.{Decision, Operation, Principal}
 import dev.aegiskms.iam.{PolicyEngine, RoleBasedPolicyEngine}
+import org.scalatest.Inside.*
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatest.matchers.should.Matchers
 
@@ -111,4 +112,54 @@ final class PolicyEngineResourceSpec extends AnyFunSuite with Matchers:
     ex.getMessage should include("Unknown aegis.policy.kind=opa")
     ex.getMessage should include("'dev'")
     ex.getMessage should include("'role-based'")
+  }
+
+  test("kind=role-based: agent recursion through parent — wedge's load-bearing security property") {
+    // The agent identity model's load-bearing promise: "an agent never escalates beyond what the
+    // human who issued its credential could do." Under role-based, that means an agent under alice
+    // (admins → Sign only) cannot Destroy even if its own allowedOps includes Destroy, AND cannot
+    // do anything its own allowedOps excludes. We test BOTH gates via the wired engine.
+    val hocon  = """
+      aegis.policy {
+        kind = "role-based"
+        role-based {
+          role-bindings    = { admins = ["Sign"] }
+          subject-bindings = {}
+        }
+      }
+    """
+    val engine = invoke(cfg(hocon))
+
+    // Construct an agent under alice. The agent's own allowedOps is BROADER than alice's role —
+    // includes Destroy. Recursion must still deny Destroy because alice can't Destroy.
+    val agent = Principal.Agent(
+      subject = "claude-session-7a3",
+      operator = alice,
+      purpose = "test",
+      issuedAt = java.time.Instant.parse("2026-05-26T10:00:00Z"),
+      ttl = scala.concurrent.duration.Duration("1h"),
+      allowedOps = Set(Operation.Sign, Operation.Destroy),
+      parent = None
+    )
+
+    // 1. Sign: agent's allowedOps includes it AND alice can Sign → Allow.
+    engine.permit(agent, Operation.Sign, "k").unsafeRunSync() shouldBe Decision.Allow
+
+    // 2. Destroy: agent's allowedOps includes it BUT alice cannot Destroy → Deny with "blocked by
+    //    parent" reason. This is the load-bearing escalation prevention.
+    val destroyDecision = engine.permit(agent, Operation.Destroy, "k").unsafeRunSync()
+    destroyDecision shouldBe a[Decision.Deny]
+    inside(destroyDecision) { case Decision.Deny(reason) =>
+      reason should include("blocked by parent")
+      reason should include(alice.subject)
+    }
+
+    // 3. Get: agent's allowedOps does NOT include it → Deny with "scope does not include" reason.
+    //    This is the per-agent allowlist gate; parent recursion never even runs.
+    val getDecision = engine.permit(agent, Operation.Get, "k").unsafeRunSync()
+    getDecision shouldBe a[Decision.Deny]
+    inside(getDecision) { case Decision.Deny(reason) =>
+      reason should include("scope does not include")
+      reason should include("claude-session-7a3")
+    }
   }

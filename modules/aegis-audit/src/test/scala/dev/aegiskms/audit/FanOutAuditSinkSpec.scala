@@ -98,3 +98,37 @@ final class FanOutAuditSinkSpec extends AnyFunSuite with Matchers:
     // Identity: the returned sink IS the primary, not a wrapping FanOutAuditSink.
     sink should be theSameInstanceAs primary
   }
+
+  test("AuditQuery capability of the primary is NOT preserved by the wrapper — Server.boot must " +
+    "match on `primarySink`, not the wrapped sink, to recover the GET /v1/audit endpoint") {
+    // Regression guard for the Server.boot wiring: when webhook fan-out is enabled, the primary
+    // (typically PostgresAuditSink, which implements both AuditSink AND AuditQuery) gets wrapped
+    // in FanOutAuditSink. The wrapper does NOT carry the AuditQuery capability — by design, so
+    // Server.boot is forced to keep a reference to the unwrapped primary for the
+    // `primarySink match { case q: AuditQuery ... }` lookup. If a refactor ever switches that
+    // pattern-match back to the wrapped sink, GET /v1/audit silently returns 501 even with
+    // aegis.audit.kind=postgres.
+
+    // Fake sink that implements BOTH SPIs — same shape as PostgresAuditSink but with no DB.
+    final class QueryableInMemorySink extends AuditSink[IO] with AuditQuery[IO]:
+      def write(record: AuditRecord): IO[Unit] = IO.unit
+      def query(filter: AuditQuery.Filter): IO[AuditQuery.Page] =
+        IO.pure(AuditQuery.Page(Nil, filter.limit, filter.offset, hasMore = false))
+
+    val primary: AuditSink[IO]   = new QueryableInMemorySink
+    val secondary: AuditSink[IO] = InMemoryAuditSink.make.unsafeRunSync()
+    val wrapped: AuditSink[IO]   = FanOutAuditSink.of(primary, List(secondary))
+
+    // The wrapped sink is NOT recognized as AuditQuery — this is what would have broken
+    // `GET /v1/audit` if Server.boot pattern-matched on the wrapped value.
+    wrapped match
+      case _: AuditQuery[IO @unchecked] =>
+        fail("FanOutAuditSink should NOT be an AuditQuery — wrapping is supposed to hide the capability")
+      case _ => succeed
+
+    // Conversely, the original primary still is — and Server.boot relies on this.
+    primary match
+      case _: AuditQuery[IO @unchecked] => succeed
+      case _ =>
+        fail("primary sink lost AuditQuery capability (this would break GET /v1/audit unconditionally)")
+  }
