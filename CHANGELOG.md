@@ -8,6 +8,47 @@ All notable changes to Aegis will be documented here. This project follows
 
 ### Added
 
+- **Source-IP plumbed into audit records — activates `SourceIpBaseline` (closes #78).** The
+  detector has been inert since v0.1.0 because `source.ip` never landed in
+  `AuditRecord.context`. This change wires the HTTP transport's remote address through to
+  every audit row produced by `AuditingKeyService`.
+  - **`RequestContext` SPI** in `aegis-audit`: a tiny `IOLocal`-backed side-channel with
+    `current: IO[Map[String, String]]` and `set(Map): IO[Unit]`. Two impls ship:
+    `RequestContext.empty` (no-op, the default so existing callers compile unchanged) and
+    `RequestContext.fromIOLocal(local)` (the real wire-up). Lives in `aegis-audit` so the
+    library tier stays Pekko-free — only cats-effect is on the classpath.
+  - **`AuditingKeyService`** gains an optional `requestContext` ctor param. The decorator
+    calls `requestContext.current` inside `instrument` / `locate` and `preflightContext`
+    merges the per-request bag last so a transport-supplied key (e.g. `source.ip`)
+    wins over a same-key value from the scorer/engine.
+  - **`Endpoints.scala`** introduces a server-only `extractFromRequest`-based
+    `sourceIpInput`. It does NOT appear in the OpenAPI document (the wire shape is
+    unchanged for clients), but every keys / agents / audit endpoint gains an internal
+    `Option[String]` slot for the remote IP. The extractor reads from `req.underlying`
+    cast to pekko's `RequestContext` because Tapir's pekko adapter hardcodes
+    `ServerRequest.connectionInfo` to `(None, None, None)` — naive use of
+    `connectionInfo.remote` would always yield `None`.
+  - **`application.conf`** sets `pekko.http.server.remote-address-attribute = on` so
+    pekko populates `AttributeKeys.remoteAddress` on every incoming request (the default
+    is `off` for backwards compatibility).
+  - **`HttpRoutes.runIO(clientIp)(io)`** sets the IOLocal as the first IO step of every
+    request, before any user-facing work runs. Setting it inside the IO chain (rather than
+    on the calling thread) is what makes the value visible to deeper IO consumers — every
+    subsequent `flatMap` in the fiber inherits it, including the read inside
+    `AuditingKeyService.preflightContext`.
+  - **`Server.boot`** constructs one `IOLocal[Map[String,String]]` and hands the same
+    `RequestContext.fromIOLocal(local)` to both `AuditingKeyService` and `HttpRoutes` —
+    separate locals would leave the read empty. No new HOCON keys; the wiring is automatic
+    when the server runs.
+  - **Tests**: 4 new `AuditingKeyServiceSpec` cases covering the back-compat empty path,
+    the source.ip stamp on a state-changing op, the source.ip stamp on the read-only
+    `locate` path, and the three-way coexistence with `risk.score` + `outcome.decision`
+    on the same record. Plus a new `HttpRoutesSourceIpSpec` integration suite (3 cases)
+    that drives requests through the full `Route` and asserts the audit log carries
+    `source.ip` end-to-end — covering criterion #4 of the issue.
+  - **`BaselineDetector` doc cleanup.** Removed the three "inert until the HTTP plumbing
+    PR populates this key" comments now that this PR is that plumbing.
+
 - **CLI `agent issue` + `audit tail` subcommands (closes #79).** The two demo-critical CLI
   surfaces moved from stubs (`(planned — PR A1)` / `(planned — PR F2.b)`) to real
   implementations against the v0.2.0 backends.

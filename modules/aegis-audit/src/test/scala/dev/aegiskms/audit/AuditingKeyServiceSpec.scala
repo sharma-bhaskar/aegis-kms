@@ -1,7 +1,7 @@
 package dev.aegiskms.audit
 
-import cats.effect.IO
 import cats.effect.unsafe.implicits.global
+import cats.effect.{IO, IOLocal}
 import dev.aegiskms.core.*
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatest.matchers.should.Matchers
@@ -387,4 +387,84 @@ final class AuditingKeyServiceSpec extends AnyFunSuite with Matchers:
     // Locate audit row carries the score but NOT a decision (engine isn't consulted for locate).
     record.context.contains("risk.score") shouldBe true
     record.context.contains("outcome.decision") shouldBe false
+  }
+
+  // ── RequestContext / source.ip integration (#78) ──────────────────────────
+  //
+  // The HTTP layer stamps `source.ip` onto a shared IOLocal as the first IO step of each request;
+  // `AuditingKeyService` reads it back via `requestContext.current` and merges it into
+  // `AuditRecord.context`. These tests assert the contract end-to-end: a `set` upstream becomes a
+  // visible key in every downstream audit record produced inside the same fiber.
+
+  test("RequestContext.empty (default) → no source.ip key on the audit record") {
+    val (svc, sink) = fixture() // default ctor → RequestContext.empty
+    svc.create(KeySpec.aes256("no-ip"), alice).unsafeRunSync()
+    sink.all.unsafeRunSync().head.context.contains("source.ip") shouldBe false
+  }
+
+  test("fromIOLocal: set('source.ip' -> ip) upstream lands in AuditRecord.context downstream") {
+    val program: IO[AuditRecord] =
+      for
+        local <- IOLocal(Map.empty[String, String])
+        sink  <- InMemoryAuditSink.make
+        inner <- KeyService.inMemory
+        svc = AuditingKeyService(
+          inner,
+          sink,
+          requestContext = RequestContext.fromIOLocal(local)
+        )
+        // Mimic HttpRoutes.runIO: set the IOLocal as the first IO step, then run the work.
+        _       <- local.set(Map("source.ip" -> "203.0.113.42"))
+        _       <- svc.create(KeySpec.aes256("ip-stamped"), alice)
+        records <- sink.all
+      yield records.head
+
+    val rec = program.unsafeRunSync()
+    rec.context("source.ip") shouldBe "203.0.113.42"
+  }
+
+  test("source.ip also lands on the locate audit row (read-only path)") {
+    val program: IO[AuditRecord] =
+      for
+        local <- IOLocal(Map.empty[String, String])
+        sink  <- InMemoryAuditSink.make
+        inner <- KeyService.inMemory
+        svc = AuditingKeyService(
+          inner,
+          sink,
+          requestContext = RequestContext.fromIOLocal(local)
+        )
+        _       <- local.set(Map("source.ip" -> "198.51.100.7"))
+        _       <- svc.locate("anything", alice)
+        records <- sink.all
+      yield records.head
+
+    val rec = program.unsafeRunSync()
+    rec.operation shouldBe Operation.Locate
+    rec.context("source.ip") shouldBe "198.51.100.7"
+  }
+
+  test("source.ip coexists with risk.score / outcome.decision on the same record") {
+    // Combines all three context contributors: scorer, engine, and request bag.
+    val program: IO[AuditRecord] =
+      for
+        local <- IOLocal(Map.empty[String, String])
+        sink  <- InMemoryAuditSink.make
+        inner <- KeyService.inMemory
+        svc = AuditingKeyService(
+          inner,
+          sink,
+          scorer = Some(new FixedScorer(RiskScore(0.42, List(RiskFactor("AgentPrincipal", 0.2, "x"))))),
+          engine = Some(new FixedEngine(Decision.Allow)),
+          requestContext = RequestContext.fromIOLocal(local)
+        )
+        _       <- local.set(Map("source.ip" -> "192.0.2.5"))
+        _       <- svc.create(KeySpec.aes256("combo"), alice)
+        records <- sink.all
+      yield records.head
+
+    val rec = program.unsafeRunSync()
+    rec.context("source.ip") shouldBe "192.0.2.5"
+    rec.context("risk.score") shouldBe "0.42"
+    rec.context("outcome.decision") shouldBe "Allow"
   }

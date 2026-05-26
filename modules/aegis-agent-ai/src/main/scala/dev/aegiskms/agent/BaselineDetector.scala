@@ -24,7 +24,7 @@ import java.util.UUID
   *   - `OpHistogramBaseline`: the actor performed an `Operation` it has never performed before.
   *   - `TimeOfDayBaseline`: the actor was active in a UTC hour-of-day they have never been active in.
   *   - `SourceIpBaseline`: the actor's request came from an IP not in their seen set. Reads
-  *     `record.context("source.ip")`; inert until the HTTP plumbing PR populates that key.
+  *     `record.context("source.ip")`, which the HTTP layer populates via `RequestContext` (#78).
   *
   * Cold-start: every detector requires the actor to have at least one prior observation in the relevant
   * dimension before it can fire. The first time `claude-session-7a3` shows up we record but don't alert; the
@@ -55,9 +55,9 @@ final class BaselineDetector private (
 
 object BaselineDetector:
 
-  /** Well-known key the SourceIp detector reads from `AuditRecord.context`. The HTTP layer is responsible for
-    * populating this once per-request context plumbing lands; until then the SourceIp detector stays inert in
-    * production but can be exercised by tests that build records with the context populated.
+  /** Well-known key the SourceIp detector reads from `AuditRecord.context`. The HTTP layer populates it via
+    * `RequestContext.fromIOLocal` wired through `AuditingKeyService` (#78). Tests can also synthesize records
+    * with this key directly.
     */
   val SourceIpContextKey: String = "source.ip"
 
@@ -75,8 +75,8 @@ object BaselineDetector:
     )
 
   /** Per-actor baseline. `hoursSeen` are UTC hours-of-day (`0`–`23`); we deliberately don't try to be
-    * timezone-aware in v0.1.1 — this is the *demo* detector. `sourceIpsSeen` is empty until the HTTP plumbing
-    * PR populates `AuditRecord.context("source.ip")`.
+    * timezone-aware in v0.1.1 — this is the *demo* detector. `sourceIpsSeen` is populated from
+    * `AuditRecord.context("source.ip")`, which the HTTP layer fills in (#78).
     */
   final case class ActorBaseline(
       keysSeen: Set[String],
@@ -208,9 +208,9 @@ object BaselineDetector:
       )
 
     // 5. SourceIpBaseline — request from an IP not in the actor's seen set. Reads
-    //    `record.context("source.ip")`. Inert in production until the HTTP plumbing PR populates the
-    //    key; tests can build records with the context map set directly. We only fire when the actor
-    //    has at least one prior IP — so the cold-start case (no IP history at all) doesn't alert.
+    //    `record.context("source.ip")`, populated by the HTTP layer's `RequestContext` (#78). We only
+    //    fire when the actor has at least one prior IP — so the cold-start case (no IP history at
+    //    all) doesn't alert.
     rec.context.get(SourceIpContextKey).foreach { ip =>
       if existing.sourceIpsSeen.nonEmpty && !existing.sourceIpsSeen.contains(ip) then
         recs += AgentRecommendation(
