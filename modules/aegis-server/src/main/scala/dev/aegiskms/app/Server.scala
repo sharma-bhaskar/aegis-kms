@@ -16,6 +16,7 @@ import dev.aegiskms.audit.{
   AuditQuery,
   AuditSink,
   AuditingKeyService,
+  FanOutAuditSink,
   PostgresAuditSink,
   RequestContext,
   StdoutAuditSink
@@ -29,9 +30,11 @@ import dev.aegiskms.iam.{
   JwtIssuer,
   JwtVerifier,
   OidcJwtVerifier,
+  PolicyEngine,
   PrincipalResolver,
   RevocationAwareJwtVerifier,
-  RevocationList
+  RevocationList,
+  RoleBasedPolicyEngine
 }
 import dev.aegiskms.persistence.{EventJournal, PostgresEventJournal, PostgresJournalConfig}
 import io.micrometer.prometheusmetrics.PrometheusMeterRegistry
@@ -50,7 +53,8 @@ import scala.concurrent.duration.*
   *   - `HttpRoutes` — extracts `Principal` from `X-Aegis-User`, parses path params
   *   - `AuditingKeyService` — writes one `AuditRecord` per call (incl. denies + errors)
   *   - `MeteredKeyService` — records counter + latency timer + error counter per operation
-  *   - `AuthorizingKeyService` — consults the [[DevPolicyEngine]] before delegating
+  *   - `AuthorizingKeyService` — consults the configured `PolicyEngine` ([[DevPolicyEngine]] or
+  *     [[dev.aegiskms.iam.RoleBasedPolicyEngine]] per `aegis.policy.kind`) before delegating
   *   - `ActorBackedKeyService` — adapts ask-pattern → `KeyService[IO]`
   *   - `KeyOpsActor` — the single actor that owns the live state map
   *   - `EventJournal` — append-only log; replayed on boot to rebuild state
@@ -72,8 +76,6 @@ import scala.concurrent.duration.*
   * Resource and discarded its finalizer (i.e. relied on JVM exit to release the pool).
   *
   * Productionising checklist (deferred to later PRs):
-  *   - Replace `DevPolicyEngine` with `RoleBasedPolicyEngine` configured from OIDC claims (PR F3.b)
-  *   - Add Postgres + Kafka audit sinks alongside stdout (PRs F2.b, F2.c)
   *   - Bind KMIP TTLV + MCP servers in addition to HTTP (PRs K1, A1)
   */
 object Server extends IOApp.Simple:
@@ -134,7 +136,13 @@ object Server extends IOApp.Simple:
       //    + journal as one unit; metrics record their own (smaller) timer next to it; audit stays
       //    the outermost layer so the audit row reflects the post-trace outcome.
       actorBacked = new ActorBackedKeyService(system, rootOfTrust)
-      authorizing = new AuthorizingKeyService(actorBacked, new DevPolicyEngine)
+      // Policy engine (#77): `aegis.policy.kind=dev` (default) keeps the permissive
+      // `DevPolicyEngine` so the workstation demo + existing tests keep working unchanged.
+      // `aegis.policy.kind=role-based` activates `RoleBasedPolicyEngine` with bindings loaded
+      // from HOCON; boot fails fast if both binding maps are empty so a misconfigured
+      // production deployment can't silently become "deny-all" or accidentally "allow-all".
+      policyEngine <- Resource.eval(buildPolicyEngine(rootConfig))
+      authorizing = new AuthorizingKeyService(actorBacked, policyEngine)
       metered     = new MeteredKeyService(authorizing, metricsRegistry)
       traced      = new TracingKeyService(metered, tracer)
       recStore <- Resource.eval(InMemoryRecommendationSink.make)
@@ -143,7 +151,14 @@ object Server extends IOApp.Simple:
       // persists to the indexed `aegis_audit_events` table backing the audit-read API (#20).
       // `stdoutSink` is kept as the variable name across both modes so the existing references
       // downstream (auto-responder, HttpRoutes auditSink) stay readable — only the impl changes.
-      stdoutSink <- auditSinkResource(rootConfig)
+      primarySink <- auditSinkResource(rootConfig)
+      // Optional SIEM webhook fan-out (#21): when `aegis.audit.webhook.enabled=true`, every
+      // record fans out to BOTH the primary durable sink AND an async HTTPS POST. Primary
+      // failures still propagate (durability); webhook failures are bounded by retry +
+      // dead-letter (best-effort). `FanOutAuditSink.of` returns the primary as-is when the
+      // webhook is disabled, so the non-fan-out path stays zero-cost.
+      webhookSinks <- webhookAuditSinkResource(rootConfig)
+      stdoutSink = FanOutAuditSink.of(primarySink, webhookSinks)
       // Auto-responder (#17 / W3): decorates the recommendation sink. Every recommendation is first
       // persisted to `recStore` (full alert history retained), then matched against `DefaultRules`
       // (High → Revoke, Medium → Alert), then executed with a per-(actor,action) 60 s cooldown. The
@@ -197,13 +212,6 @@ object Server extends IOApp.Simple:
       // with proper OIDC + JWKS rotation.
       agentIssuer <- Resource.eval(buildAgentIssuer(rootConfig))
 
-      _ <- Resource.eval(IO {
-        logger.warn(
-          "aegis-server starting in DEV MODE — DevPolicyEngine grants every Human full access. " +
-            "Replace with OIDC + RoleBasedPolicyEngine before exposing this beyond a workstation."
-        )
-      })
-
       // 5. HTTP binding. Acquire = bind; release = unbind with the configured grace period (5s) so
       //    in-flight requests finish before the socket closes.
       appRoute =
@@ -212,16 +220,16 @@ object Server extends IOApp.Simple:
           // agent credential minted (the keys surface is already covered by `AuditingKeyService`
           // wrapping `traced`, but agent issuance is not on the `KeyService` algebra and would
           // otherwise be invisible to operators).
-          // Audit-read endpoint (#20): only wired when the sink is a `PostgresAuditSink` (the
-          // only impl that satisfies the `AuditQuery` SPI). With `aegis.audit.kind=stdout`,
-          // `GET /v1/audit` returns 501 NotImplemented — same shape as `/v1/agents/issue` when
-          // no issuer is configured.
+          // Audit-read endpoint (#20): only wired when the *primary* sink is a `PostgresAuditSink`
+          // (the only impl that satisfies the `AuditQuery` SPI). Match on `primarySink`, not
+          // `stdoutSink`, because `stdoutSink` may have been wrapped in `FanOutAuditSink` for the
+          // webhook fan-out (#21) and that wrapper does NOT carry the AuditQuery capability.
           HttpRoutes(
             auditing,
             resolver,
             Some(agentIssuer),
             Some(stdoutSink),
-            stdoutSink match
+            primarySink match
               case q: AuditQuery[IO @unchecked] => Some(q)
               case _                            => None,
             reqContext
@@ -410,6 +418,52 @@ object Server extends IOApp.Simple:
           s"Unknown aegis.audit.kind=$other (expected 'stdout' or 'postgres')"
         )))
 
+  /** Build the optional SIEM webhook fan-out sink list (#21). Returns an empty list when
+    * `aegis.audit.webhook.enabled=false` so `FanOutAuditSink.of` collapses to the primary sink with no
+    * overhead. When enabled, returns a single-element list containing the configured `WebhookAuditSink`. The
+    * webhook sink owns its background drain fiber and retry loop; this builder just constructs and lifts it
+    * into the Resource scope.
+    *
+    * Fails fast at boot on misconfigured webhook (empty URL or empty secret) so production deployments don't
+    * run with a half-wired SIEM that drops every record.
+    */
+  private def webhookAuditSinkResource(config: Config)(using
+      org.apache.pekko.actor.typed.ActorSystem[?]
+  ): Resource[IO, List[AuditSink[IO]]] =
+    if !config.getBoolean("aegis.audit.webhook.enabled") then
+      Resource.pure(Nil)
+    else
+      val webhookCfg = config.getConfig("aegis.audit.webhook")
+      val url        = webhookCfg.getString("url")
+      val secret     = webhookCfg.getString("secret")
+      if url.isEmpty then
+        Resource.eval(IO.raiseError(new IllegalArgumentException(
+          "aegis.audit.webhook.enabled=true requires aegis.audit.webhook.url " +
+            "(set AEGIS_AUDIT_WEBHOOK_URL; e.g. https://siem.example.com/aegis)"
+        )))
+      else if secret.isEmpty then
+        Resource.eval(IO.raiseError(new IllegalArgumentException(
+          "aegis.audit.webhook.enabled=true requires aegis.audit.webhook.secret " +
+            "(set AEGIS_AUDIT_WEBHOOK_SECRET; ≥32 bytes recommended)"
+        )))
+      else
+        val sinkCfg = WebhookAuditSink.Config(
+          url = org.apache.pekko.http.scaladsl.model.Uri(url),
+          secret = secret,
+          maxRetries = webhookCfg.getInt("max-retries"),
+          initialBackoff = scala.concurrent.duration.FiniteDuration(
+            webhookCfg.getLong("initial-backoff-ms"),
+            scala.concurrent.duration.MILLISECONDS
+          ),
+          maxBackoff = scala.concurrent.duration.FiniteDuration(
+            webhookCfg.getLong("max-backoff-ms"),
+            scala.concurrent.duration.MILLISECONDS
+          ),
+          deadLetterFile = java.nio.file.Paths.get(webhookCfg.getString("dead-letter-file")),
+          queueCapacity = webhookCfg.getInt("queue-capacity")
+        )
+        WebhookAuditSink.make(sinkCfg).map(s => List[AuditSink[IO]](s))
+
   /** Background fiber that prunes audit rows older than `retentionDays` once a day. No-op when `retentionDays
     * <= 0`. Cancellation on Resource release stops the fiber cleanly.
     */
@@ -470,6 +524,73 @@ object Server extends IOApp.Simple:
         )
         new AgentTokenIssuer(JwtIssuer.hmac(randomSecret))
   }
+
+  /** Build the policy engine from `aegis.policy.kind` (#77). Misconfiguration fails fast at boot — silent
+    * fallback to dev would defeat the purpose of opting in to role-based.
+    *
+    *   - `dev` — `DevPolicyEngine` (every Human + Service allowed; agent recursion still gates).
+    *   - `role-based` — `RoleBasedPolicyEngine` with bindings loaded from HOCON
+    *     (`aegis.policy.role-based.role-bindings` and `aegis.policy.role-based.subject-bindings`). Both maps
+    *     must not be simultaneously empty — that would render every Human / Service request denied, which is
+    *     almost certainly a misconfiguration rather than an explicit choice.
+    *
+    * Unknown operation names in bindings fail fast at boot with a clear error rather than being silently
+    * ignored (a typo'd `"sgn"` would otherwise grant nothing instead of `Sign`).
+    */
+  private def buildPolicyEngine(config: Config): IO[PolicyEngine[IO]] = IO {
+    config.getString("aegis.policy.kind") match
+      case "dev" =>
+        logger.warn(
+          "policy: DEV MODE — DevPolicyEngine grants every Human and Service full access. " +
+            "Set aegis.policy.kind=role-based (with role-bindings / subject-bindings) for production."
+        )
+        new DevPolicyEngine
+      case "role-based" =>
+        val cfg             = config.getConfig("aegis.policy.role-based")
+        val roleBindings    = parseBindings(cfg, "role-bindings")
+        val subjectBindings = parseBindings(cfg, "subject-bindings")
+        if roleBindings.isEmpty && subjectBindings.isEmpty then
+          throw new IllegalArgumentException(
+            "aegis.policy.kind=role-based requires at least one binding in role-bindings or " +
+              "subject-bindings; both are empty (set them in HOCON, or use kind=dev for a permissive boot)"
+          )
+        val totalRoles    = roleBindings.size
+        val totalSubjects = subjectBindings.size
+        logger.info(
+          s"policy: role-based — $totalRoles role binding(s), $totalSubjects subject binding(s)"
+        )
+        new RoleBasedPolicyEngine(roleBindings, subjectBindings)
+      case other =>
+        throw new IllegalArgumentException(
+          s"Unknown aegis.policy.kind=$other (expected 'dev' or 'role-based')"
+        )
+  }
+
+  /** Parse a HOCON object of `name -> [op, op, ...]` into `Map[String, Set[Operation]]`. Unknown operation
+    * names fail fast with the offending key + offending value so misconfigured bindings surface at boot, not
+    * at the first denied request.
+    */
+  private def parseBindings(
+      cfg: Config,
+      key: String
+  ): Map[String, Set[dev.aegiskms.core.Operation]] =
+    import scala.jdk.CollectionConverters.*
+    val inner = cfg.getConfig(key)
+    inner.root().keySet().asScala.toList.map { binding =>
+      // `ConfigUtil.joinPath` quotes the binding so subject keys like `"bob@org"` (containing
+      // reserved chars like `@`, `.`, `:`) round-trip safely through HOCON path resolution.
+      val path    = com.typesafe.config.ConfigUtil.joinPath(binding)
+      val opNames = inner.getStringList(path).asScala.toList
+      val ops = opNames.map { name =>
+        dev.aegiskms.core.Operation.values
+          .find(_.toString == name)
+          .getOrElse(throw new IllegalArgumentException(
+            s"aegis.policy.role-based.$key.$binding: unknown operation '$name' " +
+              s"(expected one of: ${dev.aegiskms.core.Operation.values.map(_.toString).mkString(", ")})"
+          ))
+      }
+      binding -> ops.toSet
+    }.toMap
 
   /** Build the principal resolver from `aegis.auth.kind`. Misconfiguration fails fast at boot — silent
     * fallback to dev would be a security hole. Returns `IO` because the OIDC path needs to hit the network

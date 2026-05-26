@@ -8,6 +8,58 @@ All notable changes to Aegis will be documented here. This project follows
 
 ### Added
 
+- **`RoleBasedPolicyEngine` wired in `Server.boot` (closes #77).** The role-based engine has shipped
+  in `aegis-iam` since v0.1.0 with full tests, but `Server.boot` always instantiated
+  `DevPolicyEngine` regardless of `aegis.auth.kind`. As a result, the "alice can sign but not revoke"
+  human-RBAC story we sell as the wedge's safety net was a no-op for humans in production HMAC / OIDC
+  mode — only the agent-scope recursion still fired.
+  - **New `aegis.policy` HOCON block:** `kind = dev | role-based` (default `dev`), plus
+    `role-based.role-bindings` (group → list of KMIP operation names) and
+    `role-based.subject-bindings` (subject → list of operation names). Env-var overrides via
+    `AEGIS_POLICY_KIND`.
+  - **`Server.buildPolicyEngine`** parses the HOCON, validates every operation name against
+    `Operation.values` (typos like `"Sgn"` fail fast at boot, not silently never-match), and rejects
+    `kind=role-based` when both binding maps are empty — silent allow-all on misconfiguration would
+    defeat the purpose of opting in.
+  - **Per-builder warn logs** when either auth or policy is in dev mode replace the old
+    unconditional "starting in DEV MODE" startup warning so the message reflects what's actually
+    configured.
+  - **Tests:** new `PolicyEngineResourceSpec` (7 cases) mirrors `RootOfTrustResourceSpec` — exercises
+    each branch including the fail-fast paths and validates the bindings produce the expected
+    Allow/Deny decisions.
+
+- **Generic SIEM webhook audit sink — closes the last `priority/high` audit row for v0.2.0
+  (closes #21, ROADMAP 2.0.i).** Pluggable HTTPS POST sink with HMAC signing, exponential backoff
+  retry, and dead-letter to disk. Fan-out alongside the primary durable sink (Postgres or stdout) so
+  operators get `postgres + webhook` simultaneously.
+  - **`AuditRecordJson`** (in `aegis-audit`, library tier): canonical circe encoder for
+    `AuditRecord`. Distinct from `aegis-http`'s `AuditRecordDto` (which is the REST audit-read
+    endpoint's wire format and may evolve with the API) so downstream SIEM consumers pin to a stable
+    schema.
+  - **`FanOutAuditSink`** (in `aegis-audit`): composes one primary + N secondaries. **Asymmetric
+    semantics by design** — primary failures propagate (durability contract); secondary failures are
+    logged at WARN and swallowed (best-effort). `FanOutAuditSink.of` is a pass-through when the
+    secondaries list is empty so the boot composition stays zero-cost on the default path.
+  - **`WebhookAuditSink`** (in `aegis-server`): bounded async queue + background drain fiber. POSTs
+    one record per request as JSON with `X-Aegis-Signature: sha256=<hex>` (GitHub-webhook
+    convention). 2xx acks. 4xx → DLQ immediately (no retry — auth/malformed are not transient).
+    5xx and transport errors retry up to `max-retries` with exponential backoff capped at
+    `max-backoff`. Records exceeding the retry budget land in a JSONL dead-letter file (parent
+    directory auto-created on first write). Reuses the boot `ActorSystem`'s pekko `Http` extension
+    — no new connection pool.
+  - **`Server.boot` fan-out wiring:** when `aegis.audit.webhook.enabled=true`, the primary sink is
+    wrapped via `FanOutAuditSink.of(primary, List(webhook))` before being passed to the auto-
+    responder and `HttpRoutes`. The audit-read `AuditQuery` lookup matches on `primarySink` (not
+    the wrapped sink) so `GET /v1/audit` still works when fan-out is enabled.
+  - **New `aegis.audit.webhook` HOCON block:** `enabled`, `url`, `secret`, `max-retries`,
+    `initial-backoff-ms`, `max-backoff-ms`, `dead-letter-file`, `queue-capacity`, all overridable
+    via `AEGIS_AUDIT_WEBHOOK_*`. Boot fails fast on empty URL or empty secret when enabled.
+  - **Tests:** `FanOutAuditSinkSpec` (5 cases) covers the asymmetric failure semantics + identity
+    collapse on empty secondaries. `WebhookAuditSinkSpec` (6 cases) is an integration suite that
+    spins up a real pekko-http server on `127.0.0.1:0` per test and validates: 2xx ack, HMAC
+    signature matches an independent recompute, 4xx → immediate DLQ, 5xx retries to DLQ, transport
+    failure retries to DLQ, dead-letter file is well-formed JSONL.
+
 - **Source-IP plumbed into audit records — activates `SourceIpBaseline` (closes #78).** The
   detector has been inert since v0.1.0 because `source.ip` never landed in
   `AuditRecord.context`. This change wires the HTTP transport's remote address through to
