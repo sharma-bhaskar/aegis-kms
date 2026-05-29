@@ -34,6 +34,34 @@ object Dependencies {
     "org.apache.pekko" %% "pekko-slf4j"       % V.pekko
   )
 
+  /** Pekko Connectors Kafka (the Pekko fork of Alpakka Kafka) — server-tier only. Used by `KafkaAuditSink`
+    * (#22). The transitive `kafka-clients` dependency drives the wire compat with the broker; we pin Pekko
+    * Connectors Kafka 1.1.0 which is the release line that pairs with pekko 1.1.x.
+    */
+  val pekkoConnectorsKafka: Seq[ModuleID] = Seq(
+    "org.apache.pekko" %% "pekko-connectors-kafka" % "1.1.0"
+  )
+
+  /** Official Java NATS client (`io.nats:jnats`) — used by `NatsAuditSink` (#23). JetStream support is in the
+    * same jar; no separate dep.
+    */
+  val nats: Seq[ModuleID] = Seq(
+    "io.nats" % "jnats" % "2.21.1"
+  )
+
+  /** Test-only deps for spinning up real Kafka / NATS brokers in Docker during integration tests. Same
+    * skip-on-no-Docker pattern as `testcontainersPostgres`. Used by `KafkaAuditSinkSpec` (#22) and
+    * `NatsAuditSinkSpec` (#23).
+    */
+  val testcontainersKafka: Seq[ModuleID] = Seq(
+    "com.dimafeng" %% "testcontainers-scala-scalatest" % V.testcontainers % Test,
+    "com.dimafeng" %% "testcontainers-scala-kafka"     % V.testcontainers % Test
+  )
+
+  val testcontainersNats: Seq[ModuleID] = Seq(
+    "com.dimafeng" %% "testcontainers-scala-scalatest" % V.testcontainers % Test
+  )
+
   /** Tapir endpoint definitions, JSON support, Pekko-HTTP interpreter, OpenAPI + Swagger UI. Used by the
     * server tier (`aegis-http`, `aegis-server`, `aegis-mcp-server`).
     */

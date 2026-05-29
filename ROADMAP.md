@@ -84,12 +84,13 @@ Non-goals: cryptographic operations, multi-cloud RoT, KMIP, MCP, OIDC. All defer
 | 2.0.f | Postgres audit table (queryable, indexed on actor + occurredAt + key) | Platform | 🔜 |
 | 2.0.g | `GET /v1/audit?since=&actor=&key=&op=` audit-read API | Platform | 🔜 |
 | 2.0.h | `aegis audit tail` CLI — wire the existing stub to the new audit-read API | Wedge | 🔜 |
-| 2.0.i | Generic SIEM webhook audit sink (HTTPS POST per event, batched + retried) | Platform | 🔜 |
-| 2.0.j | Kafka audit fan-out (Pekko-Connectors-Kafka) | Platform | 🔜 |
-| 2.0.k | Redis-backed JWT revocation list (jti blacklist) — required for instant agent revoke | Platform | 🔜 |
+| 2.0.i | Generic SIEM webhook audit sink (HTTPS POST per event, batched + retried) | Platform | ✅ |
+| 2.0.j | Kafka audit fan-out (Pekko-Connectors-Kafka) | Platform | ✅ |
+| 2.0.k | Redis-backed JWT revocation list (jti blacklist) — required for instant agent revoke | Platform | ✅ |
 | 2.0.l | Honey keys / canary keys — fake keys with auto-alert if any agent touches them | Wedge | 💡 |
-| 2.0.m | OIDC verifier + JWKS rotation + RS256 / ES256 signature support | Wedge | 🔜 |
+| 2.0.m | OIDC verifier + JWKS rotation + RS256 / ES256 signature support | Wedge | ✅ |
 | 2.0.n | OPA (Open Policy Agent) integration — externalize policy evaluation (Rego) via sidecar | Wedge | 💡 |
+| 2.0.o | NATS / NATS JetStream audit fan-out | Platform | ✅ |
 
 **Demo target:** "Issue an agent token, watch it sign 49 invoices fine, watch it try one off-scope key, watch the auto-revoke fire before the next attempt — all in `aegis audit tail`."
 
@@ -221,10 +222,10 @@ The release tables above slice the work by milestone. The tables below slice by 
 | Sink | Status | Tracking |
 |---|---|---|
 | Stdout JSON | ✅ v0.1.0 | — |
-| Postgres audit table | 🔜 v0.2.0 | issue-tagged `area/audit` |
-| Generic SIEM webhook | 🔜 v0.2.0 | issue-tagged `area/audit` |
-| Kafka | 🔜 v0.2.0 | issue-tagged `area/audit area/integration/kafka` |
-| NATS / NATS JetStream | 💡 v0.2.0+ | issue-tagged `area/audit area/integration/nats` |
+| Postgres audit table | ✅ v0.2.0 | — |
+| Generic SIEM webhook | ✅ v0.2.0 | — |
+| Kafka | ✅ v0.2.0 | — |
+| NATS / NATS JetStream | ✅ v0.2.0 | — |
 | AWS SQS / SNS | 💡 v0.3.0 | issue-tagged `area/audit area/integration/aws` |
 | GCP Pub/Sub | 💡 v0.3.0 | issue-tagged `area/audit area/integration/gcp` |
 | Azure Event Hubs / Service Bus | 💡 v0.3.0 | issue-tagged `area/audit area/integration/azure` |
@@ -259,7 +260,7 @@ The release tables above slice the work by milestone. The tables below slice by 
 | Capability | Status | Tracking |
 |---|---|---|
 | Role/scope allowlist + parent-check | ✅ v0.1.0 | — |
-| Risk-scored decisions (allow / step-up / deny) | 🔜 v0.2.0 | `area/policy area/risk` |
+| Risk-scored decisions (allow / step-up / deny) | ✅ v0.2.0 | — |
 | Time-windowed access (key X usable Mon-Fri 9-18 UTC) | 🔜 v0.3.0 | `area/policy` |
 | Just-In-Time (JIT) access | 💡 v0.3.0+ | `area/policy area/ai-governance` |
 | Approval workflows (Slack / PagerDuty / OpsGenie) | 💡 v0.3.0+ | `area/policy area/integration/*` |
@@ -307,11 +308,11 @@ The release tables above slice the work by milestone. The tables below slice by 
 |---|---|---|
 | HMAC JWT (HS256) issue + verify | ✅ v0.1.0 | — |
 | Dev-mode `X-Aegis-User` header | ✅ v0.1.0 | — |
-| OIDC discovery + JWKS rotation | 🔜 v0.2.0 | `area/iam` |
-| RS256 / ES256 / EdDSA verifier | 🔜 v0.2.0 | `area/iam` |
+| OIDC discovery + JWKS rotation | ✅ v0.2.0 | — |
+| RS256 / ES256 verifier (EdDSA deferred) | ✅ v0.2.0 | — |
 | OIDC providers tested: Keycloak, Authentik, Dex, Auth0, Okta | 💡 v0.3.0 | `area/iam area/integration/oidc` |
-| Agent-token issuance HTTP endpoint | 🔜 v0.2.0 | `area/iam area/wedge` |
-| Redis-backed JWT revocation list (jti blacklist) | 🔜 v0.2.0 | `area/iam area/integration/redis` |
+| Agent-token issuance HTTP endpoint | ✅ v0.2.0 | — |
+| Redis-backed JWT revocation list (jti blacklist) | ✅ v0.2.0 | — |
 | mTLS for KMIP plane | 🔜 v0.4.0 | `area/iam area/wire/kmip` |
 | Hardware-bound credentials (WebAuthn for human auth) | 💡 v0.4.0+ | `area/iam kind/security` |
 

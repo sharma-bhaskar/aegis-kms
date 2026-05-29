@@ -8,6 +8,42 @@ All notable changes to Aegis will be documented here. This project follows
 
 ### Added
 
+- **Kafka + NATS JetStream audit fan-out sinks (closes #22, closes #23).** Two new streaming
+  audit destinations alongside the existing SIEM webhook (#21). Both follow the same shape
+  — bounded `Queue` + background drain fiber + retry + JSONL dead-letter — and compose with
+  the primary durable sink via `FanOutAuditSink`, so operators can run e.g.
+  `postgres + kafka + nats` simultaneously.
+  - **`KafkaAuditSink`** (`aegis-server`) uses Pekko-Connectors-Kafka's `SendProducer` with
+    an idempotent producer config (`acks=all`, `enable.idempotence=true`,
+    `max.in.flight.requests.per.connection=5`, `retries=Int.MaxValue`, `compression=lz4`).
+    Each record's Kafka key is its `correlationId` so messages from the same KMS request
+    land on the same partition, preserving order for downstream consumers.
+  - **`NatsAuditSink`** (`aegis-server`) uses `io.nats:jnats` 2.21 with JetStream's
+    `publishAsync` + `PubAck` for durability — the drain fiber only ack's a record once
+    JetStream has durably persisted it. Optional `autoCreateStream=true` provisions the
+    stream on boot if missing (idempotent — existing streams are left untouched). Supports
+    optional NATS credentials file (`.creds` from `nsc add user --csv`).
+  - **`Server.boot` fan-out wiring:** `kafkaAuditSinkResource` and `natsAuditSinkResource`
+    are added alongside `webhookAuditSinkResource`. All three return an empty list when
+    disabled, so the default path stays zero-cost. Fail-fast at boot on empty
+    `bootstrap-servers` / `topic` / `servers` / `stream` / `subject`.
+  - **New HOCON blocks:** `aegis.audit.kafka.{enabled, bootstrap-servers, topic, client-id,
+    max-retries, initial-backoff-ms, max-backoff-ms, dead-letter-file, queue-capacity}` and
+    `aegis.audit.nats.{enabled, servers, stream, subject, auto-create-stream,
+    credentials-file, max-retries, initial-backoff-ms, max-backoff-ms, dead-letter-file,
+    queue-capacity}`. All overridable via `AEGIS_AUDIT_KAFKA_*` / `AEGIS_AUDIT_NATS_*`.
+  - **New dependencies:** `pekko-connectors-kafka` 1.1.0 (pairs with pekko 1.1.x) and
+    `io.nats:jnats` 2.21.1. Test-only Testcontainers modules for Kafka and NATS.
+  - **Tests:** `KafkaAuditSinkSpec` (4 cases — happy-path consume, canonical-JSON round-trip,
+    transport failure → DLQ, Config validation) and `NatsAuditSinkSpec` (5 cases — same
+    coverage plus idempotent `autoCreateStream`). Integration tests use shared containers
+    via `BeforeAndAfterAll` per the workflow-speed pattern established in PR #86. Skip
+    cleanly on machines without Docker.
+  - **Doc updates:** ROADMAP audit-sink table (Kafka + NATS both ✅ v0.2.0); also flipped
+    several stale `🔜 v0.2.0` rows that had drifted from reality (risk scorer, OIDC,
+    agent-token endpoint, Redis revocation). ARCHITECTURE.md mermaid diagrams + v0.2.0
+    status table updated.
+
 - **MySQL + SQLite event journal adapters (closes #49, closes #50).** The persistence SPI now
   ships three relational backends instead of one. Operators pick via the existing
   `aegis.persistence.journal.kind` HOCON key.

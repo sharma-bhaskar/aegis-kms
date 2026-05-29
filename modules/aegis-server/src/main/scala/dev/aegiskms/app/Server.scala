@@ -160,13 +160,15 @@ object Server extends IOApp.Simple:
       // `stdoutSink` is kept as the variable name across both modes so the existing references
       // downstream (auto-responder, HttpRoutes auditSink) stay readable — only the impl changes.
       primarySink <- auditSinkResource(rootConfig)
-      // Optional SIEM webhook fan-out (#21): when `aegis.audit.webhook.enabled=true`, every
-      // record fans out to BOTH the primary durable sink AND an async HTTPS POST. Primary
-      // failures still propagate (durability); webhook failures are bounded by retry +
-      // dead-letter (best-effort). `FanOutAuditSink.of` returns the primary as-is when the
-      // webhook is disabled, so the non-fan-out path stays zero-cost.
+      // Optional streaming audit fan-outs: SIEM webhook (#21), Kafka (#22), NATS JetStream
+      // (#23). Each kind opts in via its own `aegis.audit.<kind>.enabled=true` flag. Primary
+      // failures still propagate (durability); secondary failures are bounded by per-sink
+      // retry + dead-letter (best-effort). `FanOutAuditSink.of` returns the primary as-is when
+      // the secondaries list is empty, so the non-fan-out path stays zero-cost.
       webhookSinks <- webhookAuditSinkResource(rootConfig)
-      stdoutSink = FanOutAuditSink.of(primarySink, webhookSinks)
+      kafkaSinks   <- kafkaAuditSinkResource(rootConfig)
+      natsSinks    <- natsAuditSinkResource(rootConfig)
+      stdoutSink = FanOutAuditSink.of(primarySink, webhookSinks ++ kafkaSinks ++ natsSinks)
       // Auto-responder (#17 / W3): decorates the recommendation sink. Every recommendation is first
       // persisted to `recStore` (full alert history retained), then matched against `DefaultRules`
       // (High → Revoke, Medium → Alert), then executed with a per-(actor,action) 60 s cooldown. The
@@ -500,6 +502,101 @@ object Server extends IOApp.Simple:
           queueCapacity = webhookCfg.getInt("queue-capacity")
         )
         WebhookAuditSink.make(sinkCfg).map(s => List[AuditSink[IO]](s))
+
+  /** Build the optional Kafka audit fan-out (#22). Returns an empty list when
+    * `aegis.audit.kafka.enabled=false`. When enabled, validates bootstrap-servers + topic are non-empty
+    * (fails fast on misconfig) and constructs a `KafkaAuditSink` Resource that lives for the duration of the
+    * server boot scope.
+    */
+  private def kafkaAuditSinkResource(config: Config)(using
+      org.apache.pekko.actor.typed.ActorSystem[?]
+  ): Resource[IO, List[AuditSink[IO]]] =
+    if !config.getBoolean("aegis.audit.kafka.enabled") then
+      Resource.pure(Nil)
+    else
+      val kafkaCfg         = config.getConfig("aegis.audit.kafka")
+      val bootstrapServers = kafkaCfg.getString("bootstrap-servers")
+      val topic            = kafkaCfg.getString("topic")
+      if bootstrapServers.isEmpty then
+        Resource.eval(IO.raiseError(new IllegalArgumentException(
+          "aegis.audit.kafka.enabled=true requires aegis.audit.kafka.bootstrap-servers " +
+            "(set AEGIS_AUDIT_KAFKA_BOOTSTRAP_SERVERS; e.g. broker1:9092,broker2:9092)"
+        )))
+      else if topic.isEmpty then
+        Resource.eval(IO.raiseError(new IllegalArgumentException(
+          "aegis.audit.kafka.enabled=true requires aegis.audit.kafka.topic " +
+            "(set AEGIS_AUDIT_KAFKA_TOPIC)"
+        )))
+      else
+        val sinkCfg = KafkaAuditSink.Config(
+          bootstrapServers = bootstrapServers,
+          topic = topic,
+          clientId = kafkaCfg.getString("client-id"),
+          maxRetries = kafkaCfg.getInt("max-retries"),
+          initialBackoff = scala.concurrent.duration.FiniteDuration(
+            kafkaCfg.getLong("initial-backoff-ms"),
+            scala.concurrent.duration.MILLISECONDS
+          ),
+          maxBackoff = scala.concurrent.duration.FiniteDuration(
+            kafkaCfg.getLong("max-backoff-ms"),
+            scala.concurrent.duration.MILLISECONDS
+          ),
+          deadLetterFile = java.nio.file.Paths.get(kafkaCfg.getString("dead-letter-file")),
+          queueCapacity = kafkaCfg.getInt("queue-capacity")
+        )
+        KafkaAuditSink.make(sinkCfg).map(s => List[AuditSink[IO]](s))
+
+  /** Build the optional NATS JetStream audit fan-out (#23). Returns an empty list when
+    * `aegis.audit.nats.enabled=false`. When enabled, validates servers + stream + subject are non-empty
+    * (fails fast on misconfig) and constructs a `NatsAuditSink` Resource. Optional `credentials-file` (.creds
+    * file from `nsc add user --csv`) is honoured if supplied.
+    */
+  private def natsAuditSinkResource(config: Config): Resource[IO, List[AuditSink[IO]]] =
+    if !config.getBoolean("aegis.audit.nats.enabled") then
+      Resource.pure(Nil)
+    else
+      val natsCfg = config.getConfig("aegis.audit.nats")
+      val servers = natsCfg.getString("servers")
+      val stream  = natsCfg.getString("stream")
+      val subject = natsCfg.getString("subject")
+      if servers.isEmpty then
+        Resource.eval(IO.raiseError(new IllegalArgumentException(
+          "aegis.audit.nats.enabled=true requires aegis.audit.nats.servers " +
+            "(set AEGIS_AUDIT_NATS_SERVERS; e.g. nats://broker1:4222,nats://broker2:4222)"
+        )))
+      else if stream.isEmpty then
+        Resource.eval(IO.raiseError(new IllegalArgumentException(
+          "aegis.audit.nats.enabled=true requires aegis.audit.nats.stream " +
+            "(set AEGIS_AUDIT_NATS_STREAM)"
+        )))
+      else if subject.isEmpty then
+        Resource.eval(IO.raiseError(new IllegalArgumentException(
+          "aegis.audit.nats.enabled=true requires aegis.audit.nats.subject " +
+            "(set AEGIS_AUDIT_NATS_SUBJECT)"
+        )))
+      else
+        val credentialsPath = natsCfg.getString("credentials-file")
+        val sinkCfg = NatsAuditSink.Config(
+          servers = servers,
+          stream = stream,
+          subject = subject,
+          autoCreateStream = natsCfg.getBoolean("auto-create-stream"),
+          credentialsFile =
+            if credentialsPath.isEmpty then None
+            else Some(java.nio.file.Paths.get(credentialsPath)),
+          maxRetries = natsCfg.getInt("max-retries"),
+          initialBackoff = scala.concurrent.duration.FiniteDuration(
+            natsCfg.getLong("initial-backoff-ms"),
+            scala.concurrent.duration.MILLISECONDS
+          ),
+          maxBackoff = scala.concurrent.duration.FiniteDuration(
+            natsCfg.getLong("max-backoff-ms"),
+            scala.concurrent.duration.MILLISECONDS
+          ),
+          deadLetterFile = java.nio.file.Paths.get(natsCfg.getString("dead-letter-file")),
+          queueCapacity = natsCfg.getInt("queue-capacity")
+        )
+        NatsAuditSink.make(sinkCfg).map(s => List[AuditSink[IO]](s))
 
   /** Background fiber that prunes audit rows older than `retentionDays` once a day. No-op when `retentionDays
     * <= 0`. Cancellation on Resource release stops the fiber cleanly.

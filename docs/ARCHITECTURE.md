@@ -206,7 +206,7 @@ flowchart LR
     actor --> rot[(Root of Trust<br/>AWS KMS adapter)]:::sink
     audit -. score+factors .-> scorer["RiskScorer<br/><i>BaselineRiskScorer</i>"]:::metric
     audit -. decide .-> engine["DecisionEngine<br/><i>ThresholdDecisionEngine</i>"]:::gate
-    audit -. on every call .-> auditSink[(Audit sink<br/>stdout · SIEM · Kafka 🚧)]:::sink
+    audit -. on every call .-> auditSink[(Audit sink<br/>stdout · postgres<br/>SIEM webhook · Kafka · NATS)]:::sink
     auditSink -. tapped .-> detector["BaselineDetector<br/><i>5 detectors</i>"]:::metric
     detector --> responder["AutoResponder<br/><i>matches rules → revoke / alert / freeze</i>"]:::gate
     responder -. system-actor revoke .-> traced
@@ -260,7 +260,7 @@ flowchart LR
     svc -. on every state-changing event .-> sink[Audit sink]:::audit
     sink --> pg[(Postgres audit table 🚧)]:::audit
     sink --> obj[(S3 / object store 🚧)]:::audit
-    sink --> siem[(SIEM webhook 🚧)]:::audit
+    sink --> siem[(SIEM webhook / Kafka / NATS)]:::audit
     sink --> sout[stdout JSON<br/>v0.1.x default]:::audit
 ```
 
@@ -424,9 +424,12 @@ What's implemented today vs. what the design above describes. This is the only p
 | Capability | Status |
 | --- | --- |
 | GCP / Azure / Vault / PKCS#11 Root of Trust adapters | 🔜 Designed (SPI in place) |
-| OIDC discovery + JWKS verification + RS256/ES256 verifier | 🔜 Designed (trait in place) |
-| Agent-token issuance HTTP endpoint (`POST /v1/agents/issue`) | 🔜 Designed (`JwtIssuer` in place) |
-| Postgres / Kafka / SIEM webhook audit sinks | 🔜 Designed (sink SPI in place) |
+| OIDC discovery + JWKS verification + RS256/ES256 verifier | ✅ Shipped v0.2.0 |
+| Agent-token issuance HTTP endpoint (`POST /v1/agents/issue`) | ✅ Shipped v0.2.0 |
+| Postgres audit table + GET /v1/audit read API | ✅ Shipped v0.2.0 |
+| SIEM webhook audit sink (HMAC-signed, async batched + retry + DLQ) | ✅ Shipped v0.2.0 |
+| Kafka audit fan-out sink (idempotent producer, Pekko-Connectors-Kafka) | ✅ Shipped v0.2.0 |
+| NATS JetStream audit fan-out sink (publishAsync + PubAck) | ✅ Shipped v0.2.0 |
 | Risk scorer (W2) — numeric scores feeding access decisions | ✅ Shipped (see v0.1.x table above) |
 | Auto-responder (W3) consuming `AgentRecommendation`s | ✅ Shipped (see v0.1.x table above) |
 | LLM advisor (W4) — `aegis advisor scan/explain` | 🔜 Designed (CLI stub in place) |
