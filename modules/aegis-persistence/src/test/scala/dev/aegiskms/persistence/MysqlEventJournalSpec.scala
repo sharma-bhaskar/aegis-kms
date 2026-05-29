@@ -7,6 +7,7 @@ import com.dimafeng.testcontainers.MySQLContainer
 import dev.aegiskms.core.{Algorithm, KeyEvent, KeyId, KeyObjectType, KeySpec}
 import doobie.Transactor
 import doobie.implicits.*
+import org.scalatest.BeforeAndAfterAll
 import org.scalatest.funsuite.AnyFunSuite
 import org.testcontainers.utility.DockerImageName
 
@@ -15,37 +16,64 @@ import scala.util.Try
 
 /** Integration test for [[MysqlEventJournal]] (#49) against a real MySQL in Docker.
   *
-  * Container lifecycle is managed manually rather than via `TestContainerForAll` so the suite skips cleanly
-  * on machines without Docker — `TestContainerForAll`'s `beforeAll` would throw before the per-test `assume`
-  * fired. CI runners (GitHub Actions ubuntu-latest) ship with Docker, so the suite runs there. Mirrors
-  * `PostgresEventJournalSpec` exactly.
+  * Container lifecycle: **one container shared across all tests in the suite** via `BeforeAndAfterAll`. The
+  * original per-test pattern (boot a fresh container per `withMysql` call) was correct in isolation but slow
+  * on CI — every MySQL container needs ~30 s to come up, so a 7-case suite spent ~3.5 min on container boot
+  * alone. The shared pattern boots once and isolates per-test state by `DROP`-ing the table between cases.
+  * This shaves about 80% off the CI wall-clock for this spec.
+  *
+  * Image pinned to `mysql:8.0`. The original code targeted `mysql:8.4` (the new LTS), but the Testcontainers
+  * default `MySQLContainer` wait strategy was timing out against `mysql:8.4` on GitHub Actions runners — the
+  * container exited with code 1 before the wait strategy could observe the "ready for connections" log line,
+  * costing ~6 min per failed test. `mysql:8.0` is the previous LTS, still supported until 2032, and is the
+  * version Testcontainers' wait strategy is most thoroughly validated against.
+  *
+  * Suite skips cleanly on machines without Docker — `assume(dockerAvailable)` on every test AND a
+  * `dockerAvailable` guard in `beforeAll` so the container start is not attempted at all.
   */
-final class MysqlEventJournalSpec extends AnyFunSuite:
+final class MysqlEventJournalSpec extends AnyFunSuite with BeforeAndAfterAll:
 
   given IORuntime = IORuntime.global
 
   private val dockerAvailable: Boolean =
     Try(org.testcontainers.DockerClientFactory.instance().isDockerAvailable).getOrElse(false)
 
+  // `var` is the standard scalatest pattern for fixtures torn up in beforeAll / down in afterAll.
+  // Both are populated only when Docker is available.
+  private var containerOpt: Option[MySQLContainer] = None
+  private var xaOpt: Option[Transactor[IO]]        = None
+
+  override def beforeAll(): Unit =
+    if dockerAvailable then
+      val c = MySQLContainer(
+        mysqlImageVersion = DockerImageName.parse("mysql:8.0"),
+        databaseName = "aegis_test",
+        username = "aegis",
+        password = "aegis"
+      )
+      c.start()
+      containerOpt = Some(c)
+      xaOpt = Some(Transactor.fromDriverManager[IO](
+        driver = "com.mysql.cj.jdbc.Driver",
+        url = c.jdbcUrl,
+        user = c.username,
+        password = c.password,
+        logHandler = None
+      ))
+    super.beforeAll()
+
+  override def afterAll(): Unit =
+    try super.afterAll()
+    finally containerOpt.foreach(_.stop())
+
+  /** Run `body` against a freshly-cleared schema. Drops the table (if present) so each test starts from a
+    * known empty state — the bootstrap inside the test body recreates it.
+    */
   private def withMysql(body: Transactor[IO] => Unit): Unit =
     assume(dockerAvailable, "Docker is not available; skipping MySQL journal integration test")
-    val container = MySQLContainer(
-      mysqlImageVersion = DockerImageName.parse("mysql:8.4"),
-      databaseName = "aegis_test",
-      username = "aegis",
-      password = "aegis"
-    )
-    container.start()
-    try
-      val xa = Transactor.fromDriverManager[IO](
-        driver = "com.mysql.cj.jdbc.Driver",
-        url = container.jdbcUrl,
-        user = container.username,
-        password = container.password,
-        logHandler = None
-      )
-      body(xa)
-    finally container.stop()
+    val xa = xaOpt.getOrElse(fail("Docker reported available but Transactor was not built"))
+    sql"DROP TABLE IF EXISTS aegis_key_events".update.run.transact(xa).void.unsafeRunSync()
+    body(xa)
 
   private val keyId = KeyId.fromString("k-9f2c").toOption.get
   private val now   = Instant.parse("2026-04-29T12:00:00Z")

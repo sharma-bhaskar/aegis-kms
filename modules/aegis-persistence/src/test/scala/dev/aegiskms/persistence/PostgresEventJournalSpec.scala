@@ -5,6 +5,8 @@ import cats.effect.unsafe.IORuntime
 import com.dimafeng.testcontainers.PostgreSQLContainer
 import dev.aegiskms.core.{Algorithm, KeyEvent, KeyId, KeyObjectType, KeySpec}
 import doobie.Transactor
+import doobie.implicits.*
+import org.scalatest.BeforeAndAfterAll
 import org.scalatest.funsuite.AnyFunSuite
 import org.testcontainers.utility.DockerImageName
 
@@ -13,36 +15,52 @@ import scala.util.Try
 
 /** Integration test for [[PostgresEventJournal]] against a real Postgres in Docker.
   *
-  * Container lifecycle is managed manually rather than via `TestContainerForAll` so the suite skips cleanly
-  * on machines without Docker — `TestContainerForAll`'s `beforeAll` would throw before the per-test `assume`
-  * fired. CI runners (GitHub Actions ubuntu-latest) ship with Docker, so the suite runs there.
+  * Container lifecycle: **one container shared across all tests in the suite** via `BeforeAndAfterAll`. Each
+  * test starts from a clean schema by `DROP TABLE IF EXISTS`-ing the journal table before running. The
+  * original per-test pattern was correct but slow — shared-container shaves ~2 min off the CI wall-clock for
+  * this spec.
+  *
+  * Skips cleanly on machines without Docker via `assume(dockerAvailable)` on every test plus a
+  * `dockerAvailable` guard in `beforeAll` so the container start is not attempted at all.
   */
-final class PostgresEventJournalSpec extends AnyFunSuite:
+final class PostgresEventJournalSpec extends AnyFunSuite with BeforeAndAfterAll:
 
   given IORuntime = IORuntime.global
 
   private val dockerAvailable: Boolean =
     Try(org.testcontainers.DockerClientFactory.instance().isDockerAvailable).getOrElse(false)
 
+  private var containerOpt: Option[PostgreSQLContainer] = None
+  private var xaOpt: Option[Transactor[IO]]             = None
+
+  override def beforeAll(): Unit =
+    if dockerAvailable then
+      val c = PostgreSQLContainer(
+        dockerImageNameOverride = DockerImageName.parse("postgres:16-alpine"),
+        databaseName = "aegis_test",
+        username = "aegis",
+        password = "aegis"
+      )
+      c.start()
+      containerOpt = Some(c)
+      xaOpt = Some(Transactor.fromDriverManager[IO](
+        driver = "org.postgresql.Driver",
+        url = c.jdbcUrl,
+        user = c.username,
+        password = c.password,
+        logHandler = None
+      ))
+    super.beforeAll()
+
+  override def afterAll(): Unit =
+    try super.afterAll()
+    finally containerOpt.foreach(_.stop())
+
   private def withPostgres(body: Transactor[IO] => Unit): Unit =
     assume(dockerAvailable, "Docker is not available; skipping Postgres journal integration test")
-    val container = PostgreSQLContainer(
-      dockerImageNameOverride = DockerImageName.parse("postgres:16-alpine"),
-      databaseName = "aegis_test",
-      username = "aegis",
-      password = "aegis"
-    )
-    container.start()
-    try
-      val xa = Transactor.fromDriverManager[IO](
-        driver = "org.postgresql.Driver",
-        url = container.jdbcUrl,
-        user = container.username,
-        password = container.password,
-        logHandler = None
-      )
-      body(xa)
-    finally container.stop()
+    val xa = xaOpt.getOrElse(fail("Docker reported available but Transactor was not built"))
+    sql"DROP TABLE IF EXISTS aegis_key_events".update.run.transact(xa).void.unsafeRunSync()
+    body(xa)
 
   private val keyId = KeyId.fromString("k-9f2c").toOption.get
   private val now   = Instant.parse("2026-04-29T12:00:00Z")

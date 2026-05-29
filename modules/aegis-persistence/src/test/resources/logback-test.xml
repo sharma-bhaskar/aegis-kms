@@ -1,0 +1,28 @@
+<configuration>
+  <!--
+    Test-only logback config for `aegis-persistence`. Silences the wire-level chatter from the
+    Docker socket, Apache HttpClient 5, and HikariCP pool stats — at DEBUG these emit one log
+    line per TCP frame and per pool eviction, which on a Testcontainers-heavy CI run inflates
+    the workflow log to ~1M+ lines and slows the GitHub Actions log-upload step substantially.
+
+    The aegis loggers and Testcontainers' own progress reporter stay at INFO so failures are
+    still diagnosable. Increase the levels back to DEBUG ad-hoc when triaging a flaky container
+    issue.
+  -->
+  <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
+    <encoder>
+      <pattern>%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n</pattern>
+    </encoder>
+  </appender>
+
+  <logger name="com.github.dockerjava"      level="WARN"/>
+  <logger name="org.apache.hc"              level="WARN"/>
+  <logger name="com.zaxxer.hikari"          level="WARN"/>
+  <logger name="org.testcontainers"         level="INFO"/>
+  <logger name="tc.mysql"                   level="INFO"/>
+  <logger name="tc.postgres"                level="INFO"/>
+
+  <root level="INFO">
+    <appender-ref ref="STDOUT"/>
+  </root>
+</configuration>
