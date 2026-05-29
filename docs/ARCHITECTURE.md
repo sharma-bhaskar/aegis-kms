@@ -26,7 +26,7 @@ flowchart TD
     core["<b>aegis-core</b><br/><i>KeyService&#91;F&#91;_&#93;&#93; algebra · ManagedKey · KmsError · Principal · KeyEvent</i>"]:::library
 
     subgraph LibraryTier["Library-safe tier (no Pekko · embeddable in any JVM app)"]
-        persistence["<b>aegis-persistence</b><br/>Doobie + Postgres<br/>event journal"]:::library
+        persistence["<b>aegis-persistence</b><br/>Doobie event journal<br/>Postgres / MySQL / SQLite"]:::library
         crypto["<b>aegis-crypto</b><br/>Root-of-Trust SPI<br/>+ AWS KMS adapter"]:::library
         iam["<b>aegis-iam</b><br/>JWT issue/verify<br/>policy engine"]:::library
         audit["<b>aegis-audit</b><br/>append-only sink<br/>(stdout · Postgres 🚧)"]:::library
@@ -51,7 +51,7 @@ flowchart TD
 | Module | Tier | Purpose |
 | --- | --- | --- |
 | `aegis-core` | library | `KeyService[F[_]]` algebra, `ManagedKey`, `KmsError`, `Principal`. The contract every plane terminates at. |
-| `aegis-persistence` | library | Doobie + Postgres event journal and read model. |
+| `aegis-persistence` | library | Doobie event journal — Postgres / MySQL / SQLite implementations + an in-memory variant for tests. |
 | `aegis-crypto` | library | Pluggable Root-of-Trust: AWS KMS, GCP KMS, Azure Key Vault, HashiCorp Vault, PKCS#11, local file (dev). |
 | `aegis-iam` | library | OIDC verifier, JWT signer, agent-identity issuer, policy evaluator. |
 | `aegis-audit` | library | Append-only audit event sink, decoupled from the journal. |
@@ -407,6 +407,8 @@ What's implemented today vs. what the design above describes. This is the only p
 | Server boot wiring (`aegis-server`), HTTP integration tests | ✅ Shipped |
 | Persistent `KeyOpsActor` with event-sourced state (Pekko Typed) | ✅ Shipped |
 | Doobie + Postgres event journal (`PostgresEventJournal`) with bootstrap migration | ✅ Shipped |
+| MySQL event journal (`MysqlEventJournal`) — `aegis.persistence.journal.kind=mysql` | ✅ Shipped v0.2.0 |
+| SQLite event journal (`SqliteEventJournal`) — embedded; `aegis.persistence.journal.kind=sqlite` | ✅ Shipped v0.2.0 |
 | Pluggable Root of Trust SPI; AWS KMS adapter (layered mode) | ✅ Shipped (AWS only) |
 | IAM allowlist policy engine + recursive parent-check for agents | ✅ Shipped |
 | JWT bearer auth — `Authorization: Bearer`, HS256 verification + issuance | ✅ Shipped |

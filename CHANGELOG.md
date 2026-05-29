@@ -8,6 +8,30 @@ All notable changes to Aegis will be documented here. This project follows
 
 ### Added
 
+- **MySQL + SQLite event journal adapters (closes #49, closes #50).** The persistence SPI now
+  ships three relational backends instead of one. Operators pick via the existing
+  `aegis.persistence.journal.kind` HOCON key.
+  - **`MysqlEventJournal`** mirrors `PostgresEventJournal` against MySQL 8.x via the
+    `mysql-connector-j` driver (already in `Dependencies.persistence`). Schema deltas vs.
+    Postgres: `BIGSERIAL` → `BIGINT AUTO_INCREMENT`, `JSONB` → `JSON`, `TIMESTAMPTZ` → UTC
+    ISO-8601 in `VARCHAR(40)` (MySQL `DATETIME` has no TZ; `TIMESTAMP` has a 2038 problem).
+    Bootstrap catches `ERROR 1061 Duplicate key name` so the migration is idempotent without
+    MySQL's missing `CREATE INDEX IF NOT EXISTS`.
+  - **`SqliteEventJournal`** for embedded / single-node / CI use via `org.xerial:sqlite-jdbc`
+    (newly added). Schema uses SQLite's affinity types (`INTEGER PRIMARY KEY AUTOINCREMENT`,
+    `TEXT` for everything else). `poolSize` is forced to 1 because SQLite serialises writes
+    internally — a larger pool just produces SQLITE_BUSY errors. JSON payloads round-trip as
+    strings (no native JSON type pre-3.45).
+  - **New HOCON blocks** `aegis.persistence.journal.mysql` and `aegis.persistence.journal.sqlite`
+    with env-var overrides (`AEGIS_MYSQL_*`, `AEGIS_SQLITE_JDBC_URL`). `Server.journalResource`
+    dispatches across `in-memory | postgres | mysql | sqlite`; the kind-unknown branch fails
+    fast at boot with a clear error.
+  - **Tests:** `MysqlEventJournalSpec` (3 cases, Testcontainers `mysql:8.4`, gated on Docker
+    via the same `assume(dockerAvailable)` pattern as the Postgres spec). `SqliteEventJournalSpec`
+    (4 cases) needs no Docker — uses per-test temp files. The fourth SQLite case asserts
+    durability across connection churn (the property that makes SQLite usable for embedded
+    deployments).
+
 - **`RoleBasedPolicyEngine` wired in `Server.boot` (closes #77).** The role-based engine has shipped
   in `aegis-iam` since v0.1.0 with full tests, but `Server.boot` always instantiated
   `DevPolicyEngine` regardless of `aegis.auth.kind`. As a result, the "alice can sign but not revoke"
