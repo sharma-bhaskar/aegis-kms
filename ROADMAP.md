@@ -210,9 +210,9 @@ The release tables above slice the work by milestone. The tables below slice by 
 |---|---|---|---|
 | Postgres 14+ | ✅ v0.1.0 | event journal, audit table | — |
 | CockroachDB | ✅ works as Postgres | drop-in HA replacement | document only |
-| MySQL 8+ | ⚠️ driver in deps; adapter not wired | event journal | v0.2.0 nice-to-have |
-| MariaDB | ⚠️ same as MySQL | event journal | v0.2.0 nice-to-have |
-| SQLite | 💡 opportunity | embedded dev / CI / single-node demo | v0.2.0 nice-to-have |
+| MySQL 8+ | ✅ v0.2.0 | event journal | — |
+| MariaDB | ✅ wire-compatible with MySQL adapter | event journal | document only |
+| SQLite | ✅ v0.2.0 | embedded dev / CI / single-node demo | — |
 | DynamoDB | 💡 opportunity | AWS-native event store | v0.3.0+ |
 | MongoDB | 💡 not pursued | document journal model | unlikely — Postgres covers the use |
 

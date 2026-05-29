@@ -2,6 +2,7 @@ package dev.aegiskms.persistence
 
 import cats.effect.IO
 import cats.effect.unsafe.IORuntime
+import cats.syntax.parallel.*
 import dev.aegiskms.core.{Algorithm, KeyEvent, KeyId, KeyObjectType, KeySpec}
 import doobie.Transactor
 import org.scalatest.funsuite.AnyFunSuite
@@ -83,6 +84,42 @@ final class SqliteEventJournalSpec extends AnyFunSuite:
 
       val result = program.unsafeRunSync()
       assert(result.isLeft, "second append with the same eventId should have failed")
+    }
+  }
+
+  test("replay on an empty journal returns Nil") {
+    withSqlite { xa =>
+      val program =
+        for
+          journal <- SqliteEventJournal.bootstrappedFor(xa)
+          events  <- journal.replay()
+        yield events
+
+      val events = program.unsafeRunSync()
+      assert(events.isEmpty, s"expected empty replay on a fresh journal, got: $events")
+    }
+  }
+
+  test("concurrent appends serialise correctly under the single-writer model") {
+    // SQLite serialises writes through one lock; with a real Transactor.fromDriverManager (single
+    // shared connection) the appends queue up and all 20 land. This is the property that makes
+    // SQlite usable as an embedded journal — but only when poolSize stays at 1, which the
+    // production builder enforces. The test asserts the durability promise under parallelism.
+    withSqlite { xa =>
+      val program =
+        for
+          journal <- SqliteEventJournal.bootstrappedFor(xa)
+          events =
+            (1 to 20).toList.map(i =>
+              KeyEvent.Created(s"e-$i", now.plusSeconds(i.toLong), keyId, spec, "alice", "alice")
+            )
+          _       <- events.parTraverse_(journal.append)
+          replays <- journal.replay()
+        yield replays.map(_.eventId).toSet
+
+      val landed = program.unsafeRunSync()
+      assert(landed.size == 20, s"expected all 20 concurrent events to land, got ${landed.size}: $landed")
+      assert(landed == (1 to 20).map(i => s"e-$i").toSet)
     }
   }
 

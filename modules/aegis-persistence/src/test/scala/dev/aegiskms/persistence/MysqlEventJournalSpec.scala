@@ -2,9 +2,11 @@ package dev.aegiskms.persistence
 
 import cats.effect.IO
 import cats.effect.unsafe.IORuntime
+import cats.syntax.parallel.*
 import com.dimafeng.testcontainers.MySQLContainer
 import dev.aegiskms.core.{Algorithm, KeyEvent, KeyId, KeyObjectType, KeySpec}
 import doobie.Transactor
+import doobie.implicits.*
 import org.scalatest.funsuite.AnyFunSuite
 import org.testcontainers.utility.DockerImageName
 
@@ -92,5 +94,63 @@ final class MysqlEventJournalSpec extends AnyFunSuite:
 
       val result = program.unsafeRunSync()
       assert(result.isLeft, "second append with the same eventId should have failed")
+    }
+  }
+
+  test("replay on an empty journal returns Nil") {
+    withMysql { xa =>
+      val program =
+        for
+          journal <- MysqlEventJournal.bootstrappedFor(xa)
+          events  <- journal.replay()
+        yield events
+
+      val events = program.unsafeRunSync()
+      assert(events.isEmpty, s"expected empty replay on a fresh journal, got: $events")
+    }
+  }
+
+  test("idempotent bootstrap actually exercises the duplicate-index path (regression for error 1061)") {
+    // The bootstrap-twice test above doesn't directly assert the duplicate-index handler ran —
+    // it could pass if the handler silently swallowed a different error too. Here we verify the
+    // schema state explicitly: after two bootstrappedFor calls, INFORMATION_SCHEMA reports
+    // exactly one index of the expected name, and writes still work.
+    withMysql { xa =>
+      val program =
+        for
+          _ <- MysqlEventJournal.bootstrappedFor(xa)
+          _ <- MysqlEventJournal.bootstrappedFor(xa)
+          indexCount <- sql"""
+            SELECT COUNT(*)
+            FROM INFORMATION_SCHEMA.STATISTICS
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_NAME   = 'aegis_key_events'
+              AND INDEX_NAME   = 'aegis_key_events_key_id_idx'
+          """.query[Int].unique.transact(xa)
+        yield indexCount
+
+      // Index_name appears once per indexed column; our index has a single column so count=1.
+      assert(program.unsafeRunSync() == 1, "duplicate-index handler should leave exactly one index")
+    }
+  }
+
+  test("concurrent appends: pool-backed writes all land (no lost events under parallelism)") {
+    withMysql { xa =>
+      val program =
+        for
+          journal <- MysqlEventJournal.bootstrappedFor(xa)
+          events =
+            (1 to 20).toList.map(i =>
+              KeyEvent.Created(s"e-$i", now.plusSeconds(i.toLong), keyId, spec, "alice", "alice")
+            )
+          // .parTraverse_ runs all 20 appends concurrently across cats-effect's compute pool.
+          // HikariCP serialises through its connection set, but no rows should be dropped.
+          _       <- events.parTraverse_(journal.append)
+          replays <- journal.replay()
+        yield replays.map(_.eventId).toSet
+
+      val landed = program.unsafeRunSync()
+      assert(landed.size == 20, s"expected all 20 concurrent events to land, got ${landed.size}: $landed")
+      assert(landed == (1 to 20).map(i => s"e-$i").toSet)
     }
   }

@@ -101,7 +101,7 @@ modules add the actor system, HTTP, and process boot.
 | `aegis-iam` | Library | Principal + JWT verification + authorization decorator |
 | `aegis-audit` | Library | `AuditSink` SPI + auditing decorator |
 | `aegis-crypto` | Library | `RootOfTrust` SPI + AWS KMS adapter |
-| `aegis-persistence` | Library | Doobie event journal (Postgres + in-memory) |
+| `aegis-persistence` | Library | Doobie event journal (Postgres / MySQL / SQLite / in-memory) |
 | `aegis-sdk-scala` / `aegis-sdk-java` | Library | Client SDKs |
 | `aegis-http` | Server | Tapir REST + OpenAPI 3.1 |
 | `aegis-agent-ai` | Server | 5-detector baseline anomaly engine |
