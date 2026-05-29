@@ -542,7 +542,8 @@ object Server extends IOApp.Simple:
             scala.concurrent.duration.MILLISECONDS
           ),
           deadLetterFile = java.nio.file.Paths.get(kafkaCfg.getString("dead-letter-file")),
-          queueCapacity = kafkaCfg.getInt("queue-capacity")
+          queueCapacity = kafkaCfg.getInt("queue-capacity"),
+          maxBlockMs = kafkaCfg.getLong("max-block-ms")
         )
         KafkaAuditSink.make(sinkCfg).map(s => List[AuditSink[IO]](s))
 

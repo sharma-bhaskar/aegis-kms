@@ -157,15 +157,18 @@ final class KafkaAuditSinkSpec extends AnyFunSuite with Matchers with BeforeAndA
   }
 
   test("transport failure routes records to the DLQ after maxRetries") {
-    // Point the sink at a port that nothing is listening on. The producer surfaces the failure
-    // synchronously after its internal retries; the drain loop retries `maxRetries=2` more
-    // times then writes to DLQ.
+    // Point the sink at a port that nothing is listening on. We override `maxBlockMs` to 2s
+    // so the Kafka producer's `send()` surfaces a TimeoutException quickly — Kafka's default
+    // is 60s which is correct for production (rides out brief broker blips) but is longer
+    // than any reasonable test deadline. With maxRetries=0 the drain loop DLQs immediately
+    // on the first surfaced failure.
     assume(dockerAvailable, "Docker is not available; skipping Kafka audit-sink integration test")
     val dlq = freshDlqPath()
     val cfg = baseConfig(freshTopic(), dlq).copy(
       bootstrapServers = "127.0.0.1:1", // closed port
       maxRetries = 0,                   // fail fast for a quick test
-      initialBackoff = 50.millis
+      initialBackoff = 50.millis,
+      maxBlockMs = 2000L                // force producer.send() to fail in ≤2s
     )
     val program = KafkaAuditSink.make(cfg).use { sink =>
       sink.write(sampleRecord("c-fail")) *> IO {

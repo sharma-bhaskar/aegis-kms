@@ -53,12 +53,20 @@ object KafkaAuditSink:
       initialBackoff: FiniteDuration,
       maxBackoff: FiniteDuration,
       deadLetterFile: Path,
-      queueCapacity: Int
+      queueCapacity: Int,
+      /** Controls how long `Producer.send()` blocks waiting for metadata before surfacing a
+        * `TimeoutException`. Kafka default is 60 s, which is reasonable for production (gives
+        * a brief broker outage time to recover) but pathological for tests that point at a
+        * closed port. Operators rarely need to tune this; tests override it to a small value
+        * to validate the transport-failure → DLQ path deterministically.
+        */
+      maxBlockMs: Long = 60000L
   ):
     require(bootstrapServers.nonEmpty, "bootstrapServers must be non-empty")
     require(topic.nonEmpty, "topic must be non-empty")
     require(maxRetries >= 0, s"maxRetries must be >= 0, was $maxRetries")
     require(queueCapacity > 0, s"queueCapacity must be > 0, was $queueCapacity")
+    require(maxBlockMs > 0, s"maxBlockMs must be > 0, was $maxBlockMs")
 
   private val logger = LoggerFactory.getLogger(classOf[KafkaAuditSink])
 
@@ -97,7 +105,8 @@ object KafkaAuditSink:
         ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG             -> "true",
         ProducerConfig.MAX_IN_FLIGHT_REQUESTS_PER_CONNECTION -> "5",
         ProducerConfig.RETRIES_CONFIG                        -> Int.MaxValue.toString,
-        ProducerConfig.COMPRESSION_TYPE_CONFIG               -> "lz4"
+        ProducerConfig.COMPRESSION_TYPE_CONFIG               -> "lz4",
+        ProducerConfig.MAX_BLOCK_MS_CONFIG                   -> config.maxBlockMs.toString
       )
     Resource.make(
       IO(SendProducer(baseSettings)(classicSystem))
