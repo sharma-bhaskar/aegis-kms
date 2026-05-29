@@ -36,7 +36,15 @@ import dev.aegiskms.iam.{
   RevocationList,
   RoleBasedPolicyEngine
 }
-import dev.aegiskms.persistence.{EventJournal, PostgresEventJournal, PostgresJournalConfig}
+import dev.aegiskms.persistence.{
+  EventJournal,
+  MysqlEventJournal,
+  MysqlJournalConfig,
+  PostgresEventJournal,
+  PostgresJournalConfig,
+  SqliteEventJournal,
+  SqliteJournalConfig
+}
 import io.micrometer.prometheusmetrics.PrometheusMeterRegistry
 import org.apache.pekko.actor.typed.{ActorSystem, Scheduler}
 import org.apache.pekko.http.scaladsl.Http
@@ -270,8 +278,9 @@ object Server extends IOApp.Simple:
       case _ => IO.unit
     }
 
-  /** Journal as a Resource. The Postgres path returns a real `Resource[IO, EventJournal[IO]]` whose finalizer
-    * closes the connection pool. The in-memory path has nothing to close, so we lift it with `Resource.eval`.
+  /** Journal as a Resource. The Postgres/MySQL/SQLite paths return real `Resource[IO, EventJournal[IO]]`
+    * whose finalizers close the connection pool. The in-memory path has nothing to close, so we lift it with
+    * `Resource.eval`.
     */
   private def journalResource(config: Config): Resource[IO, EventJournal[IO]] =
     config.getString("aegis.persistence.journal.kind") match
@@ -286,9 +295,20 @@ object Server extends IOApp.Simple:
         Resource.eval(IO {
           logger.info(s"journal: postgres at ${pgConfig.jdbcUrl} (pool-size=${pgConfig.poolSize})")
         }) *> PostgresEventJournal.make(pgConfig)
+      case "mysql" =>
+        val myConfig = readMysqlJournalConfig(config)
+        Resource.eval(IO {
+          logger.info(s"journal: mysql at ${myConfig.jdbcUrl} (pool-size=${myConfig.poolSize})")
+        }) *> MysqlEventJournal.make(myConfig)
+      case "sqlite" =>
+        val sqlConfig = readSqliteJournalConfig(config)
+        Resource.eval(IO {
+          logger.info(s"journal: sqlite at ${sqlConfig.jdbcUrl} (pool-size=1, forced)")
+        }) *> SqliteEventJournal.make(sqlConfig)
       case other =>
         Resource.eval(IO.raiseError(new IllegalArgumentException(
-          s"Unknown aegis.persistence.journal.kind=$other (expected 'in-memory' or 'postgres')"
+          s"Unknown aegis.persistence.journal.kind=$other " +
+            "(expected 'in-memory', 'postgres', 'mysql', or 'sqlite')"
         )))
 
   /** Root-of-Trust as a Resource — the crypto backend that does the actual sign / verify / wrap / unwrap work
@@ -383,6 +403,23 @@ object Server extends IOApp.Simple:
       password = pg.getString("password"),
       poolSize = pg.getInt("pool-size")
     )
+
+  /** HOCON loader for `aegis.persistence.journal.mysql` (#49). Same shape as the Postgres loader. */
+  private def readMysqlJournalConfig(c: Config): MysqlJournalConfig =
+    val my = c.getConfig("aegis.persistence.journal.mysql")
+    MysqlJournalConfig(
+      jdbcUrl = my.getString("jdbc-url"),
+      username = my.getString("username"),
+      password = my.getString("password"),
+      poolSize = my.getInt("pool-size")
+    )
+
+  /** HOCON loader for `aegis.persistence.journal.sqlite` (#50). Narrower than the others — SQLite has no auth
+    * model; pool size is hardcoded to 1 inside `SqliteEventJournal.make`.
+    */
+  private def readSqliteJournalConfig(c: Config): SqliteJournalConfig =
+    val sql = c.getConfig("aegis.persistence.journal.sqlite")
+    SqliteJournalConfig(jdbcUrl = sql.getString("jdbc-url"))
 
   /** Build the audit sink (#19). Resource-scoped so a Postgres-backed sink's connection pool is released
     * cleanly on shutdown. Also starts the retention fiber if the sink supports `pruneBefore` (Postgres does;

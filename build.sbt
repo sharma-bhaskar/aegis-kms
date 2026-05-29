@@ -74,8 +74,8 @@ lazy val persistence = (project in file("modules/aegis-persistence"))
     commonSettings,
     name := "aegis-persistence",
     description :=
-      "Doobie-backed event journal for Aegis-KMS. Postgres impl + an in-memory variant for tests.",
-    libraryDependencies ++= Dependencies.persistence ++ Dependencies.testcontainersPostgres
+      "Doobie-backed event journal for Aegis-KMS. Postgres / MySQL / SQLite impls + an in-memory variant for tests.",
+    libraryDependencies ++= Dependencies.persistence ++ Dependencies.testcontainersPostgres ++ Dependencies.testcontainersMysql
   )
 
 lazy val crypto = (project in file("modules/aegis-crypto"))

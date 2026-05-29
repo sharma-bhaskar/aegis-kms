@@ -50,7 +50,11 @@ object Dependencies {
     "org.tpolecat" %% "doobie-postgres"       % V.doobie,
     "org.tpolecat" %% "doobie-postgres-circe" % V.doobie,
     "org.tpolecat" %% "doobie-hikari"         % V.doobie,
-    "com.mysql"     % "mysql-connector-j"     % "8.4.0"
+    // Drivers for the alternative SQL backends (#49 MySQL, #50 SQLite). The drivers are loaded
+    // reflectively via `Class.forName` inside HikariCP / DriverManager when the corresponding
+    // journal kind is wired in `Server.boot`; pure-Postgres deployments incur no runtime cost.
+    "com.mysql"  % "mysql-connector-j" % "8.4.0",
+    "org.xerial" % "sqlite-jdbc"       % "3.46.1.3"
   )
 
   /** Test-only dep for spinning up a real Postgres in Docker during integration tests. Pulls in
@@ -60,6 +64,14 @@ object Dependencies {
   val testcontainersPostgres: Seq[ModuleID] = Seq(
     "com.dimafeng" %% "testcontainers-scala-scalatest"  % V.testcontainers % Test,
     "com.dimafeng" %% "testcontainers-scala-postgresql" % V.testcontainers % Test
+  )
+
+  /** Test-only dep for spinning up a real MySQL in Docker. Same skip-on-no-Docker pattern as
+    * `testcontainersPostgres`. Used by `MysqlEventJournalSpec` (#49).
+    */
+  val testcontainersMysql: Seq[ModuleID] = Seq(
+    "com.dimafeng" %% "testcontainers-scala-scalatest" % V.testcontainers % Test,
+    "com.dimafeng" %% "testcontainers-scala-mysql"     % V.testcontainers % Test
   )
 
   /** Lettuce is the Java async Redis client. Single-jar dep — we use the lower-level `RedisCommands` (sync)
