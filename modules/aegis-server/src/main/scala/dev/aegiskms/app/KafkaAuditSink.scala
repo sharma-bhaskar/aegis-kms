@@ -55,10 +55,10 @@ object KafkaAuditSink:
       deadLetterFile: Path,
       queueCapacity: Int,
       /** Controls how long `Producer.send()` blocks waiting for metadata before surfacing a
-        * `TimeoutException`. Kafka default is 60 s, which is reasonable for production (gives
-        * a brief broker outage time to recover) but pathological for tests that point at a
-        * closed port. Operators rarely need to tune this; tests override it to a small value
-        * to validate the transport-failure → DLQ path deterministically.
+        * `TimeoutException`. Kafka default is 60 s, which is reasonable for production (gives a brief broker
+        * outage time to recover) but pathological for tests that point at a closed port. Operators rarely
+        * need to tune this; tests override it to a small value to validate the transport-failure → DLQ path
+        * deterministically.
         */
       maxBlockMs: Long = 60000L
   ):

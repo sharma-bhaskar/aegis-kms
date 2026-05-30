@@ -168,7 +168,7 @@ final class KafkaAuditSinkSpec extends AnyFunSuite with Matchers with BeforeAndA
       bootstrapServers = "127.0.0.1:1", // closed port
       maxRetries = 0,                   // fail fast for a quick test
       initialBackoff = 50.millis,
-      maxBlockMs = 2000L                // force producer.send() to fail in ≤2s
+      maxBlockMs = 2000L // force producer.send() to fail in ≤2s
     )
     val program = KafkaAuditSink.make(cfg).use { sink =>
       sink.write(sampleRecord("c-fail")) *> IO {
