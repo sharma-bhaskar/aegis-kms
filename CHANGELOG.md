@@ -8,6 +8,29 @@ All notable changes to Aegis will be documented here. This project follows
 
 ### Added
 
+- **Honey keys (canary keys) with auto-revoke on agent touch (closes #26).** Operator-marked
+  `KeyId`s that fire a `Severity.High` recommendation any time an agent principal touches
+  them; `AutoResponder.DefaultRules` then translate High → Revoke, killing both the key and
+  the agent's JWT via the wired `RevocationList`. The first touch is the trip wire by
+  design — there's no cold-start guard like the other detectors have.
+  - **`HoneyKeyRegistry` SPI** (`aegis-agent-ai`): tiny — `isHoney(KeyId): Boolean` +
+    `snapshot: Set[KeyId]`. Three impls: `empty` (production-safe default), `fromSet` for
+    HOCON-backed wiring, and the ctor-default on `BaselineDetector.make` so embedders
+    compile unchanged.
+  - **`BaselineDetector` gains a 6th detector** (`"HoneyKey"`) that runs after the five
+    existing ones. Restricted to agent principals only — humans validating that a canary
+    is still alive don't trigger auto-revoke. Skips Create / Locate audit resources (their
+    `name:...` / `pattern:...` shapes don't yield a parseable `KeyId`).
+  - **`Server.boot` wiring**: `aegis.security.honey-keys` HOCON list parsed into a
+    `Set[KeyId]` and threaded into `BaselineDetector.make(honeyKeys = ...)`. Supports both
+    HOCON-list syntax and the `AEGIS_HONEY_KEYS` comma-separated env-var override. Boot
+    fails fast on malformed `KeyId` strings (a typo'd canary that doesn't catch the agent
+    is the opposite of what an operator wanted).
+  - **Tests:** `HoneyKeyRegistrySpec` (4 cases — `empty`, `fromSet` semantics, snapshot
+    fidelity, `fromSet(Set.empty)` equivalence). `BaselineDetectorSpec` (+6 cases —
+    happy-path fire, first-touch trip wire, human-touch no-fire, non-honey no-fire,
+    empty-registry inert, Create/Locate skip).
+
 - **Kafka + NATS JetStream audit fan-out sinks (closes #22, closes #23).** Two new streaming
   audit destinations alongside the existing SIEM webhook (#21). Both follow the same shape
   — bounded `Queue` + background drain fiber + retry + JSONL dead-letter — and compose with

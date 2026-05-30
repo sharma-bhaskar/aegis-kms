@@ -2,7 +2,7 @@ package dev.aegiskms.agent
 
 import cats.effect.{IO, Ref}
 import dev.aegiskms.audit.AuditRecord
-import dev.aegiskms.core.{Operation, Principal}
+import dev.aegiskms.core.{KeyId, Operation, Principal}
 
 import java.time.{Duration, Instant, ZoneOffset}
 import java.util.UUID
@@ -25,6 +25,10 @@ import java.util.UUID
   *   - `TimeOfDayBaseline`: the actor was active in a UTC hour-of-day they have never been active in.
   *   - `SourceIpBaseline`: the actor's request came from an IP not in their seen set. Reads
   *     `record.context("source.ip")`, which the HTTP layer populates via `RequestContext` (#78).
+  *   - `HoneyKey` (#26): an **agent** touched a `KeyId` the operator marked as a canary via
+  *     `aegis.security.honey-keys`. Fires unconditionally at `Severity.High` — no cold-start guard.
+  *     AutoResponder.DefaultRules turn High → Revoke, killing both the key and the agent's JWT via the wired
+  *     RevocationList.
   *
   * Cold-start: every detector requires the actor to have at least one prior observation in the relevant
   * dimension before it can fire. The first time `claude-session-7a3` shows up we record but don't alert; the
@@ -35,7 +39,8 @@ import java.util.UUID
   */
 final class BaselineDetector private (
     state: Ref[IO, Map[String, BaselineDetector.ActorBaseline]],
-    config: BaselineDetector.Config
+    config: BaselineDetector.Config,
+    honeyKeys: HoneyKeyRegistry
 ):
 
   import BaselineDetector.*
@@ -45,7 +50,7 @@ final class BaselineDetector private (
     state.modify { current =>
       val existing = current.getOrElse(rec.principal.subject, ActorBaseline.empty)
       val resource = keyResource(rec)
-      val recs     = mutable(rec, existing, config, resource)
+      val recs     = mutable(rec, existing, config, resource, honeyKeys)
       val updated  = existing.update(rec, resource, config.rateRetention)
       (current + (rec.principal.subject -> updated), recs)
     }
@@ -105,8 +110,12 @@ object BaselineDetector:
     val empty: ActorBaseline =
       ActorBaseline(Set.empty, Map.empty, Set.empty, Set.empty, Vector.empty, None)
 
-  def make(config: Config = Config.Demo): IO[BaselineDetector] =
-    Ref.of[IO, Map[String, ActorBaseline]](Map.empty).map(new BaselineDetector(_, config))
+  def make(
+      config: Config = Config.Demo,
+      honeyKeys: HoneyKeyRegistry = HoneyKeyRegistry.empty
+  ): IO[BaselineDetector] =
+    Ref.of[IO, Map[String, ActorBaseline]](Map.empty)
+      .map(new BaselineDetector(_, config, honeyKeys))
 
   // ── Detector logic ────────────────────────────────────────────────────────
 
@@ -114,7 +123,8 @@ object BaselineDetector:
       rec: AuditRecord,
       existing: ActorBaseline,
       config: Config,
-      resource: String
+      resource: String,
+      honeyKeys: HoneyKeyRegistry
   ): List[AgentRecommendation] =
     val recs = List.newBuilder[AgentRecommendation]
 
@@ -229,6 +239,40 @@ object BaselineDetector:
         )
     }
 
+    // 6. HoneyKey (#26) — agent touched a key the operator has marked as a canary. Fires at
+    //    Severity.High unconditionally regardless of the agent's prior baseline; the entire point
+    //    of a honey key is to short-circuit the "give the actor benefit of the doubt" path. The
+    //    AutoResponder.DefaultRules turn High → Revoke, which kills both the key and the agent's
+    //    JWT via the wired RevocationList. NO cold-start guard (unlike the other detectors) — the
+    //    first touch is the trip wire by design.
+    //
+    //    Humans touching a honey key intentionally is plausible (someone validating the canary is
+    //    still active), so we restrict the detector to agent principals only. A human touching a
+    //    honey key may still warrant an audit-log investigation, but we don't auto-revoke.
+    rec.principal match
+      case _: Principal.Agent =>
+        keyIdFromResource(rec.resource).foreach { keyId =>
+          if honeyKeys.isHoney(keyId) then
+            recs += AgentRecommendation(
+              eventId = freshId(),
+              at = rec.at,
+              actor = rec.principal,
+              detector = "HoneyKey",
+              severity = Severity.High,
+              summary =
+                s"Agent ${rec.principal.subject} touched honey key ${keyId.value} via ${rec.operation} — auto-revoke fired",
+              details = Map(
+                "honeyKeyId"    -> keyId.value,
+                "operation"     -> rec.operation.toString,
+                "outcome"       -> rec.outcome,
+                "resource"      -> resource,
+                "correlationId" -> rec.correlationId
+              ),
+              suggestedAction = SuggestedAction.Revoke
+            )
+        }
+      case _ => ()
+
     recs.result()
 
   private def severityForActor(p: Principal): Severity = p match
@@ -244,5 +288,15 @@ object BaselineDetector:
     // Normalize to the keyId where possible.
     if rec.resource.startsWith("name:") then rec.resource
     else rec.resource
+
+  /** Parse the `KeyId` out of an audit `resource` string. Audit records produced by
+    * `AuditingKeyService.instrument(...)` set `resource = id.value` for ops on existing keys (Sign, Get,
+    * Activate, Revoke, ...). The `Create` op uses `name:.../alg:.../size:...` shape (no `KeyId` yet) and
+    * `Locate` uses `pattern:...`; both return `None` here, which means honey keys aren't tripped by Create /
+    * Locate — by design, since you can't touch a honey key you haven't seen yet.
+    */
+  private def keyIdFromResource(resource: String): Option[KeyId] =
+    if resource.startsWith("name:") || resource.startsWith("pattern:") then None
+    else KeyId.fromString(resource).toOption
 
   private def freshId(): String = UUID.randomUUID().toString
