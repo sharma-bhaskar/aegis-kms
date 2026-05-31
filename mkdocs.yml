@@ -128,6 +128,7 @@ nav:
 
   - Getting Started:
     - Quickstart: getting-started/quickstart.md
+    - Use-case guide: USE-CASES.md
 
   - Concepts:
     - Architecture: ARCHITECTURE.md
