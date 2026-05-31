@@ -22,11 +22,9 @@
 #   docker compose -f deploy/docker/docker-compose.yml up
 #
 # Image tag selection (set `IMAGE_TAG` to override the default):
-#   - `IMAGE_TAG=0.1.1`       (default) — latest stable tagged release; what `docker compose up` pulls.
+#   - `IMAGE_TAG=0.2.0`       (default) — latest stable tagged release; what `docker compose up` pulls.
 #   - `IMAGE_TAG=main`        — floating image of the `main` branch, rebuilt by CI on every push.
-#                                Needed for the v0.2.0 preview (risk scorer + decision adapter +
-#                                auto-responder) until v0.2.0 is tagged. See `docs/getting-started/quickstart.md`
-#                                Step 14 for context.
+#                                Use it to preview unreleased work ahead of the next tag.
 #   - `IMAGE_TAG=main-<sha>`  — immutable per-commit reference (e.g. `main-a2e4a21`).
 #   - To build from source:    `sbt 'server / Docker / publishLocal'`
 #                              then `IMAGE_TAG=<sbt-dynver-string> docker compose ... up`.
@@ -49,7 +47,7 @@ services:
       retries:  10
 
   aegis-server:
-    image: ghcr.io/sharma-bhaskar/aegis-server:${IMAGE_TAG:-0.1.1}
+    image: ghcr.io/sharma-bhaskar/aegis-server:${IMAGE_TAG:-0.2.0}
     depends_on:
       postgres:
         condition: service_healthy

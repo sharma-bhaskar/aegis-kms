@@ -1,10 +1,10 @@
 # Quickstart
 
-**Goal:** in ~15 minutes, get Aegis-KMS running on your machine and exercise the full v0.1.x
+**Goal:** in ~15 minutes, get Aegis-KMS running on your machine and exercise the full crypto
 operation surface — sign / verify, encrypt / decrypt (with AAD), wrap / unwrap a DEK, rotate, and
 compromise — plus the three observability surfaces (Swagger UI, Prometheus, OpenTelemetry), plus
-the **v0.2.0 preview**: switch to the `:main` Docker image, trip a rate-spike anomaly, and watch
-the auto-responder revoke the key in real time. Step 0 → Step 18, every command runnable, every
+the **wedge** (shipped in v0.2.0): trip a rate-spike anomaly and watch the auto-responder revoke
+the key in real time. Step 0 → Step 18, every command runnable, every
 output shown, every prerequisite spelled out — assume you've never touched this project before.
 
 **What you'll have when you're done:** a local Aegis-KMS instance, a key you created, a signed
@@ -362,9 +362,9 @@ curl -s -X POST "$AEGIS/v1/keys/$KEY_ID/verify" \
 # → { "valid": true, "algorithm": "RsaPssSha256" }
 ```
 
-Other policy shapes the server accepts: `TimeBased:7days`, `OpCountBased:10000`. v0.1.x records
-the policy on the audit row; the auto-scheduler that *drives* rotation from the policy lands in
-v0.2.0.
+Other policy shapes the server accepts: `TimeBased:7days`, `OpCountBased:10000`. Aegis records
+the policy on the audit row; the auto-scheduler that *drives* rotation from the policy is
+roadmapped for a later release.
 
 ---
 
@@ -425,11 +425,13 @@ container (`OTEL_TRACES_EXPORTER=otlp`, `OTEL_EXPORTER_OTLP_ENDPOINT=http://coll
 
 ---
 
-## Step 14 — Switch to the `:main` image (v0.2.0 preview)
+## Step 14 — (Optional) Preview unreleased work with the `:main` image
 
-The features the wedge demo exercises — risk scorer, decision adapter, auto-responder — shipped to
-`main` after v0.1.1 and will land in the next tagged release. Until v0.2.0 is cut, you need the
-`:main` floating image (rebuilt by CI on every push to `main`).
+The wedge demo below — risk scorer, decision adapter, auto-responder — shipped in **v0.2.0**, so
+the default `:0.2.0` image you've been running already has it. You can skip straight to Step 15.
+
+To preview work that's landed on `main` but isn't tagged yet, use the `:main` floating image
+(rebuilt by CI on every push to `main`):
 
 ```bash
 docker compose -f deploy/docker/docker-compose.yml down
@@ -437,14 +439,14 @@ IMAGE_TAG=main docker compose -f deploy/docker/docker-compose.yml up -d
 docker compose -f deploy/docker/docker-compose.yml logs -f aegis-server
 ```
 
-If you'd rather build from source than pull `:main`, that path is:
+If you'd rather build from source, that path is:
 
 ```bash
 sbt 'server / Docker / publishLocal'
-IMAGE_TAG=0.1.1-SNAPSHOT docker compose -f deploy/docker/docker-compose.yml up -d
+IMAGE_TAG=0.2.0-SNAPSHOT docker compose -f deploy/docker/docker-compose.yml up -d
 ```
 
-(Requires JDK 21 + `sbt` locally. Replace `0.1.1-SNAPSHOT` with whatever `sbt-dynver` reports if
+(Requires JDK 21 + `sbt` locally. Replace `0.2.0-SNAPSHOT` with whatever `sbt-dynver` reports if
 your `main` is ahead of the last tag.)
 
 Re-export your shell vars from Step 4 if you opened a new terminal:

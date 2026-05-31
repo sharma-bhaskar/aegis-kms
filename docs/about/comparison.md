@@ -9,7 +9,7 @@ your decision matrix, not assume it.
 | Dimension | AWS KMS | HashiCorp Vault | OpenBao | GCP KMS / Azure Key Vault | Aegis-KMS |
 |---|---|---|---|---|---|
 | **License** | Proprietary | BSL (Enterprise: commercial) | MPL 2.0 | Proprietary | Apache 2.0 |
-| **Maturity** | Production, 10+ yrs | Production, 10+ yrs | Stable, ~2 yrs | Production, mature | Pre-alpha (v0.1.1) |
+| **Maturity** | Production, 10+ yrs | Production, 10+ yrs | Stable, ~2 yrs | Production, mature | Pre-alpha (v0.2.0) |
 | **Cloud-portable** | No (AWS only) | Yes | Yes | No | Yes |
 | **Self-hostable** | No | Yes | Yes | No | Yes |
 | **Per-call cost** | ~$0.03/10K calls | Self-host: free | Self-host: free | ~$0.03/10K calls | Self-host: free |
@@ -91,7 +91,7 @@ Most teams who land here will pick OpenBao today and watch Aegis. That's the rig
 
 ## When you should *not* pick Aegis-KMS today
 
-This section is the most important one in the post. As of v0.1.1, **don't pick Aegis-KMS
+This section is the most important one in the post. As of v0.2.0, **don't pick Aegis-KMS
 if:**
 
 - You need a production-stable KMS this quarter. Aegis is pre-alpha. AWS KMS or Vault are

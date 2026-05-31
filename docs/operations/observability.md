@@ -75,14 +75,14 @@ The agent and the SDK read the same `OTEL_*` env vars, so the operator's configu
 unchanged and the manual `kms.<op>` spans become children of the agent's auto-instrumented
 spans via W3C trace-context propagation.
 
-## What v0.1.1 does *not* yet emit
+## Current observability limitations
 
 Be aware of these limitations in the current observability surface:
 
-- **`AuditRecord.context("source.ip")` is shape-complete but inert.** The `SourceIpBaseline`
-  detector reads from this context key, but the HTTP layer doesn't yet populate it. Tracking
-  follow-up to issue [#13](https://github.com/sharma-bhaskar/aegis-kms/issues/13).
-- **Audit fan-out is stdout only.** Kafka / S3 / Webhook / Postgres sinks are designed (the
-  `AuditSink` SPI is in place) but not yet shipped. Targeted for v0.2.0.
 - **No built-in Grafana dashboard.** Sample dashboards for the standard metric set will land
-  alongside the v0.1.2 polish release.
+  alongside a later polish release.
+
+As of v0.2.0, `AuditRecord.context("source.ip")` is populated by the HTTP layer (#78), and audit
+fan-out is no longer stdout-only — Postgres, SIEM webhook, Kafka, and NATS JetStream sinks ship
+and compose via `FanOutAuditSink`. See [Operations → Security](security.md) and the audit-sink
+HOCON blocks in `application.conf`.

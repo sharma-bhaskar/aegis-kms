@@ -48,29 +48,29 @@ Non-goals: cryptographic operations, multi-cloud RoT, KMIP, MCP, OIDC. All defer
 
 ---
 
-### v0.1.1 — Make it a real KMS
+### v0.1.1 — Make it a real KMS ✅ *shipped*
 
 **Theme:** turn Aegis from a *key registration* service into a *key management* service. Every claim about layered-mode AWS KMS in the README should run end-to-end after this release.
 
 | # | Capability | Area | Status |
 |---|---|---|---|
-| 1.1.a | `sign(id, message, alg)` in `KeyService` algebra + REST + AWS adapter | Real KMS | 🚧 |
-| 1.1.b | `verify(id, message, signature, alg)` | Real KMS | 🚧 |
-| 1.1.c | `encrypt(id, plaintext, ctx)` / `decrypt(id, ciphertext, ctx)` | Real KMS | 🚧 |
-| 1.1.d | `wrap(id, dek)` / `unwrap(id, wrappedDek)` | Real KMS | 🚧 |
-| 1.1.e | `rotate(id, policy)` — new active version, old → Deactivated | Real KMS | 🚧 |
-| 1.1.f | `compromise(id, reason)` operator override | Real KMS | 🚧 |
-| 1.1.g | Prometheus metrics endpoint (`/metrics`) — request rate, latency, error rate, audit lag, journal append latency | Platform | 🚧 |
-| 1.1.h | OpenTelemetry tracing (auto-instrument REST + JDBC + AWS SDK) | Platform | 🚧 |
-| 1.1.i | `Resource[IO, Unit]` boot scope — clean Postgres pool / actor system shutdown | Platform | 🚧 |
-| 1.1.j | Anomaly detector: time-of-day baseline, source-IP set, op-type histogram | Wedge | 🚧 |
-| 1.1.k | Maven Central publish (Sonatype OSSRH + GPG + workflow secrets) | Platform | 🚧 |
+| 1.1.a | `sign(id, message, alg)` in `KeyService` algebra + REST + AWS adapter | Real KMS | ✅ |
+| 1.1.b | `verify(id, message, signature, alg)` | Real KMS | ✅ |
+| 1.1.c | `encrypt(id, plaintext, ctx)` / `decrypt(id, ciphertext, ctx)` | Real KMS | ✅ |
+| 1.1.d | `wrap(id, dek)` / `unwrap(id, wrappedDek)` | Real KMS | ✅ |
+| 1.1.e | `rotate(id, policy)` — new active version, old → Deactivated | Real KMS | ✅ |
+| 1.1.f | `compromise(id, reason)` operator override | Real KMS | ✅ |
+| 1.1.g | Prometheus metrics endpoint (`/metrics`) — request rate, latency, error rate, audit lag, journal append latency | Platform | ✅ |
+| 1.1.h | OpenTelemetry tracing (auto-instrument REST + JDBC + AWS SDK) | Platform | ✅ |
+| 1.1.i | `Resource[IO, Unit]` boot scope — clean Postgres pool / actor system shutdown | Platform | ✅ |
+| 1.1.j | Anomaly detector: time-of-day baseline, source-IP set, op-type histogram | Wedge | ✅ |
+| 1.1.k | Maven Central publish (Sonatype OSSRH + GPG + workflow secrets) | Platform | ⚠️ workflow ready; blocked on Sonatype + GPG secrets |
 
 **Demo target:** "Boot Aegis against an existing AWS KMS CMK, sign a payload, see the audit record, watch metrics in Grafana."
 
 ---
 
-### v0.2.0 — Ship the wedge
+### v0.2.0 — Ship the wedge ✅ *shipped*
 
 **Theme:** the first release where the README's "Claude goes rogue" example actually runs end-to-end. Anomaly + risk + auto-response close the loop.
 
@@ -79,18 +79,21 @@ Non-goals: cryptographic operations, multi-cloud RoT, KMIP, MCP, OIDC. All defer
 | 2.0.a | Risk scorer (W2) — multi-factor numeric score; reasoning recorded in audit context | Wedge | ✅ |
 | 2.0.b | Decision adapter (`allow` / `step-up` / `deny`) wired into IAM | Wedge | ✅ |
 | 2.0.c | Auto-responder (W3) — configurable rules from `AgentRecommendation` → action (revoke / deactivate / freeze / alert) | Wedge | ✅ |
-| 2.0.d | Agent-token issuance HTTP endpoint (`POST /v1/agents/issue`) | Wedge | 🔜 |
-| 2.0.e | `aegis agent issue` CLI — wire the existing stub to the new endpoint | Wedge | 🔜 |
-| 2.0.f | Postgres audit table (queryable, indexed on actor + occurredAt + key) | Platform | 🔜 |
-| 2.0.g | `GET /v1/audit?since=&actor=&key=&op=` audit-read API | Platform | 🔜 |
-| 2.0.h | `aegis audit tail` CLI — wire the existing stub to the new audit-read API | Wedge | 🔜 |
+| 2.0.d | Agent-token issuance HTTP endpoint (`POST /v1/agents/issue`) | Wedge | ✅ |
+| 2.0.e | `aegis agent issue` CLI — wire the existing stub to the new endpoint | Wedge | ✅ |
+| 2.0.f | Postgres audit table (queryable, indexed on actor + occurredAt + key) | Platform | ✅ |
+| 2.0.g | `GET /v1/audit?since=&actor=&key=&op=` audit-read API | Platform | ✅ |
+| 2.0.h | `aegis audit tail` CLI — wire the existing stub to the new audit-read API | Wedge | ✅ |
 | 2.0.i | Generic SIEM webhook audit sink (HTTPS POST per event, batched + retried) | Platform | ✅ |
 | 2.0.j | Kafka audit fan-out (Pekko-Connectors-Kafka) | Platform | ✅ |
 | 2.0.k | Redis-backed JWT revocation list (jti blacklist) — required for instant agent revoke | Platform | ✅ |
 | 2.0.l | Honey keys / canary keys — fake keys with auto-alert if any agent touches them | Wedge | ✅ |
 | 2.0.m | OIDC verifier + JWKS rotation + RS256 / ES256 signature support | Wedge | ✅ |
-| 2.0.n | OPA (Open Policy Agent) integration — externalize policy evaluation (Rego) via sidecar | Wedge | 💡 |
+| 2.0.n | OPA (Open Policy Agent) integration — externalize policy evaluation (Rego) via sidecar | Wedge | 💡 deferred to v0.3.0 (#27) |
 | 2.0.o | NATS / NATS JetStream audit fan-out | Platform | ✅ |
+| 2.0.p | MySQL + SQLite event journal adapters | Platform | ✅ |
+| 2.0.q | `RoleBasedPolicyEngine` wired in `Server.boot` (role-based RBAC for humans) | Platform | ✅ |
+| 2.0.r | `source.ip` plumbed from the HTTP layer into `AuditRecord.context` | Platform | ✅ |
 
 **Demo target:** "Issue an agent token, watch it sign 49 invoices fine, watch it try one off-scope key, watch the auto-revoke fire before the next attempt — all in `aegis audit tail`."
 
@@ -250,7 +253,7 @@ The release tables above slice the work by milestone. The tables below slice by 
 | Plane | Status | Tracking |
 |---|---|---|
 | REST (`aegis-http`) | ✅ v0.1.0 (basic) | extend in 0.1.1 with crypto ops |
-| OpenAPI advertising + Swagger UI | ⚠️ deps wired; route exposure pending | v0.1.1 |
+| OpenAPI advertising + Swagger UI | ✅ v0.1.1 (`/docs/`) | — |
 | KMIP (`aegis-kmip`) — TTLV / TLS / multi-version | 🔜 v0.4.0 | issue-tagged `area/wire/kmip` |
 | MCP (`aegis-mcp-server`) | 🔜 v0.4.0 | issue-tagged `area/wire/mcp area/ai-governance` |
 | Agent-AI (`aegis-agent-ai`) — function-call surface | 🔜 v0.4.0 | issue-tagged `area/wire/agent-ai` |
@@ -264,11 +267,11 @@ The release tables above slice the work by milestone. The tables below slice by 
 | Time-windowed access (key X usable Mon-Fri 9-18 UTC) | 🔜 v0.3.0 | `area/policy` |
 | Just-In-Time (JIT) access | 💡 v0.3.0+ | `area/policy area/ai-governance` |
 | Approval workflows (Slack / PagerDuty / OpsGenie) | 💡 v0.3.0+ | `area/policy area/integration/*` |
-| OPA (Rego) externalized policy | 💡 v0.2.0+ | `area/policy area/integration/opa` |
+| OPA (Rego) externalized policy | 💡 v0.3.0 | `area/policy area/integration/opa` (#27) |
 | AWS Cedar policy language | 💡 v0.4.0+ | `area/policy area/integration/aws` |
 | Policy-as-code with Git (hot-reload on commit) | 💡 v0.4.0+ | `area/policy` |
 | Policy simulation / preview (dry-run on past 24h) | 💡 v0.4.0+ | `area/policy kind/feature` |
-| Policy explainer (denied requests return the firing rule) | 💡 v0.2.0 | `area/policy kind/feature` |
+| Policy explainer (denied requests return the firing rule) | 💡 v0.3.0 | `area/policy kind/feature` |
 | Policy versioning & rollback | 💡 v0.4.0+ | `area/policy` |
 | Tenant isolation in policy evaluation | 🔜 v0.6.0 | `area/policy area/multi-tenancy` |
 
@@ -276,8 +279,8 @@ The release tables above slice the work by milestone. The tables below slice by 
 
 | Capability | Status | Tracking |
 |---|---|---|
-| Agent registry (list all live agents, parents, scopes, last activity) | 🔜 v0.2.0 | `area/ai-governance` |
-| Agent kill-switch ("revoke all agents under alice@org issued in 24h") | 🔜 v0.2.0 | `area/ai-governance area/auto-response` |
+| Agent registry (list all live agents, parents, scopes, last activity) | 🔜 v0.3.0 | `area/ai-governance` |
+| Agent kill-switch ("revoke all agents under alice@org issued in 24h") | 🔜 v0.3.0 | `area/ai-governance area/auto-response` |
 | Per-prompt accountability (record originating LLM prompt) | 💡 v0.4.0 | `area/ai-governance area/wire/mcp` |
 | Model identifier in audit (`actor.model = "..."`) | 💡 v0.4.0 | `area/ai-governance area/audit` |
 | Token cost / op-rate tracking per agent | 💡 v0.4.0+ | `area/ai-governance` |
@@ -293,14 +296,14 @@ The release tables above slice the work by milestone. The tables below slice by 
 | Capability | Status | Tracking |
 |---|---|---|
 | Stdout JSON logs | ✅ v0.1.0 | — |
-| Prometheus metrics (`/metrics`) | 🔜 v0.1.1 | `area/observability` |
-| OpenTelemetry tracing (REST + JDBC + AWS SDK) | 🔜 v0.1.1 | `area/observability` |
+| Prometheus metrics (`/metrics`) | ✅ v0.1.1 | `area/observability` |
+| OpenTelemetry tracing (REST + JDBC + AWS SDK) | ✅ v0.1.1 | `area/observability` |
 | OpenTelemetry log export | 💡 v0.3.0 | `area/observability` |
-| `request-id` MDC propagation (logs ↔ audit ↔ response header) | 🚧 v0.1.1 | `area/observability` |
-| `Resource[IO, Unit]` boot scope (graceful shutdown) | 🔜 v0.1.1 | `area/server-tier` |
+| `request-id` MDC propagation (logs ↔ audit ↔ response header) | ✅ v0.1.1 | `area/observability` |
+| `Resource[IO, Unit]` boot scope (graceful shutdown) | ✅ v0.1.1 | `area/server-tier` |
 | Helm chart | 🔜 v0.3.0 | `area/deployment` |
 | Kubernetes operator (CRDs) | 💡 v0.3.0+ | `area/deployment kind/feature` |
-| Docker Compose hardening (no default passwords) | 🔜 v0.1.1 | `area/deployment kind/security` |
+| Docker Compose hardening (no default passwords) | ✅ v0.1.1 | `area/deployment kind/security` |
 
 ### Authentication + identity
 
@@ -320,8 +323,8 @@ The release tables above slice the work by milestone. The tables below slice by 
 
 | SDK | Status | Tracking |
 |---|---|---|
-| Scala SDK (`aegis-sdk-scala`) — full REST coverage | ⚠️ skeleton | v0.2.0 |
-| Java SDK (`aegis-sdk-java`) — full REST coverage | ⚠️ skeleton | v0.2.0 |
+| Scala SDK (`aegis-sdk-scala`) — full REST coverage | ⚠️ skeleton | v0.3.0 |
+| Java SDK (`aegis-sdk-java`) — full REST coverage | ⚠️ skeleton | v0.3.0 |
 | Kotlin coroutines wrapper | 💡 | community welcome |
 | TypeScript / Node SDK | 💡 | community welcome |
 | Python SDK | 💡 | community welcome |

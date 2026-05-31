@@ -90,7 +90,7 @@ Leave that log tail running — you'll watch real audit + trace events appear in
 
 ## Step 3 — Verify the server is up
 
-There's no dedicated `/health` endpoint in v0.1.1 — instead, watch the log tail from Step 2
+There's no dedicated `/health` endpoint yet — instead, watch the log tail from Step 2
 for the "Boot complete" line, or hit the Swagger UI (next step). You can also confirm the
 server is listening on 8080:
 
@@ -141,7 +141,7 @@ export USER_HEADER="X-Aegis-User: alice"
 We'll use `$USER_HEADER` on every request. If you forget it, you'll get `401 Unauthorized` —
 that's by design. There is no anonymous access.
 
-(In v0.1.1 there's no `GET /v1/keys` list endpoint to confirm against — only
+(There's no `GET /v1/keys` list endpoint to confirm against yet — only
 `GET /v1/keys/{id}` for a specific key. Step 6 creates a key we can fetch.)
 
 ---
@@ -246,7 +246,7 @@ and `Destroyed` refuse every op.
 
 ## Step 8 — Sign a message
 
-v0.1.1 supports two signature algorithms: `RsaPssSha256` and `EcdsaSha256`. The dev-mode
+Aegis currently supports two signature algorithms: `RsaPssSha256` and `EcdsaSha256`. The dev-mode
 in-memory Root of Trust accepts either against any key spec, so we'll use `RsaPssSha256` here.
 
 ```bash
@@ -640,14 +640,14 @@ Everything you just did via `curl` is also available via the `aegis` CLI. Downlo
 from the latest release:
 
 ```bash
-TAG=0.1.1
+TAG=0.2.0
 curl -L -o aegis-cli.tgz \
   "https://github.com/sharma-bhaskar/aegis-kms/releases/download/v${TAG}/aegis-cli-${TAG}.tgz"
 tar -xzf aegis-cli.tgz
 export AEGIS_CLI=./aegis-cli-${TAG}/bin/aegis
 
 $AEGIS_CLI version
-# → aegis 0.1.1
+# → aegis 0.2.0
 ```
 
 Run the same end-to-end flow as Steps 5-13:
@@ -666,11 +666,11 @@ $AEGIS_CLI keys compromise --id <id> --reason "leaked"
 Every verb has `--help`. The login command stores the server URL + principal in
 `~/.config/aegis/config.json`, so subsequent commands don't need to repeat them.
 
-!!! note "v0.1.1 stub commands"
+!!! note "CLI command status"
 
-    `aegis agent issue`, `aegis audit tail`, and `aegis advisor scan` print *"not yet wired
-    up"* — they're the surface for v0.2.0 work. Don't be surprised when they don't do
-    anything yet.
+    `aegis agent issue` and `aegis audit tail` are wired end-to-end as of v0.2.0 (#79).
+    `aegis advisor scan` / `explain` still print *"not yet wired up"* — they're the surface for
+    the v0.2.1 LLM advisor. Don't be surprised when the advisor commands don't do anything yet.
 
 ---
 
@@ -690,7 +690,7 @@ docker run --rm -d --name aegis-server-jwt \
   -e POSTGRES_PASSWORD="$POSTGRES_PASSWORD" \
   -e AEGIS_AUTH_KIND=hmac \
   -e AEGIS_AUTH_HMAC_SECRET="$AEGIS_AUTH_HMAC_SECRET" \
-  ghcr.io/sharma-bhaskar/aegis-server:0.1.1
+  ghcr.io/sharma-bhaskar/aegis-server:0.2.0
 ```
 
 Mint a token (from a Scala REPL or a small program — Aegis ships `JwtIssuer.hmac` for this):
@@ -751,13 +751,13 @@ docker run --rm -d --name aegis-server-aws \
   -e AWS_REGION=us-east-1 \
   -e AWS_ACCESS_KEY_ID=... \
   -e AWS_SECRET_ACCESS_KEY=... \
-  ghcr.io/sharma-bhaskar/aegis-server:0.1.1
+  ghcr.io/sharma-bhaskar/aegis-server:0.2.0
 ```
 
 (In production, use IAM Roles / IRSA on Kubernetes / ECS task roles instead of static
 credentials.)
 
-GCP / Azure / Vault / PKCS#11 RoT adapters are designed and roadmapped for v0.2.0 — see
+GCP / Azure / Vault RoT adapters are roadmapped for v0.3.0, and PKCS#11 / HSM for v0.5.0 — see
 [Status](about/status.md#crypto-adapters-rootoftrust).
 
 ---
@@ -795,8 +795,8 @@ You touched all of these. Full list:
 | `GET` | `/docs/` | Swagger UI |
 | `GET` | `/docs/docs.yaml` | Raw OpenAPI 3.1 spec |
 
-> **Not in v0.1.1:** there's no `GET /v1/keys` (list) endpoint and no `/health` /
-> `/healthz` endpoint. Both are tracked for v0.1.2.
+> **Not yet:** there's no `GET /v1/keys` (list) endpoint and no `/health` /
+> `/healthz` endpoint. Both are tracked for a later release.
 
 ---
 

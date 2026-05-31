@@ -66,7 +66,7 @@ object KeyEvent:
 
   /** Rotation: the logical key's `currentVersion` advanced from `newVersion - 1` to `newVersion`. The
     * `policy` records why — `Manual` for an explicit `aegis keys rotate` call, `TimeBased` / `OpCountBased`
-    * (rendered string) for the auto-scheduler that lands in v0.2.0.
+    * (rendered string) for the auto-scheduler roadmapped for a later release.
     */
   final case class Rotated(
       eventId: String,
