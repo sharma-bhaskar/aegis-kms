@@ -430,6 +430,7 @@ What's implemented today vs. what the design above describes. This is the only p
 | SIEM webhook audit sink (HMAC-signed, async batched + retry + DLQ) | ✅ Shipped v0.2.0 |
 | Kafka audit fan-out sink (idempotent producer, Pekko-Connectors-Kafka) | ✅ Shipped v0.2.0 |
 | NATS JetStream audit fan-out sink (publishAsync + PubAck) | ✅ Shipped v0.2.0 |
+| Honey keys (canary) registry + 6th `HoneyKey` detector → auto-revoke | ✅ Shipped v0.2.0 |
 | Risk scorer (W2) — numeric scores feeding access decisions | ✅ Shipped (see v0.1.x table above) |
 | Auto-responder (W3) consuming `AgentRecommendation`s | ✅ Shipped (see v0.1.x table above) |
 | LLM advisor (W4) — `aegis advisor scan/explain` | 🔜 Designed (CLI stub in place) |

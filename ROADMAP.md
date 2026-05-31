@@ -87,7 +87,7 @@ Non-goals: cryptographic operations, multi-cloud RoT, KMIP, MCP, OIDC. All defer
 | 2.0.i | Generic SIEM webhook audit sink (HTTPS POST per event, batched + retried) | Platform | ✅ |
 | 2.0.j | Kafka audit fan-out (Pekko-Connectors-Kafka) | Platform | ✅ |
 | 2.0.k | Redis-backed JWT revocation list (jti blacklist) — required for instant agent revoke | Platform | ✅ |
-| 2.0.l | Honey keys / canary keys — fake keys with auto-alert if any agent touches them | Wedge | 💡 |
+| 2.0.l | Honey keys / canary keys — fake keys with auto-alert if any agent touches them | Wedge | ✅ |
 | 2.0.m | OIDC verifier + JWKS rotation + RS256 / ES256 signature support | Wedge | ✅ |
 | 2.0.n | OPA (Open Policy Agent) integration — externalize policy evaluation (Rego) via sidecar | Wedge | 💡 |
 | 2.0.o | NATS / NATS JetStream audit fan-out | Platform | ✅ |
@@ -281,7 +281,7 @@ The release tables above slice the work by milestone. The tables below slice by 
 | Per-prompt accountability (record originating LLM prompt) | 💡 v0.4.0 | `area/ai-governance area/wire/mcp` |
 | Model identifier in audit (`actor.model = "..."`) | 💡 v0.4.0 | `area/ai-governance area/audit` |
 | Token cost / op-rate tracking per agent | 💡 v0.4.0+ | `area/ai-governance` |
-| Honey keys / canary keys with auto-alert | 💡 v0.2.0 | `area/ai-governance kind/security` |
+| Honey keys / canary keys with auto-alert | ✅ v0.2.0 | — |
 | Scope-creep detection (effective scope vs. baseline) | 💡 v0.3.0 | `area/ai-governance area/risk` |
 | Compliance reports (SOC2 / PCI / HIPAA exportable) | 💡 v0.6.0 | `area/ai-governance area/compliance` |
 | LLM advisor with RAG over audit log | 🔜 v0.2.1 | `area/ai-governance area/wedge/llm-advisor` |

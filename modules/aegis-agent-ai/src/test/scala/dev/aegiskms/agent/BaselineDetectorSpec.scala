@@ -2,7 +2,7 @@ package dev.aegiskms.agent
 
 import cats.effect.unsafe.implicits.global
 import dev.aegiskms.audit.AuditRecord
-import dev.aegiskms.core.{Operation, Principal}
+import dev.aegiskms.core.{KeyId, Operation, Principal}
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatest.matchers.should.Matchers
 
@@ -242,4 +242,128 @@ final class BaselineDetectorSpec extends AnyFunSuite with Matchers:
       "TimeOfDayBaseline",
       "SourceIpBaseline"
     )
+  }
+
+  // ── HoneyKey detector (#26) ───────────────────────────────────────────────
+  //
+  // Honey-key resource format mirrors production (`AuditingKeyService.instrument` writes the bare
+  // `id.value` to `AuditRecord.resource`, NOT `key:<id>`). The existing test helper `rec(..., key)`
+  // prepends `key:` which is incorrect for the honey-key path; these tests construct the record
+  // directly to use the production-aligned format.
+
+  private val honeyKeyId: KeyId    = KeyId.fromString("k-treasury-canary").toOption.get
+  private val nonHoneyKeyId: KeyId = KeyId.fromString("k-real-invoice").toOption.get
+
+  private def opRec(
+      at: Instant,
+      principal: Principal,
+      op: Operation,
+      keyId: KeyId,
+      outcome: String = "Success"
+  ): AuditRecord =
+    AuditRecord(
+      at = at,
+      principal = principal,
+      operation = op,
+      resource = keyId.value,
+      outcome = outcome,
+      correlationId = java.util.UUID.randomUUID().toString
+    )
+
+  test("HoneyKey: agent touching a registered honey key fires High-severity Revoke") {
+    val registry = HoneyKeyRegistry.fromSet(Set(honeyKeyId))
+    val det      = BaselineDetector.make(honeyKeys = registry).unsafeRunSync()
+    val ag       = agent(alice)
+
+    val recs = det
+      .observe(opRec(Instant.parse("2026-04-25T03:00:00Z"), ag, Operation.Sign, honeyKeyId))
+      .unsafeRunSync()
+
+    val honey =
+      recs.find(_.detector == "HoneyKey").getOrElse(fail(s"HoneyKey detector did not fire; got: $recs"))
+    honey.severity shouldBe Severity.High
+    honey.suggestedAction shouldBe SuggestedAction.Revoke
+    honey.details("honeyKeyId") shouldBe honeyKeyId.value
+    honey.details("operation") shouldBe Operation.Sign.toString
+  }
+
+  test("HoneyKey: first touch fires unconditionally — NO cold-start guard (trip wire by design)") {
+    // Other detectors require >= 1 prior observation before they fire. HoneyKey does not — the
+    // entire point of the honey is to fire on first touch.
+    val registry = HoneyKeyRegistry.fromSet(Set(honeyKeyId))
+    val det      = BaselineDetector.make(honeyKeys = registry).unsafeRunSync()
+    val ag       = agent(alice)
+    // No prior observations; touch the honey directly.
+    val recs = det
+      .observe(opRec(Instant.parse("2026-04-25T03:00:00Z"), ag, Operation.Get, honeyKeyId))
+      .unsafeRunSync()
+
+    recs.map(_.detector) should contain("HoneyKey")
+  }
+
+  test("HoneyKey: human touching a registered honey key does NOT fire (Revoke is agent-only)") {
+    // Humans may legitimately validate that a canary is still alive. We don't auto-revoke; the
+    // audit row remains for review.
+    val registry = HoneyKeyRegistry.fromSet(Set(honeyKeyId))
+    val det      = BaselineDetector.make(honeyKeys = registry).unsafeRunSync()
+
+    val recs = det
+      .observe(opRec(Instant.parse("2026-04-25T03:00:00Z"), alice, Operation.Get, honeyKeyId))
+      .unsafeRunSync()
+
+    recs.map(_.detector) should not contain "HoneyKey"
+  }
+
+  test("HoneyKey: agent touching a non-honey key does NOT fire") {
+    val registry = HoneyKeyRegistry.fromSet(Set(honeyKeyId))
+    val det      = BaselineDetector.make(honeyKeys = registry).unsafeRunSync()
+    val ag       = agent(alice)
+
+    val recs = det
+      .observe(opRec(Instant.parse("2026-04-25T03:00:00Z"), ag, Operation.Sign, nonHoneyKeyId))
+      .unsafeRunSync()
+
+    recs.map(_.detector) should not contain "HoneyKey"
+  }
+
+  test("HoneyKey: empty registry (default) keeps the detector inert") {
+    // Default BaselineDetector.make() uses HoneyKeyRegistry.empty. Even a flagrantly suspicious
+    // agent op against any key should not trip the HoneyKey detector when nothing is registered.
+    val det = BaselineDetector.make().unsafeRunSync()
+    val ag  = agent(alice)
+
+    val recs = det
+      .observe(opRec(Instant.parse("2026-04-25T03:00:00Z"), ag, Operation.Sign, honeyKeyId))
+      .unsafeRunSync()
+
+    recs.map(_.detector) should not contain "HoneyKey"
+  }
+
+  test("HoneyKey: Create / Locate resources (name:/pattern: prefixes) never trip the detector") {
+    // Create resources are `name:<n>/alg:.../size:...` and Locate is `pattern:...`. Neither yields
+    // a parseable KeyId, so the HoneyKey detector skips them. (You can't touch a honey key you
+    // haven't seen yet — only operations ON an existing KeyId are relevant.)
+    val registry = HoneyKeyRegistry.fromSet(Set(honeyKeyId))
+    val det      = BaselineDetector.make(honeyKeys = registry).unsafeRunSync()
+    val ag       = agent(alice)
+
+    val createRec = AuditRecord(
+      at = Instant.parse("2026-04-25T03:00:00Z"),
+      principal = ag,
+      operation = Operation.Create,
+      resource = "name:treasury-canary/alg:AES/size:256",
+      outcome = "Success",
+      correlationId = "c-create"
+    )
+    val locateRec = AuditRecord(
+      at = Instant.parse("2026-04-25T03:00:05Z"),
+      principal = ag,
+      operation = Operation.Locate,
+      resource = "pattern:treasury-*",
+      outcome = "Success",
+      correlationId = "c-locate"
+    )
+
+    det.observe(createRec).unsafeRunSync().map(_.detector) should not contain "HoneyKey"
+    det.observe(locateRec).unsafeRunSync().map(_.detector) should not contain "HoneyKey"
   }

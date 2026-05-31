@@ -8,6 +8,7 @@ import dev.aegiskms.agent.{
   AutoResponder,
   BaselineDetector,
   BaselineRiskScorer,
+  HoneyKeyRegistry,
   InMemoryRecommendationSink,
   TappedAuditSink,
   ThresholdDecisionEngine
@@ -154,7 +155,12 @@ object Server extends IOApp.Simple:
       metered     = new MeteredKeyService(authorizing, metricsRegistry)
       traced      = new TracingKeyService(metered, tracer)
       recStore <- Resource.eval(InMemoryRecommendationSink.make)
-      detector <- Resource.eval(BaselineDetector.make())
+      // Honey key (canary) registry (#26). Parsed from `aegis.security.honey-keys` HOCON list
+      // (or AEGIS_HONEY_KEYS comma-separated env override). Empty by default — production
+      // deployments opt in explicitly. Threaded into BaselineDetector.make so the 6th detector
+      // can short-circuit any agent op against a marked key into a High-severity Revoke.
+      honeyKeys = buildHoneyKeyRegistry(rootConfig)
+      detector <- Resource.eval(BaselineDetector.make(honeyKeys = honeyKeys))
       // Audit sink (#19): `aegis.audit.kind=stdout` (default) writes to console; `postgres`
       // persists to the indexed `aegis_audit_events` table backing the audit-read API (#20).
       // `stdoutSink` is kept as the variable name across both modes so the existing references
@@ -638,6 +644,38 @@ object Server extends IOApp.Simple:
     * Both modes return a `Resource.eval`-friendly `IO[AgentTokenIssuer]`; the issuer itself holds no closable
     * resource, but lifting it via `IO` keeps the boot composition uniform.
     */
+  /** Parse `aegis.security.honey-keys` (#26). Accepts either a HOCON list or — when overridden via
+    * `AEGIS_HONEY_KEYS` — a comma-separated string (HOCON happily coerces a single string into a singleton
+    * list, but `,`-separated values look like one element to it; we split on `,` ourselves to handle that
+    * env-var shape).
+    *
+    * Unknown / malformed `KeyId` strings fail fast at boot rather than being silently ignored — a typo'd
+    * canary that doesn't catch the agent is the opposite of what an operator wanted.
+    */
+  private def buildHoneyKeyRegistry(config: Config): HoneyKeyRegistry =
+    import scala.jdk.CollectionConverters.*
+    val raw = config.getValue("aegis.security.honey-keys").unwrapped() match
+      case s: String             => s.split(',').toList.map(_.trim).filter(_.nonEmpty)
+      case xs: java.util.List[?] => xs.asScala.toList.map(_.toString.trim).filter(_.nonEmpty)
+      case other =>
+        throw new IllegalArgumentException(
+          s"aegis.security.honey-keys must be a list or comma-separated string, got: $other"
+        )
+    val parsed = raw.map { s =>
+      dev.aegiskms.core.KeyId.fromString(s).fold(
+        msg =>
+          throw new IllegalArgumentException(
+            s"aegis.security.honey-keys: invalid KeyId '$s': $msg"
+          ),
+        identity
+      )
+    }.toSet
+    if parsed.isEmpty then
+      logger.info("honey keys: none registered (set aegis.security.honey-keys to opt in)")
+    else
+      logger.info(s"honey keys: ${parsed.size} registered for canary auto-revoke")
+    HoneyKeyRegistry.fromSet(parsed)
+
   private def buildAgentIssuer(config: Config): IO[AgentTokenIssuer] = IO {
     config.getString("aegis.auth.kind") match
       case "hmac" =>
