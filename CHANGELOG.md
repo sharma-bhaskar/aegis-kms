@@ -6,6 +6,8 @@ All notable changes to Aegis will be documented here. This project follows
 
 ## Unreleased
 
+## 0.2.0 — 2026-05-31
+
 ### Added
 
 - **Honey keys (canary keys) with auto-revoke on agent touch (closes #26).** Operator-marked
