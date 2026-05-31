@@ -27,7 +27,7 @@ problem is structural: every existing KMS — AWS KMS, GCP KMS, Azure Key Vault,
 OpenBao — is built around a role-centric model that pre-dates LLM agents in production.
 
 Aegis is the agent-native control plane that sits in front of an existing KMS (AWS KMS today;
-GCP / Azure / Vault adapters in v0.2.0) and adds the four things role-centric KMSes don't:
+GCP / Azure / Vault adapters in v0.3.0) and adds the four things role-centric KMSes don't:
 
 <div class="grid cards" markdown>
 
@@ -101,8 +101,8 @@ Full walkthrough → [Getting Started → Quickstart](getting-started/quickstart
 
 ## What ships today
 
-This table reflects what's on `main` right now. v0.1.1 is the last released artifact; the rows
-marked "v0.2.0 in progress" are committed and tested on `main` and will land in the next tag.
+This table reflects what's on `main` right now. v0.2.0 is the last released artifact; the rows
+marked "v0.3.0" / "v0.4.0" are designed and roadmapped, not yet shipped.
 
 | Surface | Status |
 |---|---|
@@ -119,13 +119,16 @@ marked "v0.2.0 in progress" are committed and tested on `main` and will land in 
 | Risk scorer (`RiskScorer` SPI; baseline + contextual factors stamped on every audit row) | :material-check: Shipped (v0.2.0) |
 | Decision adapter (`Allow` / `StepUp` / `Deny`; HTTP 401 / 403 with reason) | :material-check: Shipped (v0.2.0) |
 | Auto-responder (default High → Revoke, Medium → Alert; configurable rules + 60 s cooldown) | :material-check: Shipped (v0.2.0) |
-| KMIP wire plane | :material-progress-clock: v0.2.0 |
-| MCP-native server | :material-progress-clock: v0.2.0 |
-| Agent-token issuance endpoint (`POST /v1/agents/issue`) + OIDC verifier | :material-progress-clock: v0.2.0 |
-| Source IP populated on audit records by the HTTP layer | :material-progress-clock: v0.2.0 |
-| GCP / Azure / Vault `RootOfTrust` adapters | :material-progress-clock: v0.2.0 |
-| SIEM / Kafka / Postgres audit fan-out | :material-progress-clock: v0.3.0 |
-| Helm chart, auto-rotation scheduler | :material-progress-clock: v0.3.0 |
+| Agent-token issuance endpoint (`POST /v1/agents/issue`) + OIDC / JWKS verifier (RS256/ES256) | :material-check: Shipped (v0.2.0) |
+| Redis-backed JWT revocation list + role-based policy engine | :material-check: Shipped (v0.2.0) |
+| Honey keys (canary) registry + auto-revoke detector | :material-check: Shipped (v0.2.0) |
+| Postgres audit table + `GET /v1/audit` read API | :material-check: Shipped (v0.2.0) |
+| SIEM webhook / Kafka / NATS JetStream audit fan-out | :material-check: Shipped (v0.2.0) |
+| MySQL + SQLite event journals | :material-check: Shipped (v0.2.0) |
+| Source IP populated on audit records by the HTTP layer | :material-check: Shipped (v0.2.0) |
+| GCP / Azure / Vault `RootOfTrust` adapters, Helm chart | :material-progress-clock: v0.3.0 |
+| KMIP wire plane | :material-progress-clock: v0.4.0 |
+| MCP-native server | :material-progress-clock: v0.4.0 |
 
 Full per-release breakdown → [Roadmap](about/roadmap.md). What changed when → [Changelog](about/changelog.md).
 
@@ -171,5 +174,5 @@ Apache-2.0. See [LICENSE](https://github.com/sharma-bhaskar/aegis-kms/blob/main/
 
 ## Status
 
-v0.1.1 — pre-alpha. Not production-ready; looking for design partners through v1.0. The full
+v0.2.0 — pre-alpha. Not production-ready; looking for design partners through v1.0. The full
 status disclosure is on the [Status](about/status.md) page.

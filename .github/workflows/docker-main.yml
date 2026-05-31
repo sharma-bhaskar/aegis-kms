@@ -2,8 +2,8 @@ name: Docker (main)
 
 # Publishes `ghcr.io/<owner>/aegis-server:main` (and `:main-<sha>`) on every push to `main`.
 # Separate from `release.yml` (which fires on `v*` tags) so the "what's on `main`" image stays
-# fresh between tagged releases — needed for the W2/W3 wedge demo in the quickstart, which uses
-# features that shipped to `main` after v0.1.1 but won't be in a tagged image until v0.2.0.
+# fresh between tagged releases — so anything merged to `main` can be previewed ahead of the
+# next `v*` tag without building from source.
 #
 # No external secrets — uses the built-in `GITHUB_TOKEN` for GHCR auth.
 

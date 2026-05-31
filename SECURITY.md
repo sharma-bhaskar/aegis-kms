@@ -57,7 +57,8 @@ a weak default.
 `AEGIS_AUTH_KIND=dev` accepts the `X-Aegis-User` header verbatim and is
 intended for local workstation use only. Any deployment reachable from a
 network you do not fully control must use `AEGIS_AUTH_KIND=hmac` (HS256
-JWT) — or, once the OIDC verifier ships in v0.2.0, an OIDC issuer.
+JWT) or `AEGIS_AUTH_KIND=oidc` (OIDC / JWKS verification with RS256/ES256,
+shipped in v0.2.0).
 
 ### TLS termination
 

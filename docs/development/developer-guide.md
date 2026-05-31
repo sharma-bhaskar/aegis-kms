@@ -381,7 +381,7 @@ invariant.
 | `[error] Imports are not in scalafmt order` | scalafmt and scalafix disagree on import sort | Run `sbt scalafmtAll` then `sbt scalafixAll`; if they fight each other, see §6 |
 | Postgres test fails with `connection refused` on CI | Testcontainers couldn't pull the postgres image | Look at CI logs for image-pull rate-limiting; pin to a specific Postgres tag |
 | `[error] -Wunused:all` flags an import as unused | Probably a `given` import that scalafix doesn't see used | Use `import x.y.given` style; if it's still flagged, add `// scalafix:ok ImportsRule` |
-| Audit row missing context.source.ip | The HTTP layer doesn't yet populate `AuditRecord.context` | Known v0.1.1 limitation; tracked as a follow-up to issue #13 |
+| Audit row missing context.source.ip | Request reached the server without a resolvable client IP (e.g. no `X-Forwarded-For` behind a proxy that strips it) | The HTTP layer populates `source.ip` as of v0.2.0 (#78); check your proxy forwards the client address |
 
 ## 12. Pull request flow
 

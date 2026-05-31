@@ -6,8 +6,8 @@ import java.util.Base64
   * cloud-neutral so the same algebra method signature works for the in-memory dev impl, the AWS-backed root
   * of trust, and (later) GCP / Azure / Vault adapters.
   *
-  * v0.1.1 ships the RSA-PSS-SHA-256 and ECDSA-SHA-256 variants — the two widest-deployed asymmetric signing
-  * algorithms. Additional variants (PKCS#1, longer hashes, Ed25519) land in v0.2.0 alongside the GCP/Azure
+  * Aegis ships the RSA-PSS-SHA-256 and ECDSA-SHA-256 variants — the two widest-deployed asymmetric signing
+  * algorithms. Additional variants (PKCS#1, longer hashes, Ed25519) are roadmapped alongside the GCP/Azure
   * adapters.
   */
 enum SigAlgorithm:

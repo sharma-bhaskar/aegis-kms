@@ -397,7 +397,7 @@ Honest counter-positioning:
 
 What's implemented today vs. what the design above describes. This is the only place in the document that talks about implementation phasing.
 
-### v0.1.0 (current)
+### Shipped (v0.1.0 → v0.2.0)
 
 | Capability | Status |
 | --- | --- |
@@ -413,13 +413,13 @@ What's implemented today vs. what the design above describes. This is the only p
 | IAM allowlist policy engine + recursive parent-check for agents | ✅ Shipped |
 | JWT bearer auth — `Authorization: Bearer`, HS256 verification + issuance | ✅ Shipped |
 | Audit decorator + stdout sink + W1 anomaly detector (BaselineDetector) | ✅ Shipped |
-| Risk scorer (W2) + decision adapter (Allow / StepUp / Deny) | ✅ Shipped on `main` (v0.2.0 in progress) |
-| Auto-responder (W3) — `AgentRecommendation` → revoke / alert / freeze | ✅ Shipped on `main` (v0.2.0 in progress) |
+| Risk scorer (W2) + decision adapter (Allow / StepUp / Deny) | ✅ Shipped v0.2.0 |
+| Auto-responder (W3) — `AgentRecommendation` → revoke / alert / freeze | ✅ Shipped v0.2.0 |
 | Operator CLI — `version`, `login`, `keys create/get/activate/destroy` | ✅ Shipped |
 | Scala SDK skeleton + Java SDK skeleton | ✅ Shipped (skeleton) |
 | Docker image (`ghcr.io/sharma-bhaskar/aegis-server`) + Maven Central jars | ✅ Shipped |
 
-### v0.2.0 and beyond (deferred)
+### v0.2.0 deliverables and what's still deferred
 
 | Capability | Status |
 | --- | --- |
@@ -436,8 +436,8 @@ What's implemented today vs. what the design above describes. This is the only p
 | LLM advisor (W4) — `aegis advisor scan/explain` | 🔜 Designed (CLI stub in place) |
 | KMIP plane: TTLV codec, schema, operations, TLS server, multi-version | 🔜 Designed (skeleton module) |
 | MCP server with curated KMS tool surface | 🔜 Designed (skeleton module) |
-| Agent-AI plane | 🔜 Designed |
-| `Resource[IO, Unit]` boot-scope wrapper for the whole server | 🔜 Tracked (F1.b follow-up) |
+| Agent-AI plane — detector + risk scorer + decision adapter + auto-responder wired in `Server.boot` | ✅ Shipped v0.2.0 |
+| `Resource[IO, Unit]` boot-scope wrapper for the whole server | ✅ Shipped v0.1.1 |
 | Helm chart | 🔜 Tracked (`deploy/helm/aegis-kms` is empty today) |
 
 The full system is the point. Anything not yet built is either in active development or has its module skeleton, dependency contract, and tier placement already locked into the build so it can land without disturbing the surrounding code.

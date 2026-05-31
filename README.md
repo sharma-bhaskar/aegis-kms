@@ -1,57 +1,106 @@
 <div align="center">
 
+<img src="docs/assets/logo.svg" alt="Aegis-KMS logo" width="88" height="88"/>
+
 # Aegis-KMS
 
 **An agent-aware open-source key management service.**
 
 *Identity, audit, and real-time control for an era when LLM agents call your sign / encrypt APIs.*
 
-[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
-[![Status](https://img.shields.io/badge/status-pre--alpha-orange.svg)](https://sharma-bhaskar.github.io/aegis-kms/about/status/)
-[![Release](https://img.shields.io/github/v/release/sharma-bhaskar/aegis-kms?include_prereleases&label=release)](https://github.com/sharma-bhaskar/aegis-kms/releases)
-[![CI](https://img.shields.io/github/actions/workflow/status/sharma-bhaskar/aegis-kms/ci.yml?branch=main&label=CI)](https://github.com/sharma-bhaskar/aegis-kms/actions/workflows/ci.yml)
-[![Docs](https://img.shields.io/badge/docs-aegiskms.dev-black)](https://sharma-bhaskar.github.io/aegis-kms/)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg?style=flat-square)](LICENSE)
+[![Status](https://img.shields.io/badge/status-pre--alpha-orange.svg?style=flat-square)](https://sharma-bhaskar.github.io/aegis-kms/about/status/)
+[![Release](https://img.shields.io/github/v/release/sharma-bhaskar/aegis-kms?include_prereleases&label=release&style=flat-square)](https://github.com/sharma-bhaskar/aegis-kms/releases)
+[![CI](https://img.shields.io/github/actions/workflow/status/sharma-bhaskar/aegis-kms/ci.yml?branch=main&label=CI&style=flat-square)](https://github.com/sharma-bhaskar/aegis-kms/actions/workflows/ci.yml)
+[![Docs](https://img.shields.io/badge/docs-aegiskms.dev-black?style=flat-square)](https://sharma-bhaskar.github.io/aegis-kms/)
 
 [Documentation](https://sharma-bhaskar.github.io/aegis-kms/) ·
 [Quickstart](https://sharma-bhaskar.github.io/aegis-kms/getting-started/quickstart/) ·
-[Architecture](https://sharma-bhaskar.github.io/aegis-kms/concepts/architecture/) ·
-[CHANGELOG](CHANGELOG.md) ·
+[Architecture](https://sharma-bhaskar.github.io/aegis-kms/ARCHITECTURE/) ·
+[Changelog](CHANGELOG.md) ·
 [Roadmap](ROADMAP.md)
 
 </div>
 
 ---
 
-> **v0.1.1 — pre-alpha.** The crypto surface is real and end-to-end (sign / verify / encrypt /
-> decrypt / wrap / unwrap / rotate / compromise) on REST + CLI, with JWT auth, Postgres event
-> journal, Prometheus metrics, OpenTelemetry tracing, OpenAPI on `/docs/`, and a 5-detector
-> anomaly engine wired into the audit pipeline. Production-stable backends, KMIP, MCP-native,
-> and the auto-response loop land in v0.2.0+. See [the status table](https://sharma-bhaskar.github.io/aegis-kms/about/status/)
+> **v0.2.0 — pre-alpha.** The crypto surface is real and end-to-end (sign / verify / encrypt /
+> decrypt / wrap / unwrap / rotate / compromise) on REST + CLI, with JWT + OIDC auth, Postgres /
+> MySQL / SQLite event journals, Prometheus metrics, OpenTelemetry tracing, OpenAPI on `/docs/`,
+> and the full wedge: a baseline anomaly engine + honey-key trip wire feeding a risk scorer,
+> decision adapter, and auto-responder, plus agent-token issuance, Redis-backed JWT revocation,
+> and SIEM / Kafka / NATS audit fan-out. Multi-cloud root-of-trust (GCP / Azure / Vault), KMIP,
+> and the MCP-native server land in v0.3.0+. See [the status table](https://sharma-bhaskar.github.io/aegis-kms/about/status/)
 > for the per-capability split.
 
-## Why Aegis exists
+## 🤔 Why Aegis exists
 
 AI agents — Claude, GPT, custom agents, RAG workloads — now sign payloads, decrypt secrets, and
 call tools that hold real credentials. None of the existing key managers were built for this:
 when something goes wrong, the audit log says *"role `billing-signer` made 80 sign calls"* and
 can't tell you *which agent did it, on whose behalf, or whether the burst is anomalous*.
 
-Aegis is the agent-native control plane that sits in front of an existing KMS (AWS KMS today;
-GCP / Azure / Vault adapters in v0.2.0) and adds the four things role-centric KMSes don't:
+Aegis is the agent-native control plane that sits **in front of** an existing KMS (AWS KMS today;
+GCP / Azure / Vault in v0.3.0) and adds the four things role-centric KMSes don't:
 
-1. **Per-agent identity** — every request resolves to a `Principal.Agent` with a back-pointer
-   to the human who issued it, an explicit scope, and a TTL.
-2. **Behavioural baselines** — five detectors flag scope violations, rate spikes, off-hours
-   access, new source IPs, and operations the actor has never performed.
-3. **Structured audit** — every decision, score, and detection lands in an immutable journal
-   with full agent + parent attribution.
-4. **Real-time response** *(v0.2.0)* — configurable wiring from detection to action: allow /
-   step-up / deny / rotate / revoke / alert, applied before the next request lands.
+1. **Per-agent identity** — every request resolves to a `Principal.Agent` with a back-pointer to
+   the human who issued it, an explicit scope, and a TTL.
+2. **Behavioural baselines** — detectors flag scope violations, rate spikes, off-hours access,
+   new source IPs, operations the actor has never performed, and touches on honey keys.
+3. **Structured audit** — every decision, score, and detection lands in an immutable journal with
+   full agent + parent attribution.
+4. **Real-time response** — configurable wiring from detection to action: allow / step-up / deny /
+   rotate / revoke / alert, applied before the next request lands.
 
-For the long-form argument see the [comparison post](https://sharma-bhaskar.github.io/aegis-kms/about/comparison/)
-or [docs/concepts/architecture](https://sharma-bhaskar.github.io/aegis-kms/concepts/architecture/).
+## 🔎 How it works
 
-## Quickstart — Docker Compose
+```mermaid
+flowchart LR
+    Human["Human operator"] -->|issues scoped token| IAM
+    Agent["LLM agent"] -->|"REST / KMIP / MCP"| IAM
+
+    subgraph plane["Aegis-KMS control plane"]
+        direction TB
+        IAM["IAM<br/>authn + authz"] --> KS["KeyService"]
+        KS --> Engine["Anomaly engine<br/>6 detectors"]
+        Engine --> Risk["Risk scorer"]
+        Risk --> Auto["Auto-responder"]
+        KS --> Audit[("Audit journal")]
+    end
+
+    KS -->|"sign / encrypt / wrap"| RoT[("Root of Trust<br/>AWS KMS")]
+    Auto -.->|"revoke / deny / alert"| Agent
+```
+
+Every wire plane (REST, KMIP, MCP, Agent-AI) terminates at one `KeyService[F[_]]` algebra; the
+request lifecycle is identical after framing: **plane → IAM → KeyService → [persistence + RoT] →
+audit**. Persistence commits before the audit event is emitted, so the audit log can never
+describe a key the journal doesn't have.
+
+## ✨ What you get
+
+| | |
+|---|---|
+| 🔑 **Full crypto surface** | sign / verify · encrypt / decrypt (AAD) · wrap / unwrap · rotate · compromise — REST + CLI, AWS KMS-backed |
+| 🪪 **Per-agent identity** | every call resolves to a `Principal.Agent` with issuing human, scope, and TTL; JWT (HS256) + OIDC / JWKS |
+| 🕵️ **Anomaly detection** | 6 detectors — scope, rate-spike, op-histogram, time-of-day, source-IP, + honey-key trip wire |
+| ⚡ **Real-time response** | risk scorer → decision (allow / step-up / deny) → auto-responder (revoke / alert), before the next request |
+| 📜 **Structured audit** | immutable journal with full agent + parent attribution; `GET /v1/audit`; fan-out to Postgres / SIEM / Kafka / NATS |
+| 🔌 **Embeddable** | the pure `KeyService[F[_]]` algebra in `aegis-core` has zero Pekko — drop it into any JVM app |
+
+## ⚖️ Aegis vs a role-centric KMS
+
+| When an agent misbehaves… | AWS KMS / Vault | Aegis-KMS |
+|---|---|---|
+| **Who made the call?** | `role billing-signer` | `agent claude-7f3` ← issued by `alice@org` |
+| **Is this burst anomalous?** | — | 6 behavioural detectors + numeric risk score |
+| **Stop it mid-incident** | manual key disable | auto-revoke the key **and** the agent's JWT before the next op |
+| **Canary / honey keys** | — | trip wire fires on the first agent touch |
+
+Aegis doesn't replace your cryptographic root of trust — it adds the agent-aware control plane on
+top of it.
+
+## 🚀 Quickstart — Docker Compose
 
 Brings up `aegis-server` against a local Postgres in two commands. Requires Docker.
 
@@ -74,69 +123,82 @@ curl -X POST http://localhost:8080/v1/keys \
 open http://localhost:8080/docs/
 ```
 
-For JWT auth, embedding-as-a-library, the CLI, observability wiring, and a full walkthrough
-across REST / KMIP / MCP / agent-token — see the [docs site](https://sharma-bhaskar.github.io/aegis-kms/).
+For JWT auth, embedding-as-a-library, the CLI, observability wiring, and a full walkthrough — see
+the [docs site](https://sharma-bhaskar.github.io/aegis-kms/).
 
-## Documentation
+## 📚 Documentation
 
-The rendered docs site has the full surface. Quick links:
+Full docs at **[sharma-bhaskar.github.io/aegis-kms](https://sharma-bhaskar.github.io/aegis-kms/)**:
 
-- **[Getting started](https://sharma-bhaskar.github.io/aegis-kms/getting-started/quickstart/)** — Docker, library, CLI quickstarts
-- **[Architecture](https://sharma-bhaskar.github.io/aegis-kms/concepts/architecture/)** — two-tier module split, request lifecycle, state machine, audit model
-- **[Operating Aegis](https://sharma-bhaskar.github.io/aegis-kms/operations/usage/)** — auth, deployment, observability, security
-- **[REST API reference](https://sharma-bhaskar.github.io/aegis-kms/reference/rest-api/)** — generated from the live OpenAPI spec
-- **[Developer Guide](https://sharma-bhaskar.github.io/aegis-kms/development/developer-guide/)** — build, test, debug, contribute
-- **[Roadmap](ROADMAP.md)** — per-release delivery plan
-- **[Changelog](CHANGELOG.md)** — what shipped when
+- 🏁 **[Quickstart](https://sharma-bhaskar.github.io/aegis-kms/getting-started/quickstart/)** — Docker, library, and CLI walkthroughs
+- 🏛️ **[Architecture](https://sharma-bhaskar.github.io/aegis-kms/ARCHITECTURE/)** — two-tier module split, request lifecycle, state machine, audit model
+- 🧭 **[Usage walkthrough](https://sharma-bhaskar.github.io/aegis-kms/USAGE/)** — every operation, end to end
+- 🛡️ **[Operations](https://sharma-bhaskar.github.io/aegis-kms/operations/security/)** — auth, deployment, observability, security
+- 👷 **[Developer Guide](https://sharma-bhaskar.github.io/aegis-kms/development/developer-guide/)** — build, test, debug, contribute
 
-## Modules
+> **REST API:** the live OpenAPI 3.1 spec + Swagger UI are served at `http://localhost:8080/docs/`
+> on a running server.
 
-Aegis is a Scala 3 / sbt multi-project. The build enforces a two-tier split: **library tier**
-modules have zero Pekko on the classpath and are embeddable in any JVM app; **server tier**
-modules add the actor system, HTTP, and process boot.
+<details>
+<summary>📦 <b>Modules</b> — Scala 3 / sbt multi-project, two-tier split</summary>
 
-| Module | Tier | Status |
+<br>
+
+The build enforces a **two-tier split**: library-tier modules have zero Pekko on the classpath and
+embed in any JVM app; server-tier modules add the actor system, HTTP, and process boot.
+
+| Module | Tier | What it is |
 |---|---|---|
 | `aegis-core` | Library | `KeyService[F[_]]` algebra, ADTs, no I/O |
-| `aegis-iam` | Library | Principal + JWT verification + authorization decorator |
+| `aegis-iam` | Library | Principal + JWT / OIDC verification + authorization decorator |
 | `aegis-audit` | Library | `AuditSink` SPI + auditing decorator |
 | `aegis-crypto` | Library | `RootOfTrust` SPI + AWS KMS adapter |
 | `aegis-persistence` | Library | Doobie event journal (Postgres / MySQL / SQLite / in-memory) |
-| `aegis-sdk-scala` / `aegis-sdk-java` | Library | Client SDKs |
+| `aegis-sdk-scala` / `aegis-sdk-java` | Library | Client SDKs *(skeleton — full REST coverage in v0.3.0)* |
 | `aegis-http` | Server | Tapir REST + OpenAPI 3.1 |
-| `aegis-agent-ai` | Server | 5-detector baseline anomaly engine |
+| `aegis-agent-ai` | Server | Anomaly engine + risk scorer + auto-responder |
 | `aegis-server` | Server | Boot wiring, Prometheus, OTel, Pekko actor |
 | `aegis-cli` | Server | `aegis` admin CLI |
 | `aegis-kmip`, `aegis-mcp-server` | Server | Skeletons — v0.4.0 |
 
-Module-level docs: [docs/reference/modules](https://sharma-bhaskar.github.io/aegis-kms/reference/modules/).
+</details>
 
-## Status
+## 🗺️ Status
 
-- **v0.1.1**: full crypto surface, observability, anomaly detector — see [CHANGELOG](CHANGELOG.md).
-- **v0.2.0** *(WIP)*: KMIP wire plane, MCP-native server, agent-aware audit fields populated
-  end-to-end, GCP/Azure/Vault adapters, auto-response loop.
-- **v0.3.0+**: policy engine, SIEM/Kafka/Postgres audit fan-out, Helm chart, auto-rotation
-  scheduler.
+**v0.2.0 (latest, pre-alpha)** — the agent-aware wedge, end-to-end.
 
-The full per-release breakdown lives in [ROADMAP.md](ROADMAP.md).
+<details>
+<summary>Per-release breakdown</summary>
 
-## Contributing
+<br>
 
-Aegis welcomes contributions under Apache-2.0. Every commit must be DCO-signed
-(`git commit -s`); the library tier must remain Pekko-free; CHANGELOG updates land in the same
-PR as the change.
+- **v0.1.1** — full crypto surface, observability (Prometheus + OTel), 5-detector anomaly engine.
+- **v0.2.0** *(latest)* — risk scorer, decision adapter, auto-responder, honey keys; agent-token
+  issuance + OIDC / JWKS; Redis JWT revocation; role-based policy engine; Postgres audit table +
+  `GET /v1/audit`; SIEM / Kafka / NATS audit fan-out; MySQL + SQLite journals.
+- **v0.3.0+** — multi-cloud root-of-trust (GCP / Azure / Vault), Helm chart, time-windowed access;
+  then KMIP wire plane + MCP-native server (v0.4.0).
+
+Full detail → [ROADMAP.md](ROADMAP.md) ·
+[Status page](https://sharma-bhaskar.github.io/aegis-kms/about/status/) ·
+[CHANGELOG.md](CHANGELOG.md)
+
+</details>
+
+## 🤝 Contributing
+
+Aegis welcomes contributions under Apache-2.0. Every commit must be DCO-signed (`git commit -s`);
+the library tier must remain Pekko-free; CHANGELOG updates land in the same PR as the change.
 
 - **[CONTRIBUTING.md](CONTRIBUTING.md)** — ground rules, PR checklist, code style
 - **[Developer Guide](https://sharma-bhaskar.github.io/aegis-kms/development/developer-guide/)** — full local-dev workflow
+- **[Good first issues](https://github.com/sharma-bhaskar/aegis-kms/issues?q=is%3Aopen+is%3Aissue+label%3A%22good+first+issue%22)** — labeled on the issue tracker
 
-Good first issues are labeled on the [issue tracker](https://github.com/sharma-bhaskar/aegis-kms/issues?q=is%3Aopen+is%3Aissue+label%3A%22good+first+issue%22).
+## 🔒 Security
 
-## Security
+Please do **not** open a public issue for a security report. See [SECURITY.md](SECURITY.md) for the
+disclosure process and the deploy-time configuration matrix.
 
-Please do **not** open a public issue for a security report. See [SECURITY.md](SECURITY.md)
-for the disclosure process and the deploy-time configuration matrix.
-
-## License
+## 📄 License
 
 Apache-2.0 — see [LICENSE](LICENSE).
