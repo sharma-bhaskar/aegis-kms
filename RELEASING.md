@@ -22,18 +22,24 @@ that would override the derived value and ship every tag as
 The Docker + GitHub Release path runs out of the box on a fresh repository.
 The Maven Central path requires four secrets that only you can set up.
 
-### 1. Sonatype OSSRH account on `s01.oss.sonatype.org`
+### 1. Sonatype Central Portal account + namespace
 
-If `dev.aegiskms` is already provisioned, skip to step 2. If not:
+> **Note:** the legacy OSSRH host (`s01.oss.sonatype.org`) was **sunset on
+> 2025-06-30**. Publishing now goes through the **Central Portal**
+> (`central.sonatype.com`). The build is configured for it: `sbt-ci-release`
+> 1.11+ on sbt 1.11+ targets the Central Portal automatically — there is **no**
+> `sonatypeCredentialHost` setting (adding one would break publishing).
 
-1. Sign up at https://central.sonatype.com (or https://issues.sonatype.org
-   for the legacy OSSRH JIRA flow if your namespace is on the older host).
-2. Open a "New Project" ticket claiming the `dev.aegiskms` group ID. The
-   reviewer will check that you control `aegiskms.dev` (DNS TXT verification)
-   or the GitHub `sharma-bhaskar` namespace.
-3. Once approved, generate a **user token** (NOT your account password) at
-   https://central.sonatype.com/account → Tokens. The token's username and
-   password are the values you'll set as GitHub Action secrets below.
+If the `dev.aegiskms` namespace is already verified, skip to step 2. If not:
+
+1. Sign up / log in at https://central.sonatype.com.
+2. Register the `dev.aegiskms` **namespace** under Account → Namespaces. The
+   portal verifies ownership via a DNS TXT record on `aegiskms.dev` (it shows
+   the exact token to add) or via the GitHub `sharma-bhaskar` namespace.
+3. Once verified, generate a **user token** (NOT your account password) at
+   https://central.sonatype.com/account → "Generate User Token". The token's
+   username and password are the values you'll set as GitHub Action secrets
+   below (`SONATYPE_USERNAME` / `SONATYPE_PASSWORD`).
 
 ### 2. GPG signing key
 
@@ -107,8 +113,9 @@ success:
 | Tag pushed but workflow didn't fire | Branch protection or workflow `on:` filter | Verify the tag matches `v*`; check the Actions tab for queued runs |
 | Docker tag missing the `v` prefix | Intentional — the workflow strips `v` so `v0.1.1 → ghcr.io/...:0.1.1` | This is the documented format |
 
-For deeper diagnostics, the workflow run page captures the full sbt output
-including the staged Sonatype URL.
+For deeper diagnostics, the workflow run page captures the full sbt output;
+the Central Portal's **Deployments** view (central.sonatype.com) shows the
+upload's validation status and any rejection reasons.
 
 ## Pre-release / SNAPSHOT versions
 
@@ -122,4 +129,6 @@ SNAPSHOT manually from your laptop:
 sbt ci-release
 ```
 
-The Sonatype snapshot repo accepts these without manual staging.
+SNAPSHOTs publish to the Central Portal snapshot repository
+(`https://central.sonatype.com/repository/maven-snapshots/`) and skip the
+release validation/publish step that tagged versions go through.

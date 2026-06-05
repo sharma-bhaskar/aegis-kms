@@ -25,6 +25,12 @@ All notable changes to Aegis will be documented here. This project follows
 - **Docker release publishing** now also pushes the floating `:MAJOR.MINOR` and `:latest` aliases
   for stable `vX.Y.Z` tags (pre-release tags get the exact tag only).
 - **MkDocs `strict: true`** to match the CI `--strict` build; fixed several intra-page anchor links.
+- **Maven Central publishing migrated to the Sonatype Central Portal.** Bumped sbt `1.10.2` →
+  `1.12.11` and `sbt-ci-release` `1.6.1` → `1.11.2`, and removed the
+  `sonatypeCredentialHost := "s01.oss.sonatype.org"` setting — the legacy OSSRH host was sunset
+  2025-06-30, and `sbt-ci-release` 1.11+ targets `central.sonatype.com` automatically. `RELEASING.md`
+  updated with the Central Portal namespace + user-token setup. (Publishing still requires the
+  `PGP_*` / `SONATYPE_*` secrets to be configured.)
 
 ## 0.2.0 — 2026-05-31
 
