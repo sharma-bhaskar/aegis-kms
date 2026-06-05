@@ -51,7 +51,8 @@ A full cheat-sheet is at the [bottom of this page](#reference-environment-variab
 ## UC-1 — The flagship: catch a rogue agent and auto-revoke it
 
 This is the demo Aegis exists for: an agent acting under a human's authority touches a **honey
-key**, and Aegis revokes both the key and the agent's token *before its next call lands*.
+key**, and Aegis revokes the key out from under it *before its next call lands* — the canary's
+first touch is the trip wire.
 
 > **Why `hmac` mode:** issued agent tokens are HS256 JWTs signed with `AEGIS_AUTH_HMAC_SECRET`,
 > and the server verifies them with the same secret. In `dev` mode the server reads
@@ -139,16 +140,6 @@ curl -s -X POST "$AEGIS/v1/keys/$KEY_ID/sign" -H "$H_AGENT" -H 'Content-Type: ap
 > auto-responder doesn't populate it (a follow-up to #24). So the agent's token stays valid for
 > other keys until it expires; the canary's payoff is the High-severity audit trail plus the dead key.
 
-# First touch trips the HoneyKey detector (Severity.High → Revoke).
-curl -s -X POST "$AEGIS/v1/keys/$KEY_ID/sign" -H "$H_AGENT" -H 'Content-Type: application/json' \
-  -d '{"messageBase64":"aGVsbG8=","algorithm":"RsaPssSha256"}' | jq
-
-# The NEXT call from the same agent is rejected — its JTI is now on the revocation list.
-curl -s -o /dev/null -w '%{http_code}\n' -X POST "$AEGIS/v1/keys/$KEY_ID/sign" \
-  -H "$H_AGENT" -H 'Content-Type: application/json' \
-  -d '{"messageBase64":"aGVsbG8=","algorithm":"RsaPssSha256"}'   # → 401
-```
-
 ### Step 6 — Read the story out of the audit log
 
 ```bash
@@ -158,9 +149,6 @@ curl -s "$AEGIS/v1/audit?key=$KEY_ID" -H "$H_ALICE" | jq '.events[] | {occurredA
 You'll see the agent's sign attempt, the `HoneyKey` detection at `Severity.High`, and the system's
 `Revoke` action (audited under `aegis-system`) — all attributed to `invoice-bot` *issued by*
 `alice@org`. That parent linkage is the thing a role-centric KMS can't give you.
-You'll see the agent's sign attempt, the `HoneyKey` detection at `Severity.High`, and the
-`Revoke` outcome — all attributed to `invoice-bot` *issued by* `alice@org`. That parent linkage is
-the thing a role-centric KMS can't give you.
 
 > **Variations:** swap the honey key for a **rate-spike** (loop the sign call ~50× to exceed the
 > baseline) or a **scope violation** (issue the agent with `scopes:["Get"]`, then try to `Sign`).
@@ -194,11 +182,6 @@ libraryDependencies += "dev.aegiskms" %% "aegis-core" % "0.2.0"
 
 Every operation returns `IO[Either[KmsError, _]]` — the algebra makes failure explicit rather
 than throwing, so you handle `Left`/`Right` at the call site:
-> [Maven Central status](#maven-central-the-release-checklist)). Until they are, build from source
-> with `sbt publishLocal` and depend on the resulting local artifact.
-
-The shape (illustrative — see the in-memory reference `KeyService` in `aegis-core` for the exact
-constructor in your version):
 
 ```scala
 import cats.effect.*
@@ -219,14 +202,6 @@ object Demo extends IOApp.Simple:
           yield ()
       }
     }
-  val run: IO[Unit] =
-    for
-      svc <- KeyService.inMemory[IO]                      // pure, no I/O backend
-      key <- svc.create(KeySpec("demo", Algorithm.AES, 256, ObjectType.SymmetricKey), principal)
-      _   <- svc.activate(key.id, principal)
-      sig <- svc.sign(key.id, "hello".getBytes, SignatureAlgorithm.RsaPssSha256, principal)
-      _   <- IO.println(sig)
-    yield ()
 ```
 
 Wrap it with the audit + authorization decorators from `aegis-audit` / `aegis-iam` to get the
@@ -247,7 +222,7 @@ export AEGIS_AUTH_HMAC_SECRET="$(openssl rand -base64 48)"
 AEGIS_AUTH_KIND=hmac $COMPOSE up -d
 ```
 Mint caller tokens with `JwtIssuer.hmac` (see [UC-1, Step 2](#step-2-mint-a-bootstrap-human-token)).
-Mint caller tokens with `JwtIssuer.hmac` (see [UC-1, Step 2](#step-2--mint-a-bootstrap-human-token)).
+Mint caller tokens with `JwtIssuer.hmac` (see [UC-1, Step 2](#step-2-mint-a-bootstrap-human-token)).
 Use only inside a single trust boundary — the symmetric secret can both sign and verify.
 
 ### UC-4b — OIDC / JWKS (Keycloak, Auth0, Okta, Google, …)
@@ -294,7 +269,7 @@ AEGIS_HONEY_KEYS="<key-id-1>,<key-id-2>" AEGIS_AUTH_KIND=hmac $COMPOSE up -d
 ```
 Boot fails fast on a malformed KeyId (a typo'd canary that never catches anything is the opposite
 of what you want). See the full walkthrough in [UC-1](#uc-1-the-flagship-catch-a-rogue-agent-and-auto-revoke-it).
-of what you want). See the full walkthrough in [UC-1](#uc-1--the-flagship-catch-a-rogue-agent-and-auto-revoke-it).
+of what you want). See the full walkthrough in [UC-1](#uc-1-the-flagship-catch-a-rogue-agent-and-auto-revoke-it).
 
 ---
 
