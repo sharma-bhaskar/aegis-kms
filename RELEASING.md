@@ -92,9 +92,10 @@ success:
 
 - `aegis-core_3` etc. appear at https://central.sonatype.com/artifact/dev.aegiskms/aegis-core_3
   (allow ~10 min for staging → release sync).
-- The Docker image is at `ghcr.io/sharma-bhaskar/aegis-server:0.1.1`.
-- A `0.1.1` release page on GitHub carries the CLI tarball and
-  auto-generated changelog notes.
+- The Docker image is at `ghcr.io/sharma-bhaskar/aegis-server:<version>` (e.g. `:0.2.0`). For a
+  **stable** `vX.Y.Z` tag the workflow also publishes the floating `:X.Y` and `:latest` aliases;
+  pre-release tags (e.g. `v0.3.0-rc.1`) get the exact tag only — no `:latest`.
+- A release page on GitHub carries the CLI tarball and auto-generated changelog notes.
 
 ## Troubleshooting
 

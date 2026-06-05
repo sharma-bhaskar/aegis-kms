@@ -8,7 +8,6 @@ import dev.aegiskms.core.{Operation, Principal, TenantId}
 import doobie.*
 import doobie.implicits.*
 import doobie.postgres.circe.jsonb.implicits.*
-import doobie.postgres.implicits.*
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatest.matchers.should.Matchers
 import org.testcontainers.utility.DockerImageName
