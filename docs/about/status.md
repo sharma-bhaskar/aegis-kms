@@ -65,7 +65,7 @@ not shipped.
 | Capability | Status | Detail |
 |---|---|---|
 | `BaselineDetector` — 6 detectors | :material-check: Shipped | Scope, rate-spike, op-histogram, time-of-day, source-IP, + honey-key trip wire (v0.2.0, #26) |
-| Honey keys (canary) registry → auto-revoke on agent touch | :material-check: Shipped | v0.2.0 (#26) — `HoneyKeyRegistry` SPI; High → Revoke kills key + agent JWT |
+| Honey keys (canary) registry → auto-revoke on agent touch | :material-check: Shipped | v0.2.0 (#26) — `HoneyKeyRegistry` SPI; first agent touch → High → auto-revoke the **key** (JWT/JTI auto-revoke deferred to #24) |
 | `AgentRecommendation` events | :material-check: Shipped | Emitted on detection |
 | Risk scorer (`RiskScorer` SPI + `BaselineRiskScorer`) | :material-check: Shipped | 5 baseline factors + 4 contextual factors → `RiskScore(value, factors)` |
 | Decision adapter (`Allow` / `StepUp` / `Deny`) | :material-check: Shipped | `ThresholdDecisionEngine`, denyAt=0.85, stepUpAt=0.60, destructive-op offset 0.15 |

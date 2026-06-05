@@ -94,7 +94,7 @@ describe a key the journal doesn't have.
 |---|---|---|
 | **Who made the call?** | `role billing-signer` | `agent claude-7f3` ← issued by `alice@org` |
 | **Is this burst anomalous?** | — | 6 behavioural detectors + numeric risk score |
-| **Stop it mid-incident** | manual key disable | auto-revoke the key **and** the agent's JWT before the next op |
+| **Stop it mid-incident** | manual key disable | auto-revoke the key out from under the agent on a High-severity detection |
 | **Canary / honey keys** | — | trip wire fires on the first agent touch |
 
 Aegis doesn't replace your cryptographic root of trust — it adds the agent-aware control plane on

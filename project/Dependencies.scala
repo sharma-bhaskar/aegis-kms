@@ -8,7 +8,7 @@ object Dependencies {
     val tapir          = "1.11.10"
     val circe          = "0.14.9"
     val cats           = "3.5.4"
-    val doobie         = "1.0.0-RC5"
+    val doobie         = "1.0.0-RC12"
     val aws            = "2.28.10"
     val jjwt           = "0.12.6"
     val logback        = "1.5.8"

@@ -106,10 +106,16 @@ final class AutoResponder private (
 
   private def extractKeyId(rec: AgentRecommendation): Either[String, KeyId] =
     rec.details.get("resource") match
+      // Explicit `key:<id>` prefix (e.g. hand-built recommendations).
       case Some(r) if r.startsWith("key:") =>
         KeyId.fromString(r.stripPrefix("key:")).left.map(msg => s"invalid keyId in details: $msg")
-      case Some(other) =>
-        Left(s"recommendation resource is not a key reference: '$other'")
+      // Create / Locate resources are name- or pattern-shaped — there's no single key to revoke.
+      case Some(r) if r.startsWith("name:") || r.startsWith("pattern:") =>
+        Left(s"recommendation resource is not a key reference: '$r'")
+      // Op-on-key audit records carry the bare KeyId as the resource — the common case for the
+      // detector pipeline (Sign / Get / Encrypt / … against an existing key).
+      case Some(r) =>
+        KeyId.fromString(r).left.map(_ => s"recommendation resource is not a key reference: '$r'")
       case None =>
         Left("recommendation has no 'resource' detail to target")
 
@@ -173,16 +179,27 @@ object AutoResponder:
 
   /** Sensible out-of-the-box defaults that ship the wedge demo:
     *
-    *   - Any `High` severity from any of the five detectors → `Revoke`.
+    *   - Any `High` severity from any detector → `Revoke`.
     *   - Any `Medium` severity → `Alert` (informational; lets operators see the trend without acting).
     *   - `Low` severity is intentionally absent — too much noise; operators opt in by adding their own rule.
+    *
+    * The list MUST include every detector name `BaselineDetector` can emit — including the `HoneyKey` trip
+    * wire (#26), whose whole point is to fire High → Revoke on the first agent touch. Omitting it silently
+    * no-ops the canary.
     *
     * Operator-tuned rules will land via HOCON in a later PR; for v0.2.0 these defaults are baked into
     * `Server.boot`.
     */
   val DefaultRules: List[AutoResponseRule] =
     val detectors =
-      List("ScopeBaseline", "RateSpike", "OpHistogramBaseline", "TimeOfDayBaseline", "SourceIpBaseline")
+      List(
+        "ScopeBaseline",
+        "RateSpike",
+        "OpHistogramBaseline",
+        "TimeOfDayBaseline",
+        "SourceIpBaseline",
+        "HoneyKey"
+      )
     detectors.flatMap(d =>
       List(
         AutoResponseRule(d, Severity.High, AutoResponseAction.Revoke),

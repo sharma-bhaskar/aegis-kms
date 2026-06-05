@@ -58,7 +58,7 @@ GCP / Azure / Vault adapters in v0.3.0) and adds the four things role-centric KM
 
     Risk scorer (`risk.score` + `risk.factors` on every audit row), decision adapter
     (`Allow` / `StepUp` / `Deny`), and auto-responder (default High → `Revoke`) — all wired
-    end-to-end on `main`. Try it in the [wedge demo](getting-started/quickstart.md#step-15--trigger-a-rate-spike-anomaly).
+    end-to-end on `main`. Try it in the [wedge demo](getting-started/quickstart.md#step-15-trigger-a-rate-spike-anomaly).
 
 </div>
 

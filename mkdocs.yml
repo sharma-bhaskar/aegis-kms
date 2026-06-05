@@ -154,4 +154,4 @@ nav:
 # Set strict: true to fail builds on broken links / missing pages.
 # We start permissive while the docs are being scaffolded.
 
-strict: false
+strict: true

@@ -6,6 +6,26 @@ All notable changes to Aegis will be documented here. This project follows
 
 ## Unreleased
 
+### Fixed
+
+- **Honey-key auto-revoke never fired (regression in #26).** Two gaps meant a honey-key touch
+  produced the `HoneyKey`/High recommendation but no `Revoke` action: (1) `AutoResponder.DefaultRules`
+  was built from only the five baseline detector names — `"HoneyKey"` was missing, so the rule
+  lookup returned `None`; (2) `AutoResponder.extractKeyId` required a `key:<id>` resource prefix,
+  but op-on-key audit records carry the bare `KeyId`, so even with a matching rule the revoke failed
+  with "resource is not a key reference." Added `"HoneyKey"` to `DefaultRules` and taught
+  `extractKeyId` to accept a bare `KeyId` (still rejecting `name:` / `pattern:` create/locate
+  resources). The canary now actually revokes the key on first agent touch. Caught by a new
+  end-to-end test (`HoneyKeyAutoRevokeE2ESpec`) that assembles the real detector → auto-responder →
+  actor stack rather than hand-built recommendation fixtures.
+
+### Changed
+
+- **Doobie `1.0.0-RC5` → `1.0.0-RC12`** (latest RC; `1.0.0` final is not yet released).
+- **Docker release publishing** now also pushes the floating `:MAJOR.MINOR` and `:latest` aliases
+  for stable `vX.Y.Z` tags (pre-release tags get the exact tag only).
+- **MkDocs `strict: true`** to match the CI `--strict` build; fixed several intra-page anchor links.
+
 ## 0.2.0 — 2026-05-31
 
 ### Added

@@ -76,7 +76,7 @@ In `hmac` mode even creating a key needs a `Bearer` JWT. Aegis exposes the issue
 sbt 'iam/console'
 ```
 ```scala
-// In the sbt console — adjust the JwtClaims constructor to your version if needed.
+// In the sbt console (verified against the v0.2.0 JwtClaims / JwtIssuer API).
 import dev.aegiskms.iam.*
 import java.time.*, java.util.UUID
 val secret = sys.env("AEGIS_AUTH_HMAC_SECRET")
@@ -122,15 +122,22 @@ export H_AGENT="Authorization: Bearer $AGENT_JWT"
 ### Step 5 — The agent touches the honey key → auto-revoke
 
 ```bash
-# First touch trips the HoneyKey detector (Severity.High → Revoke).
+# First touch trips the HoneyKey detector at Severity.High. AutoResponder.DefaultRules
+# translate High → Revoke, so Aegis revokes the key out from under the agent.
 curl -s -X POST "$AEGIS/v1/keys/$KEY_ID/sign" -H "$H_AGENT" -H 'Content-Type: application/json' \
   -d '{"messageBase64":"aGVsbG8=","algorithm":"RsaPssSha256"}' | jq
 
-# The NEXT call from the same agent is rejected — its JTI is now on the revocation list.
-curl -s -o /dev/null -w '%{http_code}\n' -X POST "$AEGIS/v1/keys/$KEY_ID/sign" \
-  -H "$H_AGENT" -H 'Content-Type: application/json' \
-  -d '{"messageBase64":"aGVsbG8=","algorithm":"RsaPssSha256"}'   # → 401
+# The key is now Deactivated (revoke → Deactivated) — the agent's next sign against it fails
+# on the key's state (sign requires Active).
+curl -s -X POST "$AEGIS/v1/keys/$KEY_ID/sign" -H "$H_AGENT" -H 'Content-Type: application/json' \
+  -d '{"messageBase64":"aGVsbG8=","algorithm":"RsaPssSha256"}' | jq   # → IllegalOperation (key is Deactivated)
 ```
+
+> **What v0.2.0 actually does:** the auto-responder revokes the **key**
+> (`AutoResponder` → `keyService.revoke`). Blacklisting the agent's **JWT** on the same trigger is
+> *not yet wired* — the `RevocationList` exists and backs manual revocation + the verifier, but the
+> auto-responder doesn't populate it (a follow-up to #24). So the agent's token stays valid for
+> other keys until it expires; the canary's payoff is the High-severity audit trail plus the dead key.
 
 ### Step 6 — Read the story out of the audit log
 
@@ -138,9 +145,9 @@ curl -s -o /dev/null -w '%{http_code}\n' -X POST "$AEGIS/v1/keys/$KEY_ID/sign" \
 curl -s "$AEGIS/v1/audit?key=$KEY_ID" -H "$H_ALICE" | jq '.events[] | {occurredAt, actor, operation, "risk": .context."risk.score", outcome: .context."outcome.decision"}'
 ```
 
-You'll see the agent's sign attempt, the `HoneyKey` detection at `Severity.High`, and the
-`Revoke` outcome — all attributed to `invoice-bot` *issued by* `alice@org`. That parent linkage is
-the thing a role-centric KMS can't give you.
+You'll see the agent's sign attempt, the `HoneyKey` detection at `Severity.High`, and the system's
+`Revoke` action (audited under `aegis-system`) — all attributed to `invoice-bot` *issued by*
+`alice@org`. That parent linkage is the thing a role-centric KMS can't give you.
 
 > **Variations:** swap the honey key for a **rate-spike** (loop the sign call ~50× to exceed the
 > baseline) or a **scope violation** (issue the agent with `scopes:["Get"]`, then try to `Sign`).
@@ -169,25 +176,31 @@ libraryDependencies += "dev.aegiskms" %% "aegis-core" % "0.2.0"
 ```
 
 > ⚠️ **Maven Central note:** the library jars are **not published yet** (see
-> [Maven Central status](#maven-central-the-release-checklist)). Until they are, build from source
+> [Releasing](development/releasing.md)). Until they are, build from source
 > with `sbt publishLocal` and depend on the resulting local artifact.
 
-The shape (illustrative — see the in-memory reference `KeyService` in `aegis-core` for the exact
-constructor in your version):
+Every operation returns `IO[Either[KmsError, _]]` — the algebra makes failure explicit rather
+than throwing, so you handle `Left`/`Right` at the call site:
 
 ```scala
 import cats.effect.*
 import dev.aegiskms.core.*
 
 object Demo extends IOApp.Simple:
+  private val alice = Principal.Human("alice@org", Set("kms-admins"))
+
   val run: IO[Unit] =
-    for
-      svc <- KeyService.inMemory[IO]                      // pure, no I/O backend
-      key <- svc.create(KeySpec("demo", Algorithm.AES, 256, ObjectType.SymmetricKey), principal)
-      _   <- svc.activate(key.id, principal)
-      sig <- svc.sign(key.id, "hello".getBytes, SignatureAlgorithm.RsaPssSha256, principal)
-      _   <- IO.println(sig)
-    yield ()
+    KeyService.inMemory.flatMap { svc =>                     // IO[KeyService[IO]] — pure in-memory backend
+      svc.create(KeySpec.rsa2048("demo"), alice).flatMap {
+        case Left(err)  => IO.println(s"create failed: $err")
+        case Right(key) =>
+          for
+            _   <- svc.activate(key.id, alice)
+            sig <- svc.sign(key.id, "hello".getBytes, SigAlgorithm.RsaPssSha256, alice)
+            _   <- IO.println(sig)                           // Either[KmsError, Signature]
+          yield ()
+      }
+    }
 ```
 
 Wrap it with the audit + authorization decorators from `aegis-audit` / `aegis-iam` to get the
@@ -207,7 +220,7 @@ or `oidc`.
 export AEGIS_AUTH_HMAC_SECRET="$(openssl rand -base64 48)"
 AEGIS_AUTH_KIND=hmac $COMPOSE up -d
 ```
-Mint caller tokens with `JwtIssuer.hmac` (see [UC-1, Step 2](#step-2--mint-a-bootstrap-human-token)).
+Mint caller tokens with `JwtIssuer.hmac` (see [UC-1, Step 2](#step-2-mint-a-bootstrap-human-token)).
 Use only inside a single trust boundary — the symmetric secret can both sign and verify.
 
 ### UC-4b — OIDC / JWKS (Keycloak, Auth0, Okta, Google, …)
@@ -253,7 +266,7 @@ are *not* auto-revoked (operators may validate the canary is alive) but still pr
 AEGIS_HONEY_KEYS="<key-id-1>,<key-id-2>" AEGIS_AUTH_KIND=hmac $COMPOSE up -d
 ```
 Boot fails fast on a malformed KeyId (a typo'd canary that never catches anything is the opposite
-of what you want). See the full walkthrough in [UC-1](#uc-1--the-flagship-catch-a-rogue-agent-and-auto-revoke-it).
+of what you want). See the full walkthrough in [UC-1](#uc-1-the-flagship-catch-a-rogue-agent-and-auto-revoke-it).
 
 ---
 
@@ -383,7 +396,7 @@ aegis audit tail --actor invoice-bot --op Sign --watch        # live poll every 
 ```
 > `aegis login` stores the server URL + dev principal (it uses the `X-Aegis-User` header). For
 > `hmac`/`oidc` servers, the CLI needs a Bearer token; minting one is shown in
-> [UC-1 Step 2](#step-2--mint-a-bootstrap-human-token). `aegis advisor scan` is a stub until the
+> [UC-1 Step 2](#step-2-mint-a-bootstrap-human-token). `aegis advisor scan` is a stub until the
 > v0.2.1 LLM advisor.
 
 ---
