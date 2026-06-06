@@ -2,6 +2,7 @@ package dev.aegiskms.cli
 
 import dev.aegiskms.cli.AegisHttpClient.{ClientError, renderError}
 import dev.aegiskms.cli.WireFormats.{
+  AdvisorExplainResponseDto,
   AdvisorScanResponseDto,
   AuditRecordDto,
   CompromiseRequest,
@@ -334,6 +335,48 @@ object Commands:
     )
 
     List(header, unused, broad, anomalies, riskiest).mkString("\n\n")
+
+  // ── AI advisor explain (#29) ──────────────────────────────────────────────
+
+  /** `aegis advisor explain <agent-id> [--lookback-days N] [--max-events N]`
+    *
+    * Read-only timeline of one agent's session. Calls `GET /v1/advisor/explain/<agentId>`; prints the
+    * natural-language narrative (when the server has an LLM provider configured) followed by the
+    * deterministic event timeline.
+    */
+  def advisorExplain(
+      client: AegisHttpClient,
+      agentId: String,
+      lookbackDays: Option[Int],
+      maxEvents: Option[Int]
+  ): CommandResult =
+    client.advisorExplain(agentId, lookbackDays, maxEvents) match
+      case Right(report) => CommandResult.out(formatAdvisorExplain(report))
+      case Left(err)     => CommandResult.err(renderError(err), exitCodeFor(err))
+
+  private def formatAdvisorExplain(r: AdvisorExplainResponseDto): String =
+    val header =
+      s"""advisor explain — ${r.agentId}
+         |window:   ${r.windowStart} → ${r.windowEnd}
+         |events:   ${r.summary.totalEvents} (showing ${r.events.size}), anomalies: ${r.summary.anomalies}
+         |ops:      ${r.summary.distinctOps.mkString(", ")}""".stripMargin +
+        (if r.truncated then "\n          ⚠ timeline truncated; showing the most recent events" else "")
+
+    val narrativeBlock = r.narrative match
+      case Some(text) => s"\n\nNarrative:\n$text"
+      case None => "\n\n(no narrative — server has no LLM provider configured; showing the timeline only)"
+
+    val timeline =
+      if r.events.isEmpty then "\n\nTimeline:\n  (no recorded activity for this agent in the window)"
+      else
+        val lines = r.events.map { e =>
+          val risk    = e.riskScore.map(s => f" risk=$s%.2f").getOrElse("")
+          val flagged = if e.anomaly then " [ANOMALY]" else ""
+          f"  ${e.at}  ${e.operation}%-10s ${e.resource} → ${e.outcome}$risk$flagged"
+        }
+        "\n\nTimeline:\n" + lines.mkString("\n")
+
+    header + narrativeBlock + timeline
 
   /** Render a single audit record for terminal output. Multi-line; the leading field labels are
     * column-aligned so a glance picks out the actor / operation / outcome quickly.

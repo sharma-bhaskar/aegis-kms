@@ -325,3 +325,65 @@ object JsonCodecs:
 
     given Encoder[AdvisorScanResponseDto] = deriveEncoder
     given Decoder[AdvisorScanResponseDto] = deriveDecoder
+
+  // ── Advisor-explain DTOs (#29) ────────────────────────────────────────────
+
+  /** One audit event in an agent's timeline (wire mirror of `AdvisorExplain.Event`). */
+  final case class ExplainEventDto(
+      at: Instant,
+      operation: String,
+      resource: String,
+      outcome: String,
+      riskScore: Option[Double],
+      anomaly: Boolean
+  )
+  object ExplainEventDto:
+    given Encoder[ExplainEventDto] = deriveEncoder
+    given Decoder[ExplainEventDto] = deriveDecoder
+
+  /** Deterministic roll-up of an agent's timeline (wire mirror of `AdvisorExplain.Summary`). */
+  final case class ExplainSummaryDto(
+      totalEvents: Int,
+      distinctOps: List[String],
+      anomalies: Int,
+      firstSeen: Option[Instant],
+      lastSeen: Option[Instant]
+  )
+  object ExplainSummaryDto:
+    given Encoder[ExplainSummaryDto] = deriveEncoder
+    given Decoder[ExplainSummaryDto] = deriveDecoder
+
+  /** Wire response for `GET /v1/advisor/explain/{agentId}`. `narrative` is present only when an LLM provider
+    * is configured and the call succeeded; otherwise clients render `events` + `summary`.
+    */
+  final case class AdvisorExplainResponseDto(
+      agentId: String,
+      windowStart: Instant,
+      windowEnd: Instant,
+      summary: ExplainSummaryDto,
+      events: List[ExplainEventDto],
+      narrative: Option[String],
+      truncated: Boolean
+  )
+  object AdvisorExplainResponseDto:
+    def fromCore(r: dev.aegiskms.agent.AdvisorExplain.Report): AdvisorExplainResponseDto =
+      AdvisorExplainResponseDto(
+        agentId = r.agentId,
+        windowStart = r.windowStart,
+        windowEnd = r.windowEnd,
+        summary = ExplainSummaryDto(
+          totalEvents = r.summary.totalEvents,
+          distinctOps = r.summary.distinctOps,
+          anomalies = r.summary.anomalies,
+          firstSeen = r.summary.firstSeen,
+          lastSeen = r.summary.lastSeen
+        ),
+        events = r.events.map(e =>
+          ExplainEventDto(e.at, e.operation, e.resource, e.outcome, e.riskScore, e.anomaly)
+        ),
+        narrative = r.narrative,
+        truncated = r.truncated
+      )
+
+    given Encoder[AdvisorExplainResponseDto] = deriveEncoder
+    given Decoder[AdvisorExplainResponseDto] = deriveDecoder

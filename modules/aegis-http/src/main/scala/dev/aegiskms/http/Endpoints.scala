@@ -398,6 +398,31 @@ object Endpoints:
           "a human principal; service and agent principals are refused with 403."
       )
 
+  /** `GET /v1/advisor/explain/{agentId}` — read-only, human-readable timeline of one agent's session.
+    * Deterministic timeline always; a natural-language `narrative` is added when an LLM provider is
+    * configured (and the call succeeds). Human-principals only; `501` when no advisor/audit sink is wired.
+    *
+    * Query parameters (optional):
+    *   - `lookbackDays` — how far back to read the agent's activity (default 90).
+    *   - `maxEvents` — cap on timeline events kept, bounding the response + LLM prompt (default 200).
+    */
+  val advisorExplain: PublicEndpoint[
+    (Option[String], Option[String], Option[String], String, Option[Int], Option[Int]),
+    (StatusCode, KmsErrorDto),
+    AdvisorExplainResponseDto,
+    Any
+  ] =
+    advisorBase.get
+      .in("explain" / path[String]("agentId"))
+      .in(query[Option[Int]]("lookbackDays").description("Audit look-back window in days; defaults to 90"))
+      .in(query[Option[Int]]("maxEvents").description("Max timeline events to return; defaults to 200"))
+      .out(jsonBody[AdvisorExplainResponseDto])
+      .summary("Explain an agent's session as a human-readable timeline")
+      .description(
+        "Assembles the named agent's audit timeline and, when an LLM provider is configured, narrates it in " +
+          "plain language. Read-only — never mutates. Caller must be a human principal (service/agent → 403)."
+      )
+
   /** All endpoint definitions. Used by the OpenAPI generator and tests. */
   val all: List[AnyEndpoint] =
     List(
@@ -415,5 +440,6 @@ object Endpoints:
       rotateKey,
       issueAgent,
       queryAudit,
-      advisorScan
+      advisorScan,
+      advisorExplain
     )

@@ -142,6 +142,60 @@ final class CommandsSpec extends AnyFunSuite with Matchers:
     r.stderr should include("FeatureNotSupported")
   }
 
+  test("advisor explain prints the narrative (when present) and the event timeline") {
+    val report = AdvisorExplainResponseDto(
+      agentId = "claude-session-7a3",
+      windowStart = Instant.parse("2026-03-03T00:00:00Z"),
+      windowEnd = Instant.parse("2026-06-01T00:00:00Z"),
+      summary =
+        ExplainSummaryDto(2, List("Get", "Sign"), 1, Some(Instant.parse("2026-05-31T00:00:00Z")), None),
+      events = List(
+        ExplainEventDto(
+          Instant.parse("2026-05-31T00:00:00Z"),
+          "Get",
+          "key:invoice",
+          "Success",
+          Some(0.2),
+          false
+        ),
+        ExplainEventDto(
+          Instant.parse("2026-05-31T00:05:00Z"),
+          "Sign",
+          "key:treasury",
+          "Failed code=PermissionDenied",
+          None,
+          true
+        )
+      ),
+      narrative = Some("Claude read an invoice key, then was denied a treasury signature."),
+      truncated = false
+    )
+    val r =
+      Commands.advisorExplain(clientReturning(200, report.asJson.noSpaces), "claude-session-7a3", None, None)
+    r.exitCode shouldBe 0
+    r.stdout should include("advisor explain — claude-session-7a3")
+    r.stdout should include("Narrative:")
+    r.stdout should include("denied a treasury signature")
+    r.stdout should include("key:invoice")
+    r.stdout should include("[ANOMALY]")
+  }
+
+  test("advisor explain notes the absence of a narrative when the server has no LLM provider") {
+    val report = AdvisorExplainResponseDto(
+      agentId = "agent-x",
+      windowStart = Instant.parse("2026-03-03T00:00:00Z"),
+      windowEnd = Instant.parse("2026-06-01T00:00:00Z"),
+      summary = ExplainSummaryDto(0, Nil, 0, None, None),
+      events = Nil,
+      narrative = None,
+      truncated = false
+    )
+    val r = Commands.advisorExplain(clientReturning(200, report.asJson.noSpaces), "agent-x", None, None)
+    r.exitCode shouldBe 0
+    r.stdout should include("no narrative")
+    r.stdout should include("no recorded activity")
+  }
+
   test("keys sign prints the base64 signature and algorithm on success") {
     val responseBody = SignResponse("c2lnLWJ5dGVz", "RsaPssSha256").asJson.noSpaces
     val client       = clientReturning(200, responseBody)

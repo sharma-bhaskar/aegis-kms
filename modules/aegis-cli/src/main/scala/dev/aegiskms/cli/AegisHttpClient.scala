@@ -177,6 +177,31 @@ final class AegisHttpClient(http: HttpPort, baseUrl: String, principal: Option[S
       case 200    => decodeBody[AdvisorScanResponseDto](res.body)
       case status => Left(toError(status, res.body))
 
+  /** GET /v1/advisor/explain/{agentId} — read-only agent timeline, narrated when an LLM provider is
+    * configured server-side (#29). Optional knobs are sent only when overridden.
+    */
+  def advisorExplain(
+      agentId: String,
+      lookbackDays: Option[Int] = None,
+      maxEvents: Option[Int] = None
+  ): Either[ClientError, AdvisorExplainResponseDto] =
+    val params = List(
+      lookbackDays.map(v => "lookbackDays" -> v.toString),
+      maxEvents.map(v => "maxEvents" -> v.toString)
+    ).flatten
+    val qs =
+      if params.isEmpty then ""
+      else
+        params.map { case (k, v) =>
+          s"$k=${java.net.URLEncoder.encode(v, java.nio.charset.StandardCharsets.UTF_8)}"
+        }.mkString("?", "&", "")
+    val encodedId = java.net.URLEncoder.encode(agentId, java.nio.charset.StandardCharsets.UTF_8)
+    val res =
+      http.execute(HttpPort.Request("GET", url(s"/v1/advisor/explain/$encodedId$qs"), baseHeaders, None))
+    res.status match
+      case 200    => decodeBody[AdvisorExplainResponseDto](res.body)
+      case status => Left(toError(status, res.body))
+
   // ── Helpers ────────────────────────────────────────────────────────────────
 
   private def url(path: String): String =
