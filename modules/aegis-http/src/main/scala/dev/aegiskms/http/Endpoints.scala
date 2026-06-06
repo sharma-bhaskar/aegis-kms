@@ -351,6 +351,53 @@ object Endpoints:
           "human principal — service and agent principals are refused with 403."
       )
 
+  // ── Advisor scan (#28) ────────────────────────────────────────────────────
+
+  /** Common base for the read-only advisor surface under `/v1/advisor`, same auth + error contract as the
+    * rest of the REST plane, distinct OpenAPI tag.
+    */
+  private val advisorBase =
+    endpoint
+      .in("v1" / "advisor")
+      .in(authHeader)
+      .in(devUserHeader)
+      .in(sourceIpInput)
+      .errorOut(statusCode and jsonBody[KmsErrorDto].description("Failure detail"))
+      .tag("advisor")
+
+  /** `GET /v1/advisor/scan` — read-only triage over the recent audit window. Deterministic: no LLM, no
+    * mutation. Only `Principal.Human` callers are permitted (Service + Agent return 403), and the endpoint
+    * returns 501 when the server has no queryable audit sink (audit kind ≠ postgres), mirroring `GET
+    * /v1/audit`.
+    *
+    * Query parameters (all optional, sensible defaults):
+    *   - `lookbackDays` — how far back to read the audit log (default 90).
+    *   - `unusedDays` — a key idle for at least this many days is flagged unused (default 30).
+    *   - `broadScope` — distinct-operation count at/above which an agent is flagged broad-scope (default 5).
+    *   - `top` — number of agents in the riskiest ranking (default 5).
+    */
+  val advisorScan: PublicEndpoint[
+    (Option[String], Option[String], Option[String], Option[Int], Option[Int], Option[Int], Option[Int]),
+    (StatusCode, KmsErrorDto),
+    AdvisorScanResponseDto,
+    Any
+  ] =
+    advisorBase.get
+      .in("scan")
+      .in(query[Option[Int]]("lookbackDays").description("Audit look-back window in days; defaults to 90"))
+      .in(query[Option[Int]]("unusedDays").description("Idle-days threshold for unused keys; defaults to 30"))
+      .in(query[Option[Int]]("broadScope").description(
+        "Distinct-op count flagging a broad-scope agent; default 5"
+      ))
+      .in(query[Option[Int]]("top").description("Number of riskiest agents to return; defaults to 5"))
+      .out(jsonBody[AdvisorScanResponseDto])
+      .summary("Read-only advisor scan of recent audit activity")
+      .description(
+        "Aggregates the audit log into a triage summary: unused keys, broad-scope agents, active " +
+          "anomalies, and the riskiest agents. Deterministic and read-only — never mutates. Caller must be " +
+          "a human principal; service and agent principals are refused with 403."
+      )
+
   /** All endpoint definitions. Used by the OpenAPI generator and tests. */
   val all: List[AnyEndpoint] =
     List(
@@ -367,5 +414,6 @@ object Endpoints:
       compromiseKey,
       rotateKey,
       issueAgent,
-      queryAudit
+      queryAudit,
+      advisorScan
     )

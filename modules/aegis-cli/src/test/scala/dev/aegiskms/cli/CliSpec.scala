@@ -160,11 +160,38 @@ final class CliSpec extends AnyFunSuite with Matchers:
     r.stderr should include("aegis keys create")
   }
 
-  test("'advisor scan' is still a placeholder and surfaces a clear non-zero exit") {
-    // The only remaining stub in the CLI surface — `agent issue` and `audit tail` are wired up
-    // in #79; `advisor scan` waits for the AI advisor (PR W4).
-    val factory = fakeClientFactory(200, sampleKey.asJson.noSpaces)
-    Cli.run(List("advisor", "scan"), cfg, factory).exitCode should not be 0
+  test("'advisor scan' with knobs GETs /v1/advisor/scan carrying the parsed query params") {
+    val report = AdvisorScanResponseDto(
+      windowStart = Instant.parse("2026-03-03T00:00:00Z"),
+      windowEnd = Instant.parse("2026-06-01T00:00:00Z"),
+      scannedRecords = 0,
+      truncated = false,
+      unusedKeys = Nil,
+      broadScopeAgents = Nil,
+      activeAnomalies = Nil,
+      riskiestAgents = Nil
+    )
+    var captured: Option[HttpPort.Request] = None
+    val r = Cli.run(
+      List("advisor", "scan", "--unused-days", "60", "--top", "3"),
+      cfg,
+      captureFactory(req => captured = Some(req), report.asJson.noSpaces)
+    )
+    r.exitCode shouldBe 0
+    captured.get.method shouldBe "GET"
+    captured.get.url should include("/v1/advisor/scan")
+    captured.get.url should include("unusedDays=60")
+    captured.get.url should include("top=3")
+  }
+
+  test("'advisor scan' with a non-numeric knob reports a usage error and exits 1") {
+    val r = Cli.run(
+      List("advisor", "scan", "--top", "lots"),
+      cfg,
+      fakeClientFactory(200, sampleKey.asJson.noSpaces)
+    )
+    r.exitCode shouldBe 1
+    r.stderr should include("--top must be a positive integer")
   }
 
   // ── #79: agent issue ──────────────────────────────────────────────────────

@@ -269,3 +269,59 @@ object JsonCodecs:
   object AuditQueryResponseDto:
     given Encoder[AuditQueryResponseDto] = deriveEncoder
     given Decoder[AuditQueryResponseDto] = deriveDecoder
+
+  // ── Advisor-scan DTOs (#28) ───────────────────────────────────────────────
+
+  /** Wire mirror of `AdvisorScan.UnusedKey`. */
+  final case class UnusedKeyDto(keyId: String, lastSeen: Instant, idleDays: Long)
+  object UnusedKeyDto:
+    given Encoder[UnusedKeyDto] = deriveEncoder
+    given Decoder[UnusedKeyDto] = deriveDecoder
+
+  /** Wire mirror of `AdvisorScan.BroadScopeAgent`. */
+  final case class BroadScopeAgentDto(agent: String, operations: List[String])
+  object BroadScopeAgentDto:
+    given Encoder[BroadScopeAgentDto] = deriveEncoder
+    given Decoder[BroadScopeAgentDto] = deriveDecoder
+
+  /** Wire mirror of `AdvisorScan.ActiveAnomaly`. */
+  final case class ActiveAnomalyDto(at: Instant, actor: String, operation: String, outcome: String)
+  object ActiveAnomalyDto:
+    given Encoder[ActiveAnomalyDto] = deriveEncoder
+    given Decoder[ActiveAnomalyDto] = deriveDecoder
+
+  /** Wire mirror of `AdvisorScan.RiskyAgent`. */
+  final case class RiskyAgentDto(agent: String, score: Double, failedOps: Int, distinctOps: Int)
+  object RiskyAgentDto:
+    given Encoder[RiskyAgentDto] = deriveEncoder
+    given Decoder[RiskyAgentDto] = deriveDecoder
+
+  /** Wire response for `GET /v1/advisor/scan`. A read-only triage summary over the audit window:
+    * `scannedRecords` + `truncated` describe coverage, the four lists are the findings.
+    */
+  final case class AdvisorScanResponseDto(
+      windowStart: Instant,
+      windowEnd: Instant,
+      scannedRecords: Int,
+      truncated: Boolean,
+      unusedKeys: List[UnusedKeyDto],
+      broadScopeAgents: List[BroadScopeAgentDto],
+      activeAnomalies: List[ActiveAnomalyDto],
+      riskiestAgents: List[RiskyAgentDto]
+  )
+  object AdvisorScanResponseDto:
+    def fromCore(r: dev.aegiskms.agent.AdvisorScan.Report): AdvisorScanResponseDto =
+      AdvisorScanResponseDto(
+        windowStart = r.windowStart,
+        windowEnd = r.windowEnd,
+        scannedRecords = r.scannedRecords,
+        truncated = r.truncated,
+        unusedKeys = r.unusedKeys.map(k => UnusedKeyDto(k.keyId, k.lastSeen, k.idleDays)),
+        broadScopeAgents = r.broadScopeAgents.map(a => BroadScopeAgentDto(a.agent, a.operations)),
+        activeAnomalies = r.activeAnomalies.map(a => ActiveAnomalyDto(a.at, a.actor, a.operation, a.outcome)),
+        riskiestAgents =
+          r.riskiestAgents.map(a => RiskyAgentDto(a.agent, a.score, a.failedOps, a.distinctOps))
+      )
+
+    given Encoder[AdvisorScanResponseDto] = deriveEncoder
+    given Decoder[AdvisorScanResponseDto] = deriveDecoder

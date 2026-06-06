@@ -109,10 +109,37 @@ final class CommandsSpec extends AnyFunSuite with Matchers:
     r.stderr should include("boom")
   }
 
-  test("advisor scan is still a placeholder and exits non-zero with a clear message") {
-    // `agent issue` and `audit tail` are real in #79; only `advisor scan` (PR W4) remains a stub.
-    Commands.advisorScan.exitCode should not be 0
-    Commands.advisorScan.stderr should include("PR W4")
+  test("advisor scan renders each section, printing 'none' for empty findings") {
+    val report = AdvisorScanResponseDto(
+      windowStart = Instant.parse("2026-03-03T00:00:00Z"),
+      windowEnd = Instant.parse("2026-06-01T00:00:00Z"),
+      scannedRecords = 1234,
+      truncated = false,
+      unusedKeys = List(UnusedKeyDto("key:stale", Instant.parse("2026-04-02T00:00:00Z"), 60)),
+      broadScopeAgents =
+        List(BroadScopeAgentDto("agent-7a3", List("Decrypt", "Encrypt", "Get", "Sign", "Wrap"))),
+      activeAnomalies = Nil,
+      riskiestAgents = List(RiskyAgentDto("agent-7a3", 12.0, 1, 5))
+    )
+    val client = clientReturning(200, report.asJson.noSpaces)
+    val r      = Commands.advisorScan(client, None, None, None, None)
+    r.exitCode shouldBe 0
+    r.stdout should include("1234 record(s) scanned")
+    r.stdout should include("key:stale")
+    r.stdout should include("idle 60d")
+    r.stdout should include("agent-7a3")
+    r.stdout should include("Decrypt, Encrypt, Get, Sign, Wrap")
+    r.stdout should include("Active anomalies:\n  none")
+    r.stdout should include("score 12.0")
+  }
+
+  test("advisor scan surfaces a 501 (not wired) as a non-zero exit with the server reason") {
+    val errBody =
+      KmsErrorDto("FeatureNotSupported", "advisor scan is not enabled on this server").asJson.noSpaces
+    val client = clientReturning(501, errBody)
+    val r      = Commands.advisorScan(client, None, None, None, None)
+    r.exitCode should not be 0
+    r.stderr should include("FeatureNotSupported")
   }
 
   test("keys sign prints the base64 signature and algorithm on success") {

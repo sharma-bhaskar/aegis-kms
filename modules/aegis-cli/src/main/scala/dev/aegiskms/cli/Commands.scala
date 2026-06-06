@@ -2,6 +2,7 @@ package dev.aegiskms.cli
 
 import dev.aegiskms.cli.AegisHttpClient.{ClientError, renderError}
 import dev.aegiskms.cli.WireFormats.{
+  AdvisorScanResponseDto,
   AuditRecordDto,
   CompromiseRequest,
   DecryptRequest,
@@ -280,14 +281,59 @@ object Commands:
           CommandResult.out(body + footer)
       case Left(err) => CommandResult.err(renderError(err), exitCodeFor(err))
 
-  // ── Placeholder for AI advisor (W4, deferred) ─────────────────────────────
+  // ── AI advisor scan (#28) ─────────────────────────────────────────────────
 
-  /** `aegis advisor scan` — runs the LLM advisor against recent audit data. Awaits PR W4. */
-  def advisorScan: CommandResult =
-    CommandResult.err(
-      "advisor scan: not yet wired up — the LLM advisor ships in PR W4.",
-      code = 2
+  /** `aegis advisor scan [--lookback-days N] [--unused-days N] [--broad-scope N] [--top N]`
+    *
+    * Deterministic, read-only triage of recent audit activity: idle keys, broad-scope agents, active
+    * anomalies, and the riskiest agents. Calls `GET /v1/advisor/scan`; all tuning knobs are optional and fall
+    * back to server defaults (lookback 90d, unused 30d, broad-scope 5 ops, top 5 agents).
+    */
+  def advisorScan(
+      client: AegisHttpClient,
+      lookbackDays: Option[Int],
+      unusedDays: Option[Int],
+      broadScope: Option[Int],
+      top: Option[Int]
+  ): CommandResult =
+    client.advisorScan(lookbackDays, unusedDays, broadScope, top) match
+      case Right(report) => CommandResult.out(formatAdvisorReport(report))
+      case Left(err)     => CommandResult.err(renderError(err), exitCodeFor(err))
+
+  /** Render an advisor-scan report as a sectioned terminal summary. Each section prints its findings or an
+    * explicit "none", so a clean window reads as "no findings" rather than an ambiguous blank.
+    */
+  private def formatAdvisorReport(r: AdvisorScanResponseDto): String =
+    def section(title: String, lines: List[String]): String =
+      val body = if lines.isEmpty then "  none" else lines.map("  • " + _).mkString("\n")
+      s"$title\n$body"
+
+    val header =
+      s"advisor scan — window ${r.windowStart} → ${r.windowEnd} (${r.scannedRecords} record(s) scanned)" +
+        (if r.truncated then
+           s"\n  ⚠ partial window: hit the ${r.scannedRecords}-record scan cap; findings may be incomplete"
+         else "")
+
+    val unused = section(
+      "Unused keys:",
+      r.unusedKeys.map(k => f"${k.keyId}%-28s idle ${k.idleDays}d (last seen ${k.lastSeen})")
     )
+    val broad = section(
+      "Broad-scope agents:",
+      r.broadScopeAgents.map(a => f"${a.agent}%-28s ${a.operations.mkString(", ")}")
+    )
+    val anomalies = section(
+      "Active anomalies:",
+      r.activeAnomalies.map(a => f"${a.at}  ${a.actor}%-20s ${a.operation}%-10s ${a.outcome}")
+    )
+    val riskiest = section(
+      "Riskiest agents:",
+      r.riskiestAgents.map(a =>
+        f"${a.agent}%-28s score ${a.score}%.1f (failed ${a.failedOps}, distinct ops ${a.distinctOps})"
+      )
+    )
+
+    List(header, unused, broad, anomalies, riskiest).mkString("\n\n")
 
   /** Render a single audit record for terminal output. Multi-line; the leading field labels are
     * column-aligned so a glance picks out the actor / operation / outcome quickly.
