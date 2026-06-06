@@ -8,6 +8,16 @@ All notable changes to Aegis will be documented here. This project follows
 
 ### Added
 
+- **Pluggable LLM provider SPI + adapters (#30, ROADMAP 2.1.c).** The `LlmClient[F]` SPI in `aegis-agent-ai`
+  now has three bundled, config-selected adapters: **Anthropic** (`POST /v1/messages`) and **OpenAI**
+  (`POST /v1/chat/completions`) for the "pair with your existing AI vendor" path, and **Ollama**
+  (`POST /api/generate`) for local/private use — audit data never leaves the host. `LlmClient.fromConfig`
+  selects by name (`none` → disabled, returns no client; unknown name fails fast). Adapters call through a
+  tiny testable `LlmHttp` seam (JDK-backed default), so each provider's request shape and response parsing are
+  unit-tested with no network or API key. The contract stays read-only — the model only ever
+  describes/recommends, never executes a crypto op. (Bedrock is the remaining fast-follow — it needs AWS
+  SigV4; the SPI is provider-shaped for it. Wired into a running feature by `advisor explain`, #29.)
+
 - **`aegis advisor scan` — read-only audit triage (closes #28, ROADMAP 2.1.a).** The first slice of the
   v0.2.1 LLM-advisor wedge, deliberately *deterministic* (no LLM, no mutation): it aggregates the audit log
   into a bounded operator summary — idle keys, broad-scope agents, active anomalies, and the riskiest agents.
@@ -28,6 +38,12 @@ All notable changes to Aegis will be documented here. This project follows
     server-tier; no Pekko added to the library tier).
 
 ### Fixed
+
+- **`Docker (main)` workflow flaked on a transient GHCR push.** The `:main` image build/push intermittently
+  red-X'd with `unknown blob` even though the image built and every layer uploaded — a registry-side manifest
+  race, not a build failure. The publish step now retries up to 3× with backoff so a flaky push no longer
+  fails an otherwise-good `main` build. (`release.yml` has the same single-shot publish and would benefit from
+  the same treatment.)
 
 - **Honey-key auto-revoke never fired (regression in #26).** Two gaps meant a honey-key touch
   produced the `HoneyKey`/High recommendation but no `Revoke` action: (1) `AutoResponder.DefaultRules`
