@@ -83,6 +83,42 @@ object WireFormats:
     given Encoder[AuditQueryResponseDto] = deriveEncoder
     given Decoder[AuditQueryResponseDto] = deriveDecoder
 
+  // ── Advisor-scan DTOs (mirrors aegis-http/JsonCodecs.AdvisorScanResponseDto, #28) ──
+
+  final case class UnusedKeyDto(keyId: String, lastSeen: Instant, idleDays: Long)
+  object UnusedKeyDto:
+    given Encoder[UnusedKeyDto] = deriveEncoder
+    given Decoder[UnusedKeyDto] = deriveDecoder
+
+  final case class BroadScopeAgentDto(agent: String, operations: List[String])
+  object BroadScopeAgentDto:
+    given Encoder[BroadScopeAgentDto] = deriveEncoder
+    given Decoder[BroadScopeAgentDto] = deriveDecoder
+
+  final case class ActiveAnomalyDto(at: Instant, actor: String, operation: String, outcome: String)
+  object ActiveAnomalyDto:
+    given Encoder[ActiveAnomalyDto] = deriveEncoder
+    given Decoder[ActiveAnomalyDto] = deriveDecoder
+
+  final case class RiskyAgentDto(agent: String, score: Double, failedOps: Int, distinctOps: Int)
+  object RiskyAgentDto:
+    given Encoder[RiskyAgentDto] = deriveEncoder
+    given Decoder[RiskyAgentDto] = deriveDecoder
+
+  final case class AdvisorScanResponseDto(
+      windowStart: Instant,
+      windowEnd: Instant,
+      scannedRecords: Int,
+      truncated: Boolean,
+      unusedKeys: List[UnusedKeyDto],
+      broadScopeAgents: List[BroadScopeAgentDto],
+      activeAnomalies: List[ActiveAnomalyDto],
+      riskiestAgents: List[RiskyAgentDto]
+  )
+  object AdvisorScanResponseDto:
+    given Encoder[AdvisorScanResponseDto] = deriveEncoder
+    given Decoder[AdvisorScanResponseDto] = deriveDecoder
+
   final case class KmsErrorDto(code: String, message: String)
   object KmsErrorDto:
     given Encoder[KmsErrorDto] = deriveEncoder

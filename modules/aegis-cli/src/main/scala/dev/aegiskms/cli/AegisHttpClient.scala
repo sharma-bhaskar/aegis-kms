@@ -151,6 +151,32 @@ final class AegisHttpClient(http: HttpPort, baseUrl: String, principal: Option[S
       case 200    => decodeBody[AuditQueryResponseDto](res.body)
       case status => Left(toError(status, res.body))
 
+  /** GET /v1/advisor/scan — deterministic read-only triage over the recent audit window (#28). Each tuning
+    * knob is sent only when the caller overrides the default, so the server's defaults apply otherwise.
+    */
+  def advisorScan(
+      lookbackDays: Option[Int] = None,
+      unusedDays: Option[Int] = None,
+      broadScope: Option[Int] = None,
+      top: Option[Int] = None
+  ): Either[ClientError, AdvisorScanResponseDto] =
+    val params = List(
+      lookbackDays.map(v => "lookbackDays" -> v.toString),
+      unusedDays.map(v => "unusedDays" -> v.toString),
+      broadScope.map(v => "broadScope" -> v.toString),
+      top.map(v => "top" -> v.toString)
+    ).flatten
+    val qs =
+      if params.isEmpty then ""
+      else
+        params.map { case (k, v) =>
+          s"$k=${java.net.URLEncoder.encode(v, java.nio.charset.StandardCharsets.UTF_8)}"
+        }.mkString("?", "&", "")
+    val res = http.execute(HttpPort.Request("GET", url(s"/v1/advisor/scan$qs"), baseHeaders, None))
+    res.status match
+      case 200    => decodeBody[AdvisorScanResponseDto](res.body)
+      case status => Left(toError(status, res.body))
+
   // ── Helpers ────────────────────────────────────────────────────────────────
 
   private def url(path: String): String =

@@ -5,6 +5,7 @@ import cats.effect.{IO, IOApp, IOLocal, Resource}
 import cats.syntax.all.*
 import com.typesafe.config.{Config, ConfigFactory}
 import dev.aegiskms.agent.{
+  AdvisorService,
   AutoResponder,
   BaselineDetector,
   BaselineRiskScorer,
@@ -228,6 +229,13 @@ object Server extends IOApp.Simple:
       // with proper OIDC + JWKS rotation.
       agentIssuer <- Resource.eval(buildAgentIssuer(rootConfig))
 
+      // Audit-read capability (#20) + advisor scan (#28) both ride on the `AuditQuery` SPI, which only the
+      // *primary* postgres sink satisfies. Match on `primarySink`, not `stdoutSink`, because the latter may
+      // be wrapped in a `FanOutAuditSink` for the webhook fan-out (#21) that doesn't carry the capability.
+      auditReader = primarySink match
+        case q: AuditQuery[IO @unchecked] => Some(q)
+        case _                            => None
+
       // 5. HTTP binding. Acquire = bind; release = unbind with the configured grace period (5s) so
       //    in-flight requests finish before the socket closes.
       appRoute =
@@ -245,10 +253,9 @@ object Server extends IOApp.Simple:
             resolver,
             Some(agentIssuer),
             Some(stdoutSink),
-            primarySink match
-              case q: AuditQuery[IO @unchecked] => Some(q)
-              case _                            => None,
-            reqContext
+            auditReader,
+            reqContext,
+            auditReader.map(AdvisorService.deterministic)
           ).routes,
           MetricsRoutes.route(metricsRegistry)
         )

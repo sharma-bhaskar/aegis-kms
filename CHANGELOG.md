@@ -6,6 +6,27 @@ All notable changes to Aegis will be documented here. This project follows
 
 ## Unreleased
 
+### Added
+
+- **`aegis advisor scan` — read-only audit triage (closes #28, ROADMAP 2.1.a).** The first slice of the
+  v0.2.1 LLM-advisor wedge, deliberately *deterministic* (no LLM, no mutation): it aggregates the audit log
+  into a bounded operator summary — idle keys, broad-scope agents, active anomalies, and the riskiest agents.
+  Keeping the analysis deterministic means the headline demo runs in CI with no API key and the numbers are
+  reproducible. The pluggable `LlmClient` (#30) layers natural-language narration over these same facts later.
+  - **`AdvisorService[F]` SPI + `AdvisorScan` analyzer** (`aegis-agent-ai`): the heuristics live in a pure
+    `AdvisorScan.analyze` (property-testable against synthetic records); `AdvisorService.deterministic` pages
+    the audit log via the existing `AuditQuery` SPI up to a 50k-row cap and marks the report `truncated` when
+    the window exceeds it (no silent under-reporting).
+  - **`GET /v1/advisor/scan`** (`aegis-http`): human-principals-only (Service/Agent get 403), `501` when the
+    server has no queryable audit sink (audit kind ≠ postgres) — same access model as `GET /v1/audit`. Tuning
+    knobs `lookbackDays` / `unusedDays` / `broadScope` / `top` fall back to defaults (90 / 30 / 5 / 5).
+  - **`aegis advisor scan`** (`aegis-cli`): replaces the long-standing stub; flags `--lookback-days`,
+    `--unused-days`, `--broad-scope`, `--top`; sectioned terminal output that prints "none" for empty
+    findings.
+  - **Wiring**: `Server.boot` builds the advisor over the same `AuditQuery` that backs the audit-read
+    endpoint, so it's available exactly when audit-read is. `aegis-http` now depends on `aegis-agent-ai` (both
+    server-tier; no Pekko added to the library tier).
+
 ### Fixed
 
 - **Honey-key auto-revoke never fired (regression in #26).** Two gaps meant a honey-key touch

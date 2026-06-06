@@ -2,6 +2,7 @@ package dev.aegiskms.http
 
 import cats.effect.IO
 import cats.effect.unsafe.IORuntime
+import dev.aegiskms.agent.{AdvisorScan, AdvisorService}
 import dev.aegiskms.audit.{AuditQuery, AuditRecord, AuditSink, RequestContext}
 import dev.aegiskms.core.*
 import dev.aegiskms.http.JsonCodecs.*
@@ -53,7 +54,12 @@ final class HttpRoutes(
       * Defaults to [[RequestContext.empty]] so existing tests that construct `HttpRoutes` without the IOLocal
       * compile unchanged — the production wiring in `Server.boot` swaps in the real one.
       */
-    requestContext: RequestContext = RequestContext.empty
+    requestContext: RequestContext = RequestContext.empty,
+    /** Optional advisor backing the `GET /v1/advisor/scan` endpoint. Wired by `Server.boot` over the same
+      * `AuditQuery` that backs the audit-read endpoint — so it's present exactly when `auditReader` is. When
+      * `None`, `GET /v1/advisor/scan` returns `501 FeatureNotSupported`.
+      */
+    advisor: Option[AdvisorService[IO]] = None
 )(using runtime: IORuntime):
 
   private given ExecutionContext = runtime.compute
@@ -423,6 +429,52 @@ final class HttpRoutes(
                 ))
     }
 
+  /** `GET /v1/advisor/scan` — deterministic, read-only triage over the audit window. Same access model as
+    * `/v1/audit`: human principals only (Service + Agent return 403), and 501 when no advisor is wired (audit
+    * kind ≠ postgres). Negative/zero query params fall back to the advisor defaults rather than erroring — a
+    * scan with a nonsensical window is better served by sane defaults than a 400.
+    */
+  private val advisorScanSE: ServerEndpoint[Any, Future] =
+    Endpoints.advisorScan.serverLogic {
+      case (auth, devHdr, clientIp, lookbackDays, unusedDays, broadScope, top) =>
+        principalOf(auth, devHdr) match
+          case Left(e) => Future.successful(Left(e))
+          case Right(_: Principal.Human) =>
+            advisor match
+              case None =>
+                Future.successful(Left(
+                  StatusCode.NotImplemented -> KmsErrorDto.of(
+                    ErrorCode.FeatureNotSupported,
+                    "advisor scan is not enabled on this server (set aegis.audit.kind=postgres)"
+                  )
+                ))
+              case Some(svc) =>
+                val scan =
+                  for
+                    now <- IO.realTimeInstant
+                    report <- svc.scan(
+                      AdvisorScan.Request(
+                        now = now,
+                        lookback = lookbackDays.filter(_ > 0).map(d => java.time.Duration.ofDays(d.toLong))
+                          .getOrElse(AdvisorScan.DefaultLookback),
+                        unusedAfter = unusedDays.filter(_ > 0).map(d => java.time.Duration.ofDays(d.toLong))
+                          .getOrElse(AdvisorScan.DefaultUnusedAfter),
+                        broadScopeThreshold =
+                          broadScope.filter(_ > 0).getOrElse(AdvisorScan.DefaultBroadScopeThreshold),
+                        topRiskiest = top.filter(_ > 0).getOrElse(AdvisorScan.DefaultTopRiskiest)
+                      )
+                    )
+                  yield AdvisorScanResponseDto.fromCore(report)
+                runIO(clientIp)(scan).map(Right(_))
+          case Right(_) =>
+            Future.successful(Left(
+              StatusCode.Forbidden -> KmsErrorDto.of(
+                ErrorCode.PermissionDenied,
+                "advisor scan is restricted to human principals"
+              )
+            ))
+    }
+
   /** Write one `AuditRecord` per `/v1/agents/issue` call — success OR failure — so operators have a forensic
     * trail of every agent credential ever minted. The audit row captures the caller (the human who issued),
     * the requested scopes + ttl + label (so reviewers can answer "what does this agent have access to"), and
@@ -522,7 +574,8 @@ final class HttpRoutes(
       compromiseSE,
       rotateSE,
       issueAgentSE,
-      queryAuditSE
+      queryAuditSE,
+      advisorScanSE
     )
 
   /** Render the live endpoint set as an OpenAPI 3.1 document. The build-time guarantee here is the same one

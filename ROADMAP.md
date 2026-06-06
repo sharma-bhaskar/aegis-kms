@@ -105,7 +105,7 @@ Non-goals: cryptographic operations, multi-cloud RoT, KMIP, MCP, OIDC. All defer
 
 | # | Capability | Area | Status |
 |---|---|---|---|
-| 2.1.a | `aegis advisor scan` — finds unused keys, scope-creep, anomalies; bounded prompt set | Wedge | 🔜 |
+| 2.1.a | `aegis advisor scan` — finds unused keys, scope-creep, anomalies; deterministic (LLM narration via 2.1.c later) | Wedge | 🚧 |
 | 2.1.b | `aegis advisor explain <agent-id>` — human-readable timeline of why a recommendation fired | Wedge | 🔜 |
 | 2.1.c | Pluggable LLM provider (OpenAI / Anthropic / Bedrock / Ollama for local) | Wedge | 💡 |
 | 2.1.d | Prompt safety: never executes mutations; structured output schemas; refuses arbitrary queries | Wedge | 🔜 |

@@ -56,7 +56,11 @@ object Cli:
               )
           case Left(msg) => CommandResult.err(s"$msg\n\n${auditTailHelp}")
 
-      case "advisor" :: "scan" :: _ => Commands.advisorScan
+      case "advisor" :: "scan" :: rest =>
+        parseAdvisorScan(rest) match
+          case Right((lookback, unused, broad, top)) =>
+            Commands.advisorScan(makeClient(cfg), lookback, unused, broad, top)
+          case Left(msg) => CommandResult.err(s"$msg\n\n${advisorScanHelp}")
 
       case unknown =>
         CommandResult.err(s"unknown command: ${unknown.mkString(" ")}\n\n${help.stdout}")
@@ -357,6 +361,27 @@ object Cli:
             .toRight(s"audit tail: --offset must be a non-negative integer (was '$v')")
     yield AuditTailFilter(since, until, actor, key, op, l, o, watch)
 
+  /** Parse `aegis advisor scan [--lookback-days N] [--unused-days N] [--broad-scope N] [--top N]`. Each knob
+    * is optional and must parse as a positive integer if provided; absent knobs let the server defaults
+    * apply.
+    */
+  private[cli] def parseAdvisorScan(
+      args: List[String]
+  ): Either[String, (Option[Int], Option[Int], Option[Int], Option[Int])] =
+    val flags = parseFlags(args)
+    def posInt(flag: String): Either[String, Option[Int]] =
+      flags.get(flag) match
+        case None => Right(None)
+        case Some(v) =>
+          v.toIntOption.filter(_ > 0).map(Some(_))
+            .toRight(s"advisor scan: $flag must be a positive integer (was '$v')")
+    for
+      lookback <- posInt("--lookback-days")
+      unused   <- posInt("--unused-days")
+      broad    <- posInt("--broad-scope")
+      top      <- posInt("--top")
+    yield (lookback, unused, broad, top)
+
   /** Watch-mode loop: print one page, then poll every 2 s for new records (using the last seen `at` as the
     * new `since`). Runs indefinitely until the JVM is killed. Sleeps via `Thread.sleep` because the CLI is
     * synchronous; the rest of the codebase uses cats-effect but dragging IO/IOApp into the CLI's startup path
@@ -433,7 +458,7 @@ object Cli:
       |  aegis agent issue --label <text> --scopes Op,Op,… --ttl <seconds> [--parent <subject>]
       |  aegis audit tail [--since <ISO>] [--until <ISO>] [--actor <subject>] [--key <id>]
       |                   [--op <name>] [--limit <n>] [--offset <n>] [--watch]
-      |  aegis advisor scan       (planned — PR W4)
+      |  aegis advisor scan [--lookback-days <n>] [--unused-days <n>] [--broad-scope <n>] [--top <n>]
       |
       |Config: $AEGIS_CONFIG, or ~/.aegis/config.json
       |Env:    AEGIS_SERVER, AEGIS_USER override the saved config""".stripMargin
@@ -458,6 +483,15 @@ object Cli:
       |  --limit <n>     Page size; default 100, max 1000
       |  --offset <n>    Starting row offset; default 0
       |  --watch         Poll every 2 s for new records (tail -f UX)""".stripMargin
+  private val advisorScanHelp: String =
+    """Usage: aegis advisor scan [knobs]
+      |
+      |  --lookback-days <n>  How far back to read the audit log (default 90)
+      |  --unused-days <n>    Flag keys idle at least this many days (default 30)
+      |  --broad-scope <n>    Flag agents using ≥ this many distinct ops (default 5)
+      |  --top <n>            Number of riskiest agents to list (default 5)
+      |
+      |Read-only triage; never mutates. Requires a server with aegis.audit.kind=postgres.""".stripMargin
   private val keysHelp: String =
     """Usage:
       |  aegis keys create --alg <ALG> --name <NAME>

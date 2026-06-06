@@ -142,7 +142,7 @@ lazy val kmip = (project in file("modules/aegis-kmip"))
   )
 
 lazy val http = (project in file("modules/aegis-http"))
-  .dependsOn(core, crypto, iam, audit)
+  .dependsOn(core, crypto, iam, audit, agentAi)
   .settings(
     commonSettings,
     name := "aegis-http",
