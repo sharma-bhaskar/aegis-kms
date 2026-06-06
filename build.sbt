@@ -24,7 +24,9 @@ ThisBuild / scmInfo := Some(
 // version becomes `<X.Y.Z>`; between tags it's `<base>+<n>-<sha>-SNAPSHOT`. Setting `version :=`
 // here would OVERRIDE the dynver-derived value and break Maven Central publishing — we'd push
 // every tag as `0.1.0-SNAPSHOT` regardless of the tag name. Don't reintroduce a `version :=`.
-ThisBuild / sonatypeCredentialHost := "s01.oss.sonatype.org"
+// No `sonatypeCredentialHost` setting: the legacy OSSRH host (s01.oss.sonatype.org) was sunset
+// 2025-06-30. sbt-ci-release 1.11+ on sbt 1.11+ targets the Sonatype Central Portal
+// (central.sonatype.com) automatically — adding a host override here would break publishing.
 ThisBuild / scalacOptions ++= Seq(
   "-deprecation",
   "-feature",
