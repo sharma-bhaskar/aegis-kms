@@ -2,7 +2,7 @@ package dev.aegiskms.http
 
 import cats.effect.IO
 import cats.effect.unsafe.IORuntime
-import dev.aegiskms.agent.{AdvisorScan, AdvisorService}
+import dev.aegiskms.agent.{AdvisorExplain, AdvisorScan, AdvisorService}
 import dev.aegiskms.audit.{AuditQuery, AuditRecord, AuditSink, RequestContext}
 import dev.aegiskms.core.*
 import dev.aegiskms.http.JsonCodecs.*
@@ -475,6 +475,47 @@ final class HttpRoutes(
             ))
     }
 
+  /** `GET /v1/advisor/explain/{agentId}` — read-only agent-session timeline, narrated when an LLM provider is
+    * configured. Same access model as the other advisor/audit endpoints: human-only, 501 when unwired.
+    */
+  private val advisorExplainSE: ServerEndpoint[Any, Future] =
+    Endpoints.advisorExplain.serverLogic {
+      case (auth, devHdr, clientIp, agentId, lookbackDays, maxEvents) =>
+        principalOf(auth, devHdr) match
+          case Left(e) => Future.successful(Left(e))
+          case Right(_: Principal.Human) =>
+            advisor match
+              case None =>
+                Future.successful(Left(
+                  StatusCode.NotImplemented -> KmsErrorDto.of(
+                    ErrorCode.FeatureNotSupported,
+                    "advisor explain is not enabled on this server (set aegis.audit.kind=postgres)"
+                  )
+                ))
+              case Some(svc) =>
+                val explain =
+                  for
+                    now <- IO.realTimeInstant
+                    report <- svc.explain(
+                      AdvisorExplain.Request(
+                        agentId = agentId,
+                        now = now,
+                        lookback = lookbackDays.filter(_ > 0).map(d => java.time.Duration.ofDays(d.toLong))
+                          .getOrElse(AdvisorExplain.DefaultLookback),
+                        maxEvents = maxEvents.filter(_ > 0).getOrElse(AdvisorExplain.DefaultMaxEvents)
+                      )
+                    )
+                  yield AdvisorExplainResponseDto.fromCore(report)
+                runIO(clientIp)(explain).map(Right(_))
+          case Right(_) =>
+            Future.successful(Left(
+              StatusCode.Forbidden -> KmsErrorDto.of(
+                ErrorCode.PermissionDenied,
+                "advisor explain is restricted to human principals"
+              )
+            ))
+    }
+
   /** Write one `AuditRecord` per `/v1/agents/issue` call — success OR failure — so operators have a forensic
     * trail of every agent credential ever minted. The audit row captures the caller (the human who issued),
     * the requested scopes + ttl + label (so reviewers can answer "what does this agent have access to"), and
@@ -575,7 +616,8 @@ final class HttpRoutes(
       rotateSE,
       issueAgentSE,
       queryAuditSE,
-      advisorScanSE
+      advisorScanSE,
+      advisorExplainSE
     )
 
   /** Render the live endpoint set as an OpenAPI 3.1 document. The build-time guarantee here is the same one

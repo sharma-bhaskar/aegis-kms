@@ -194,6 +194,38 @@ final class CliSpec extends AnyFunSuite with Matchers:
     r.stderr should include("--top must be a positive integer")
   }
 
+  test("'advisor explain <id>' GETs /v1/advisor/explain/<id> with the parsed knobs") {
+    val report = AdvisorExplainResponseDto(
+      agentId = "claude-session-7a3",
+      windowStart = Instant.parse("2026-03-03T00:00:00Z"),
+      windowEnd = Instant.parse("2026-06-01T00:00:00Z"),
+      summary = ExplainSummaryDto(0, Nil, 0, None, None),
+      events = Nil,
+      narrative = None,
+      truncated = false
+    )
+    var captured: Option[HttpPort.Request] = None
+    val r = Cli.run(
+      List("advisor", "explain", "claude-session-7a3", "--max-events", "50"),
+      cfg,
+      captureFactory(req => captured = Some(req), report.asJson.noSpaces)
+    )
+    r.exitCode shouldBe 0
+    captured.get.method shouldBe "GET"
+    captured.get.url should include("/v1/advisor/explain/claude-session-7a3")
+    captured.get.url should include("maxEvents=50")
+  }
+
+  test("'advisor explain' without an agent id reports a usage error and exits 1") {
+    val r = Cli.run(
+      List("advisor", "explain"),
+      cfg,
+      fakeClientFactory(200, sampleKey.asJson.noSpaces)
+    )
+    r.exitCode shouldBe 1
+    r.stderr should include("<agent-id> is required")
+  }
+
   // ── #79: agent issue ──────────────────────────────────────────────────────
 
   test("'agent issue' missing --label reports a usage error and exits 1") {

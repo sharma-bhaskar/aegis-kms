@@ -11,6 +11,8 @@ import dev.aegiskms.agent.{
   BaselineRiskScorer,
   HoneyKeyRegistry,
   InMemoryRecommendationSink,
+  LlmClient,
+  LlmHttp,
   TappedAuditSink,
   ThresholdDecisionEngine
 }
@@ -236,6 +238,10 @@ object Server extends IOApp.Simple:
         case q: AuditQuery[IO @unchecked] => Some(q)
         case _                            => None
 
+      // Advisor LLM provider (#30): selected from `aegis.advisor.llm.*` (provider=none disables narration).
+      // `advisor explain` (#29) uses it; `advisor scan` is deterministic and ignores it.
+      llmClient = buildLlmClient(rootConfig)
+
       // 5. HTTP binding. Acquire = bind; release = unbind with the configured grace period (5s) so
       //    in-flight requests finish before the socket closes.
       appRoute =
@@ -255,7 +261,7 @@ object Server extends IOApp.Simple:
             Some(stdoutSink),
             auditReader,
             reqContext,
-            auditReader.map(AdvisorService.deterministic)
+            auditReader.map(r => AdvisorService.deterministic(r, llmClient))
           ).routes,
           MetricsRoutes.route(metricsRegistry)
         )
@@ -682,6 +688,34 @@ object Server extends IOApp.Simple:
     else
       logger.info(s"honey keys: ${parsed.size} registered for canary auto-revoke")
     HoneyKeyRegistry.fromSet(parsed)
+
+  /** Build the advisor's LLM provider from `aegis.advisor.llm.*`, or `None` when `provider=none`/absent. The
+    * provider only narrates `advisor explain` (#29); `advisor scan` is deterministic and never calls it. A
+    * bad provider name throws from `LlmClient.fromConfig`, failing the boot rather than silently disabling.
+    */
+  private def buildLlmClient(config: Config): Option[LlmClient[IO]] =
+    def str(path: String): Option[String] =
+      if config.hasPath(path) then Some(config.getString(path).trim).filter(_.nonEmpty) else None
+    val llmConfig = LlmClient.Config(
+      provider = str("aegis.advisor.llm.provider").getOrElse("none"),
+      apiKey = str("aegis.advisor.llm.api-key"),
+      baseUrl = str("aegis.advisor.llm.base-url"),
+      model = str("aegis.advisor.llm.model"),
+      maxTokens = if config.hasPath("aegis.advisor.llm.max-tokens") then
+        config.getInt("aegis.advisor.llm.max-tokens")
+      else 1024
+    )
+    val client = LlmClient.fromConfig(llmConfig, LlmHttp.jdk())
+    client match
+      case Some(_) =>
+        logger.info(
+          s"advisor LLM: provider=${llmConfig.provider}, model=${llmConfig.model.getOrElse("(provider default)")}"
+        )
+      case None =>
+        logger.info(
+          "advisor LLM: disabled (set aegis.advisor.llm.provider=anthropic|openai|ollama to enable narration)"
+        )
+    client
 
   private def buildAgentIssuer(config: Config): IO[AgentTokenIssuer] = IO {
     config.getString("aegis.auth.kind") match

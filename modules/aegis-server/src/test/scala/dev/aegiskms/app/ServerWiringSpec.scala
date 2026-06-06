@@ -16,8 +16,8 @@ final class ServerWiringSpec extends AnyFunSuite with Matchers:
     given IORuntime = IORuntime.global
     val svc         = KeyService.inMemory.unsafeRunSync()
     val routes      = HttpRoutes(svc)
-    // 15 endpoints: 12 keys (create, get, activate, destroy, sign, verify, encrypt, decrypt,
+    // 16 endpoints: 12 keys (create, get, activate, destroy, sign, verify, encrypt, decrypt,
     // wrap, unwrap, compromise, rotate) + agents/issue (#18) + audit/query (#20) + advisor/scan
-    // (#28). Bump this when a new top-level REST surface lands.
-    routes.serverEndpoints.size shouldBe 15
+    // (#28) + advisor/explain (#29). Bump this when a new top-level REST surface lands.
+    routes.serverEndpoints.size shouldBe 16
   }

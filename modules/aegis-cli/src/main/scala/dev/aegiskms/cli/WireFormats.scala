@@ -119,6 +119,44 @@ object WireFormats:
     given Encoder[AdvisorScanResponseDto] = deriveEncoder
     given Decoder[AdvisorScanResponseDto] = deriveDecoder
 
+  // ── Advisor-explain DTOs (mirrors aegis-http/JsonCodecs.AdvisorExplainResponseDto, #29) ──
+
+  final case class ExplainEventDto(
+      at: Instant,
+      operation: String,
+      resource: String,
+      outcome: String,
+      riskScore: Option[Double],
+      anomaly: Boolean
+  )
+  object ExplainEventDto:
+    given Encoder[ExplainEventDto] = deriveEncoder
+    given Decoder[ExplainEventDto] = deriveDecoder
+
+  final case class ExplainSummaryDto(
+      totalEvents: Int,
+      distinctOps: List[String],
+      anomalies: Int,
+      firstSeen: Option[Instant],
+      lastSeen: Option[Instant]
+  )
+  object ExplainSummaryDto:
+    given Encoder[ExplainSummaryDto] = deriveEncoder
+    given Decoder[ExplainSummaryDto] = deriveDecoder
+
+  final case class AdvisorExplainResponseDto(
+      agentId: String,
+      windowStart: Instant,
+      windowEnd: Instant,
+      summary: ExplainSummaryDto,
+      events: List[ExplainEventDto],
+      narrative: Option[String],
+      truncated: Boolean
+  )
+  object AdvisorExplainResponseDto:
+    given Encoder[AdvisorExplainResponseDto] = deriveEncoder
+    given Decoder[AdvisorExplainResponseDto] = deriveDecoder
+
   final case class KmsErrorDto(code: String, message: String)
   object KmsErrorDto:
     given Encoder[KmsErrorDto] = deriveEncoder

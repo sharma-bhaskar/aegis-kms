@@ -8,6 +8,23 @@ All notable changes to Aegis will be documented here. This project follows
 
 ### Added
 
+- **`aegis advisor explain <agent-id>` — agent-session timeline + LLM narration (closes #29, ROADMAP
+  2.1.b/2.1.d).** The last piece of the v0.2.1 LLM-advisor wedge: assembles one agent's audit timeline
+  (chronological events, risk scores, anomaly flags + a deterministic summary) and — when an LLM provider is
+  configured (#30) — narrates it in plain language. **Read-only and safe by construction** (2.1.d): the model
+  is handed only the structured timeline under a strict read-only system prompt, the prompt is bounded by a
+  `maxEvents` cap, and any LLM failure **degrades gracefully** to the bare deterministic timeline rather than
+  erroring. With `aegis.advisor.llm.provider=none` (the default) there are no outbound calls at all.
+  - **`AdvisorService.explain`** (`aegis-agent-ai`): pages the audit log filtered to the agent, builds the
+    timeline via the pure `AdvisorExplain.timeline`, then optionally narrates via the injected `LlmClient`.
+  - **`GET /v1/advisor/explain/{agentId}`** (`aegis-http`): human-only, `501` when no advisor is wired; knobs
+    `lookbackDays` / `maxEvents`.
+  - **`aegis advisor explain <agent-id>`** (`aegis-cli`): prints the narrative (when present) followed by the
+    event timeline.
+  - **Wiring**: `Server.boot` now builds the LLM provider from `aegis.advisor.llm.*` and threads it into the
+    advisor — the integration point for #30. New `application.conf` `aegis.advisor.llm` block (provider /
+    api-key / base-url / model / max-tokens, all env-overridable; defaults to `provider=none`).
+
 - **Pluggable LLM provider SPI + adapters (#30, ROADMAP 2.1.c).** The `LlmClient[F]` SPI in `aegis-agent-ai`
   now has three bundled, config-selected adapters: **Anthropic** (`POST /v1/messages`) and **OpenAI**
   (`POST /v1/chat/completions`) for the "pair with your existing AI vendor" path, and **Ollama**

@@ -62,6 +62,12 @@ object Cli:
             Commands.advisorScan(makeClient(cfg), lookback, unused, broad, top)
           case Left(msg) => CommandResult.err(s"$msg\n\n${advisorScanHelp}")
 
+      case "advisor" :: "explain" :: rest =>
+        parseAdvisorExplain(rest) match
+          case Right((agentId, lookback, maxEvents)) =>
+            Commands.advisorExplain(makeClient(cfg), agentId, lookback, maxEvents)
+          case Left(msg) => CommandResult.err(s"$msg\n\n${advisorExplainHelp}")
+
       case unknown =>
         CommandResult.err(s"unknown command: ${unknown.mkString(" ")}\n\n${help.stdout}")
 
@@ -382,6 +388,27 @@ object Cli:
       top      <- posInt("--top")
     yield (lookback, unused, broad, top)
 
+  /** Parse `aegis advisor explain <agent-id> [--lookback-days N] [--max-events N]`. The agent id is the first
+    * positional argument; the knobs are optional positive integers.
+    */
+  private[cli] def parseAdvisorExplain(
+      args: List[String]
+  ): Either[String, (String, Option[Int], Option[Int])] =
+    args match
+      case agentId :: rest if !agentId.startsWith("--") =>
+        val flags = parseFlags(rest)
+        def posInt(flag: String): Either[String, Option[Int]] =
+          flags.get(flag) match
+            case None => Right(None)
+            case Some(v) =>
+              v.toIntOption.filter(_ > 0).map(Some(_))
+                .toRight(s"advisor explain: $flag must be a positive integer (was '$v')")
+        for
+          lookback  <- posInt("--lookback-days")
+          maxEvents <- posInt("--max-events")
+        yield (agentId, lookback, maxEvents)
+      case _ => Left("advisor explain: <agent-id> is required as the first argument")
+
   /** Watch-mode loop: print one page, then poll every 2 s for new records (using the last seen `at` as the
     * new `since`). Runs indefinitely until the JVM is killed. Sleeps via `Thread.sleep` because the CLI is
     * synchronous; the rest of the codebase uses cats-effect but dragging IO/IOApp into the CLI's startup path
@@ -459,6 +486,7 @@ object Cli:
       |  aegis audit tail [--since <ISO>] [--until <ISO>] [--actor <subject>] [--key <id>]
       |                   [--op <name>] [--limit <n>] [--offset <n>] [--watch]
       |  aegis advisor scan [--lookback-days <n>] [--unused-days <n>] [--broad-scope <n>] [--top <n>]
+      |  aegis advisor explain <agent-id> [--lookback-days <n>] [--max-events <n>]
       |
       |Config: $AEGIS_CONFIG, or ~/.aegis/config.json
       |Env:    AEGIS_SERVER, AEGIS_USER override the saved config""".stripMargin
@@ -492,6 +520,15 @@ object Cli:
       |  --top <n>            Number of riskiest agents to list (default 5)
       |
       |Read-only triage; never mutates. Requires a server with aegis.audit.kind=postgres.""".stripMargin
+  private val advisorExplainHelp: String =
+    """Usage: aegis advisor explain <agent-id> [knobs]
+      |
+      |  <agent-id>           The agent subject to explain (e.g. claude-session-7a3)
+      |  --lookback-days <n>  How far back to read the agent's activity (default 90)
+      |  --max-events <n>     Cap on timeline events returned (default 200)
+      |
+      |Read-only timeline. A natural-language narrative is added when the server has an
+      |LLM provider configured (aegis.advisor.llm.provider); otherwise the timeline only.""".stripMargin
   private val keysHelp: String =
     """Usage:
       |  aegis keys create --alg <ALG> --name <NAME>

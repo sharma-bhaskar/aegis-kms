@@ -20,6 +20,11 @@ import java.time.{Duration, Instant}
 trait AdvisorService[F[_]]:
   def scan(request: AdvisorScan.Request): F[AdvisorScan.Report]
 
+  /** Explain one agent's session (#29, ROADMAP 2.1.b): assemble the agent's audit timeline and — when an
+    * [[LlmClient]] is configured — narrate it in plain language. Read-only; never touches `KeyService`.
+    */
+  def explain(request: AdvisorExplain.Request): F[AdvisorExplain.Report]
+
 object AdvisorService:
 
   /** Hard cap on the number of audit rows a single scan will pull into memory. A scan is an operator triage
@@ -32,36 +37,71 @@ object AdvisorService:
   /** Page size for the underlying [[AuditQuery]] paging loop — the SPI's own per-request maximum. */
   val PageSize: Int = AuditQuery.MaxLimit
 
-  /** Deterministic implementation backed by an [[AuditQuery]]. Pages through `[now - lookback, now)` up to
-    * [[MaxScan]] rows, then folds the records into a [[AdvisorScan.Report]] via [[AdvisorScan.analyze]].
+  /** Deterministic implementation backed by an [[AuditQuery]], optionally narrated by an [[LlmClient]].
+    *
+    * `scan` pages `[now - lookback, now)` and folds the records via [[AdvisorScan.analyze]] — purely
+    * deterministic, no LLM. `explain` pages the same window filtered to one agent's `actor`, builds a
+    * deterministic timeline, and — when `llm` is present — adds a natural-language narrative on top (falling
+    * back to the bare timeline if narration fails). The `llm` is `None` when
+    * `aegis.advisor.llm.provider=none`.
     */
-  def deterministic(reader: AuditQuery[IO]): AdvisorService[IO] = new AdvisorService[IO]:
-    def scan(request: AdvisorScan.Request): IO[AdvisorScan.Report] =
-      val windowEnd   = request.now
-      val windowStart = request.now.minus(request.lookback)
+  def deterministic(reader: AuditQuery[IO], llm: Option[LlmClient[IO]] = None): AdvisorService[IO] =
+    new AdvisorService[IO]:
 
-      def loop(offset: Int, acc: Vector[AuditRecord]): IO[(Vector[AuditRecord], Boolean)] =
-        if acc.sizeIs >= MaxScan then IO.pure((acc, true))
-        else
-          reader
-            .query(
-              AuditQuery.Filter(
-                since = Some(windowStart),
-                until = Some(windowEnd),
-                limit = PageSize,
-                offset = offset
-              )
-            )
-            .flatMap { page =>
+      /** Page the audit log under `filterFor(offset)` up to [[MaxScan]] rows. Returns the records plus a
+        * `truncated` flag (true iff the cap was hit with more rows available).
+        */
+      private def pageAll(filterFor: Int => AuditQuery.Filter): IO[(Vector[AuditRecord], Boolean)] =
+        def loop(offset: Int, acc: Vector[AuditRecord]): IO[(Vector[AuditRecord], Boolean)] =
+          if acc.sizeIs >= MaxScan then IO.pure((acc, true))
+          else
+            reader.query(filterFor(offset)).flatMap { page =>
               val next = acc ++ page.records
               if page.records.isEmpty then IO.pure((next, false)) // no progress; stop
               else if page.hasMore then loop(offset + page.records.size, next)
               else IO.pure((next, false)) // window exhausted
             }
+        loop(0, Vector.empty)
 
-      loop(0, Vector.empty).map { case (records, truncated) =>
-        AdvisorScan.analyze(request, windowStart, windowEnd, records.toList, truncated)
-      }
+      def scan(request: AdvisorScan.Request): IO[AdvisorScan.Report] =
+        val windowEnd   = request.now
+        val windowStart = request.now.minus(request.lookback)
+        pageAll(off =>
+          AuditQuery.Filter(
+            since = Some(windowStart),
+            until = Some(windowEnd),
+            limit = PageSize,
+            offset = off
+          )
+        )
+          .map { case (records, truncated) =>
+            AdvisorScan.analyze(request, windowStart, windowEnd, records.toList, truncated)
+          }
+
+      def explain(request: AdvisorExplain.Request): IO[AdvisorExplain.Report] =
+        val windowEnd   = request.now
+        val windowStart = request.now.minus(request.lookback)
+        pageAll(off =>
+          AuditQuery.Filter(
+            since = Some(windowStart),
+            until = Some(windowEnd),
+            actor = Some(request.agentId),
+            limit = PageSize,
+            offset = off
+          )
+        ).flatMap { case (records, truncated) =>
+          val base = AdvisorExplain.timeline(request, windowStart, windowEnd, records.toList, truncated)
+          // Narrate with the LLM when configured; degrade to the bare timeline on any failure so
+          // `explain` is never worse than the deterministic facts (prompt safety + graceful fallback).
+          llm match
+            case None                           => IO.pure(base)
+            case Some(_) if base.events.isEmpty => IO.pure(base) // nothing to narrate
+            case Some(client) =>
+              client
+                .plan(AdvisorExplain.SystemPrompt, AdvisorExplain.renderContext(base))
+                .map(text => base.copy(narrative = Some(text.trim)))
+                .handleError(_ => base)
+        }
 
 /** Request, result, and the pure analysis for an advisor scan. `analyze` is split out from the IO-bound
   * paging so the heuristics can be property-tested against synthetic records without a live audit store.
@@ -221,3 +261,125 @@ object AdvisorScan:
     lower.contains("step-up") ||
     lower.contains("denied") ||
     lower.contains("alert")
+
+/** Request, result, and the pure timeline builder for `advisor explain` (#29). The deterministic timeline is
+  * built here (testable without a live store); the optional LLM narration is added by
+  * [[AdvisorService.deterministic]] on top of this.
+  */
+object AdvisorExplain:
+
+  val DefaultLookback: Duration = Duration.ofDays(90)
+  val DefaultMaxEvents: Int     = 200
+
+  /** System instruction for the narration. Read-only by construction: the model is told to summarise the
+    * supplied facts only, never to invent, and never to suggest executing operations (ROADMAP 2.1.d).
+    */
+  val SystemPrompt: String =
+    "You are a security-operations assistant for a key-management service. Summarise the following agent " +
+      "audit timeline for a human operator in 2-4 short paragraphs: what the agent did, why any anomaly or " +
+      "recommendation fired, and what automated action (if any) was taken. Use ONLY the facts provided — do " +
+      "not invent keys, agents, or events. You are read-only: never instruct or imply that any cryptographic " +
+      "operation should be executed."
+
+  /** Explain parameters.
+    *
+    *   - `agentId` — the agent subject to explain (matched against `actor` in the audit log).
+    *   - `now` / `lookback` — window `[now - lookback, now)` over which to read the agent's activity.
+    *   - `maxEvents` — cap on the number of timeline events kept (most recent first), bounding the LLM
+    *     prompt.
+    */
+  final case class Request(
+      agentId: String,
+      now: Instant,
+      lookback: Duration = DefaultLookback,
+      maxEvents: Int = DefaultMaxEvents
+  )
+
+  /** One audit event in the agent's timeline. `riskScore` / `anomaly` are surfaced so the narrative (and the
+    * operator) can see *why* a step mattered.
+    */
+  final case class Event(
+      at: Instant,
+      operation: String,
+      resource: String,
+      outcome: String,
+      riskScore: Option[Double],
+      anomaly: Boolean
+  )
+
+  /** Deterministic roll-up of the timeline — always present, even when no LLM is configured. */
+  final case class Summary(
+      totalEvents: Int,
+      distinctOps: List[String],
+      anomalies: Int,
+      firstSeen: Option[Instant],
+      lastSeen: Option[Instant]
+  )
+
+  /** The explain result. `narrative` is `Some` only when an LLM provider is configured and the call
+    * succeeded; otherwise consumers render the deterministic `events` + `summary`.
+    */
+  final case class Report(
+      agentId: String,
+      windowStart: Instant,
+      windowEnd: Instant,
+      summary: Summary,
+      events: List[Event],
+      narrative: Option[String],
+      truncated: Boolean
+  )
+
+  /** Build the deterministic timeline + summary for an agent from its audit records (chronological). */
+  def timeline(
+      request: Request,
+      windowStart: Instant,
+      windowEnd: Instant,
+      records: List[AuditRecord],
+      truncated: Boolean
+  ): Report =
+    val chronological = records.sortBy(_.at)
+    val allEvents = chronological.map { r =>
+      Event(
+        at = r.at,
+        operation = r.operation.toString,
+        resource = r.resource,
+        outcome = r.outcome,
+        riskScore = r.context.get("risk.score").flatMap(_.toDoubleOption),
+        anomaly = AdvisorScan.isAnomalous(r.outcome)
+      )
+    }
+    // Keep the most recent `maxEvents` (then restore chronological order) so the prompt stays bounded on a
+    // very chatty agent; flag truncation so neither the operator nor the model assumes full coverage.
+    val capped    = allEvents.takeRight(request.maxEvents)
+    val wasCapped = truncated || capped.sizeIs < allEvents.size
+    val summary = Summary(
+      totalEvents = allEvents.size,
+      distinctOps = allEvents.map(_.operation).distinct.sorted,
+      anomalies = allEvents.count(_.anomaly),
+      firstSeen = allEvents.headOption.map(_.at),
+      lastSeen = allEvents.lastOption.map(_.at)
+    )
+    Report(
+      agentId = request.agentId,
+      windowStart = windowStart,
+      windowEnd = windowEnd,
+      summary = summary,
+      events = capped,
+      narrative = None,
+      truncated = wasCapped
+    )
+
+  /** Render the report as the plain-text context handed to the LLM. One line per event, plus a header so the
+    * model has the agent id and coverage. Deterministic — also reused as the CLI's human-readable timeline.
+    */
+  def renderContext(report: Report): String =
+    val header =
+      s"Agent: ${report.agentId}\nWindow: ${report.windowStart} → ${report.windowEnd}\n" +
+        s"Events: ${report.summary.totalEvents} (showing ${report.events.size}), " +
+        s"anomalies: ${report.summary.anomalies}, ops: ${report.summary.distinctOps.mkString(", ")}"
+    val lines = report.events.map { e =>
+      val risk    = e.riskScore.map(s => f" risk=$s%.2f").getOrElse("")
+      val flagged = if e.anomaly then " [ANOMALY]" else ""
+      s"- ${e.at} ${e.operation} ${e.resource} → ${e.outcome}$risk$flagged"
+    }
+    (header +: lines).mkString("\n")
