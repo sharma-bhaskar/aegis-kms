@@ -72,21 +72,33 @@ jobs:
           SHA: ${{ github.sha }}
         run: |
           SHORT_SHA="${SHA::7}"
-          # Two tags off one build — the floating ":main" pointer is what the quickstart wedge
-          # demo references; ":main-<sha>" is the immutable per-commit reference for anyone who
-          # needs reproducibility.
-          sbt \
-            -Ddocker.username="ghcr.io/${GHCR_OWNER}" \
-            "set server / Docker / dockerRepository := Some(\"ghcr.io/${GHCR_OWNER}\")" \
-            "set server / Docker / dockerUpdateLatest := false" \
-            "set server / Docker / version := \"main\"" \
-            "server / Docker / publish"
-          sbt \
-            -Ddocker.username="ghcr.io/${GHCR_OWNER}" \
-            "set server / Docker / dockerRepository := Some(\"ghcr.io/${GHCR_OWNER}\")" \
-            "set server / Docker / dockerUpdateLatest := false" \
-            "set server / Docker / version := \"main-${SHORT_SHA}\"" \
-            "server / Docker / publish"
+          # The floating ":main" pointer is what the quickstart wedge demo references; ":main-<sha>"
+          # is the immutable per-commit reference for anyone who needs reproducibility.
+          #
+          # GHCR intermittently rejects the manifest push with "unknown blob" even after every layer
+          # has uploaded — a transient registry race, NOT a build failure (the image builds + stages
+          # cleanly, and the identical Docker config pushed fine on the prior commit). Retry the
+          # publish a few times so a flaky push doesn't red-X an otherwise-good main build.
+          publish_tag() {
+            local tag="$1"
+            local attempt
+            for attempt in 1 2 3; do
+              if sbt \
+                -Ddocker.username="ghcr.io/${GHCR_OWNER}" \
+                "set server / Docker / dockerRepository := Some(\"ghcr.io/${GHCR_OWNER}\")" \
+                "set server / Docker / dockerUpdateLatest := false" \
+                "set server / Docker / version := \"${tag}\"" \
+                "server / Docker / publish"; then
+                return 0
+              fi
+              echo "::warning::docker publish of :${tag} failed (attempt ${attempt}/3); retrying in 20s"
+              sleep 20
+            done
+            echo "::error::docker publish of :${tag} failed after 3 attempts"
+            return 1
+          }
+          publish_tag "main"
+          publish_tag "main-${SHORT_SHA}"
 
       - name: Note image tags
         env:

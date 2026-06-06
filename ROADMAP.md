@@ -107,7 +107,7 @@ Non-goals: cryptographic operations, multi-cloud RoT, KMIP, MCP, OIDC. All defer
 |---|---|---|---|
 | 2.1.a | `aegis advisor scan` — finds unused keys, scope-creep, anomalies; deterministic (LLM narration via 2.1.c later) | Wedge | 🚧 |
 | 2.1.b | `aegis advisor explain <agent-id>` — human-readable timeline of why a recommendation fired | Wedge | 🔜 |
-| 2.1.c | Pluggable LLM provider (OpenAI / Anthropic / Bedrock / Ollama for local) | Wedge | 💡 |
+| 2.1.c | Pluggable LLM provider — `LlmClient` SPI + Anthropic + OpenAI + Ollama shipped (Bedrock fast-follow) | Wedge | 🚧 |
 | 2.1.d | Prompt safety: never executes mutations; structured output schemas; refuses arbitrary queries | Wedge | 🔜 |
 
 **Demo target:** "`aegis advisor scan` returns 'these 3 keys haven't been used in 60 days, these 2 agents have unusually broad scopes, there are no active anomalies.'"
