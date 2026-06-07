@@ -6,6 +6,8 @@ All notable changes to Aegis will be documented here. This project follows
 
 ## Unreleased
 
+## 0.2.1 — 2026-06-06
+
 ### Added
 
 - **`aegis advisor explain <agent-id>` — agent-session timeline + LLM narration (closes #29, ROADMAP
