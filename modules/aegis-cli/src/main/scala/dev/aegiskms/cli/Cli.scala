@@ -1,6 +1,7 @@
 package dev.aegiskms.cli
 
 import dev.aegiskms.cli.Commands.CommandResult
+import dev.aegiskms.sdk.{AegisHttpClient, HttpPort}
 
 /** The `aegis` admin CLI entry point.
   *

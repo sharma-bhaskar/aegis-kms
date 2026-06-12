@@ -115,6 +115,11 @@ object Server extends IOApp.Simple:
     val port = rootConfig.getInt("aegis.http.port")
 
     for
+      // 0. Production preflight (#99): cross-checks the bind address against dev-grade settings
+      //    (dev auth, dev policy, in-memory crypto/journal). `warn` (default) prints a banner;
+      //    `enforce` aborts the boot before any resource is acquired.
+      _ <- Resource.eval(Preflight.run(rootConfig))
+
       // 1. Meter registry. Standard JVM binders are AutoCloseable (the JvmGcMetrics binder installs JMX
       //    listeners) so we close it on shutdown.
       metricsRegistry <- meterRegistryResource

@@ -1,7 +1,8 @@
 package dev.aegiskms.cli
 
-import dev.aegiskms.cli.AegisHttpClient.{ClientError, renderError}
-import dev.aegiskms.cli.WireFormats.{
+import dev.aegiskms.sdk.AegisHttpClient
+import dev.aegiskms.sdk.AegisHttpClient.{ClientError, renderError}
+import dev.aegiskms.sdk.WireFormats.{
   AdvisorExplainResponseDto,
   AdvisorScanResponseDto,
   AuditRecordDto,

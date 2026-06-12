@@ -1,24 +1,33 @@
-package dev.aegiskms.cli
+package dev.aegiskms.sdk
 
-import dev.aegiskms.cli.WireFormats.*
+import dev.aegiskms.sdk.WireFormats.*
 import io.circe.Decoder
 import io.circe.parser.*
 import io.circe.syntax.*
 
-/** Typed wrapper over `HttpPort` exposing the Aegis REST surface in the four shapes the CLI cares about:
-  * create / get / activate / destroy. The methods return `Either[ClientError, A]` so the CLI's command layer
-  * can map errors into exit codes without exception handling spread across every subcommand.
+/** Typed, blocking client over the Aegis REST surface. The methods return `Either[ClientError, A]` so callers
+  * can map errors into their own failure channel without exception handling spread across every call site.
+  *
+  * Authentication is either a dev-mode principal (`X-Aegis-User` header, workstation servers only) or a
+  * bearer JWT (`Authorization: Bearer …`, the production path). Use the factories on [[AegisClient]] rather
+  * than constructing this directly unless you need to inject a custom [[HttpPort]].
   *
   * Why not return `KmsErrorDto` directly? Because the failure could be a network blip, a JSON decode
   * mismatch, or the server returning HTML on a misconfigured ingress. We model those uniformly as
-  * [[ClientError]] and let the command formatter render whichever variant happened.
+  * [[AegisHttpClient.ClientError]] and let the caller render whichever variant happened.
   */
-final class AegisHttpClient(http: HttpPort, baseUrl: String, principal: Option[String]):
+final class AegisHttpClient(
+    http: HttpPort,
+    baseUrl: String,
+    principal: Option[String],
+    token: Option[String] = None
+):
 
   import AegisHttpClient.*
 
   private val baseHeaders: Map[String, String] =
-    principal.fold(Map.empty[String, String])(p => Map("X-Aegis-User" -> p))
+    principal.fold(Map.empty[String, String])(p => Map("X-Aegis-User" -> p)) ++
+      token.fold(Map.empty[String, String])(t => Map("Authorization" -> s"Bearer $t"))
 
   def createKey(spec: KeySpecDto): Either[ClientError, ManagedKeyDto] =
     val body = CreateKeyRequest(spec).asJson.noSpaces
@@ -140,13 +149,8 @@ final class AegisHttpClient(http: HttpPort, baseUrl: String, principal: Option[S
       limit.map(v => "limit" -> v.toString),
       offset.map(v => "offset" -> v.toString)
     ).flatten
-    val qs =
-      if params.isEmpty then ""
-      else
-        params.map { case (k, v) =>
-          s"$k=${java.net.URLEncoder.encode(v, java.nio.charset.StandardCharsets.UTF_8)}"
-        }.mkString("?", "&", "")
-    val res = http.execute(HttpPort.Request("GET", url(s"/v1/audit$qs"), baseHeaders, None))
+    val res =
+      http.execute(HttpPort.Request("GET", url(s"/v1/audit${queryString(params)}"), baseHeaders, None))
     res.status match
       case 200    => decodeBody[AuditQueryResponseDto](res.body)
       case status => Left(toError(status, res.body))
@@ -166,13 +170,8 @@ final class AegisHttpClient(http: HttpPort, baseUrl: String, principal: Option[S
       broadScope.map(v => "broadScope" -> v.toString),
       top.map(v => "top" -> v.toString)
     ).flatten
-    val qs =
-      if params.isEmpty then ""
-      else
-        params.map { case (k, v) =>
-          s"$k=${java.net.URLEncoder.encode(v, java.nio.charset.StandardCharsets.UTF_8)}"
-        }.mkString("?", "&", "")
-    val res = http.execute(HttpPort.Request("GET", url(s"/v1/advisor/scan$qs"), baseHeaders, None))
+    val res =
+      http.execute(HttpPort.Request("GET", url(s"/v1/advisor/scan${queryString(params)}"), baseHeaders, None))
     res.status match
       case 200    => decodeBody[AdvisorScanResponseDto](res.body)
       case status => Left(toError(status, res.body))
@@ -189,15 +188,16 @@ final class AegisHttpClient(http: HttpPort, baseUrl: String, principal: Option[S
       lookbackDays.map(v => "lookbackDays" -> v.toString),
       maxEvents.map(v => "maxEvents" -> v.toString)
     ).flatten
-    val qs =
-      if params.isEmpty then ""
-      else
-        params.map { case (k, v) =>
-          s"$k=${java.net.URLEncoder.encode(v, java.nio.charset.StandardCharsets.UTF_8)}"
-        }.mkString("?", "&", "")
     val encodedId = java.net.URLEncoder.encode(agentId, java.nio.charset.StandardCharsets.UTF_8)
     val res =
-      http.execute(HttpPort.Request("GET", url(s"/v1/advisor/explain/$encodedId$qs"), baseHeaders, None))
+      http.execute(
+        HttpPort.Request(
+          "GET",
+          url(s"/v1/advisor/explain/$encodedId${queryString(params)}"),
+          baseHeaders,
+          None
+        )
+      )
     res.status match
       case 200    => decodeBody[AdvisorExplainResponseDto](res.body)
       case status => Left(toError(status, res.body))
@@ -207,6 +207,13 @@ final class AegisHttpClient(http: HttpPort, baseUrl: String, principal: Option[S
   private def url(path: String): String =
     val base = if baseUrl.endsWith("/") then baseUrl.dropRight(1) else baseUrl
     s"$base$path"
+
+  private def queryString(params: List[(String, String)]): String =
+    if params.isEmpty then ""
+    else
+      params.map { case (k, v) =>
+        s"$k=${java.net.URLEncoder.encode(v, java.nio.charset.StandardCharsets.UTF_8)}"
+      }.mkString("?", "&", "")
 
   private def decodeBody[A](body: String)(using Decoder[A]): Either[ClientError, A] =
     decode[A](body).left.map(e => ClientError.Decode(e.getMessage, body))
@@ -226,7 +233,7 @@ object AegisHttpClient:
     case Raw(status: Int, body: String)
     case Decode(message: String, body: String)
 
-  /** Render an error for the CLI user. Single source of formatting so all commands print the same way. */
+  /** Render an error for a human. Single source of formatting so all callers print the same way. */
   def renderError(err: ClientError): String = err match
     case ClientError.Server(status, code, message) => s"server returned $status $code: $message"
     case ClientError.Raw(status, body) =>

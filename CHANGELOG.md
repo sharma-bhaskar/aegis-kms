@@ -6,6 +6,32 @@ All notable changes to Aegis will be documented here. This project follows
 
 ## Unreleased
 
+### Added
+
+- **Real SDKs — `aegis-sdk-scala` + `aegis-sdk-java` now work (closes #98, ROADMAP 2.2.a).** Both published
+  SDK artifacts previously threw on their only entry point (`NotImplementedError` /
+  `UnsupportedOperationException`). The CLI's tested blocking client (`AegisHttpClient` + `WireFormats` +
+  `HttpPort`) moved down into `aegis-sdk-scala` under `dev.aegiskms.sdk`, gaining bearer-token auth
+  (`Authorization: Bearer <jwt>`) alongside the dev `X-Aegis-User` header. `AegisClient.https(baseUrl, token)`
+  / `AegisClient.dev(baseUrl, principal)` return a working client with full REST coverage (key lifecycle,
+  sign/verify, encrypt/decrypt, wrap/unwrap, rotate/compromise, agent issuance, audit read, advisor).
+  `aegis-sdk-java`'s `AegisClientJ` is now a thin pure-Java delegate over the new `javadsl.AegisJavaClient`:
+  `java.util` collections in, wire DTOs out, failures as one `AegisClientException`. The CLI consumes the SDK
+  client, so the wire code exists exactly once.
+
+- **Production preflight (closes #99, ROADMAP 2.2.b).** `Server.boot` step 0 cross-checks the bind address
+  against dev-grade settings (`auth.kind=dev`, `policy.kind=dev`, `crypto.kind=in-memory`,
+  `journal.kind=in-memory`). Loopback binds always pass. On a network-reachable bind,
+  `aegis.security.preflight=warn` (default) prints one unmissable banner listing each finding and its risk;
+  `enforce` (set `AEGIS_SECURITY_PREFLIGHT=enforce` — recommended for production) refuses to boot before any
+  resource is acquired.
+
+### Changed
+
+- **CLI wire DTOs moved package.** `dev.aegiskms.cli.{AegisHttpClient, WireFormats, HttpPort}` are now
+  `dev.aegiskms.sdk.*` (the CLI re-uses them from the SDK). Source-breaking only for code that imported the
+  CLI's internals — the CLI itself is unchanged on the command line.
+
 ## 0.2.1 — 2026-06-06
 
 ### Added

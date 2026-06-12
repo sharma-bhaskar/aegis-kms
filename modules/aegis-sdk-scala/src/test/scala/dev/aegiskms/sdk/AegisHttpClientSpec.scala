@@ -1,7 +1,7 @@
-package dev.aegiskms.cli
+package dev.aegiskms.sdk
 
-import dev.aegiskms.cli.AegisHttpClient.ClientError
-import dev.aegiskms.cli.WireFormats.*
+import dev.aegiskms.sdk.AegisHttpClient.ClientError
+import dev.aegiskms.sdk.WireFormats.*
 import io.circe.syntax.*
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatest.matchers.should.Matchers
@@ -218,6 +218,18 @@ final class AegisHttpClientSpec extends AnyFunSuite with Matchers:
     seen.get.method shouldBe "POST"
     seen.get.url shouldBe s"$baseUrl/v1/keys/${sampleKey.id}/rotate"
     seen.get.body.get should include("\"policy\":\"Manual\"")
+  }
+
+  test("a bearer token is sent as Authorization: Bearer and the dev header is omitted") {
+    var seen: Option[HttpPort.Request] = None
+    val port = new RecordingPort(req => {
+      seen = Some(req)
+      HttpPort.Response(200, sampleKey.asJson.noSpaces)
+    })
+    val client = new AegisHttpClient(port, baseUrl, principal = None, token = Some("jwt-abc"))
+    val _      = client.getKey(sampleKey.id)
+    seen.get.headers.get("Authorization") shouldBe Some("Bearer jwt-abc")
+    seen.get.headers.contains("X-Aegis-User") shouldBe false
   }
 
   // ── Stub ────────────────────────────────────────────────────────────────────
