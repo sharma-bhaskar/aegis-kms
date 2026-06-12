@@ -1,11 +1,11 @@
-package dev.aegiskms.cli
+package dev.aegiskms.sdk
 
 import java.net.URI
 import java.net.http.{HttpClient, HttpRequest, HttpResponse}
 import java.time.Duration
 
-/** A tiny HTTP seam used by the CLI. Two reasons it exists:
-  *   - JDK's `HttpClient` works fine for the CLI's needs but is awkward to mock; this port lets tests inject
+/** A tiny HTTP seam used by the SDK (and the `aegis` CLI on top of it). Two reasons it exists:
+  *   - JDK's `HttpClient` works fine for the SDK's needs but is awkward to mock; this port lets tests inject
   *     a hand-rolled stub that records calls and returns canned responses, with no network boot.
   *   - It pins the exact wire shape (method/url/headers/body) we depend on, so we can route requests through
   *     a different backend later (for example, an in-process route interpreter for testing).
@@ -25,7 +25,7 @@ object HttpPort:
   final case class Response(status: Int, body: String)
 
   /** Default JDK-backed implementation. Uses `HttpClient.newHttpClient()` with a per-request timeout so a
-    * misconfigured server URL doesn't hang the CLI indefinitely.
+    * misconfigured server URL doesn't hang the caller indefinitely.
     */
   def jdk(timeout: Duration = Duration.ofSeconds(15)): HttpPort = new HttpPort:
     private val client = HttpClient.newHttpClient()

@@ -1,16 +1,16 @@
-package dev.aegiskms.cli
+package dev.aegiskms.sdk
 
 import io.circe.*
 import io.circe.generic.semiauto.*
 
 import java.time.Instant
 
-/** Wire DTOs the CLI exchanges with the Aegis server.
+/** Wire DTOs the SDK (and the `aegis` CLI on top of it) exchanges with the Aegis server.
   *
   * These mirror the shapes in `aegis-http`'s `JsonCodecs` but are duplicated here on purpose: depending on
-  * `aegis-http` would drag Tapir + pekko-http into the CLI, which doubles its packaged size and slows boot.
-  * The shapes are small and stable; if they ever drift, the integration tests in `aegis-http` will fail
-  * loudly because they exercise the same JSON.
+  * `aegis-http` would drag Tapir + pekko-http into every SDK consumer, which breaks the library-tier rule and
+  * doubles the CLI's packaged size. The shapes are small and stable; if they ever drift, the integration
+  * tests in `aegis-http` will fail loudly because they exercise the same JSON.
   */
 object WireFormats:
 

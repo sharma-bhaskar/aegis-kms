@@ -60,6 +60,16 @@ network you do not fully control must use `AEGIS_AUTH_KIND=hmac` (HS256
 JWT) or `AEGIS_AUTH_KIND=oidc` (OIDC / JWKS verification with RS256/ES256,
 shipped in v0.2.0).
 
+### Production preflight
+
+At boot, Aegis cross-checks the bind address against every dev-grade setting
+(`AEGIS_AUTH_KIND=dev`, `AEGIS_POLICY_KIND=dev`, `AEGIS_CRYPTO_KIND=in-memory`,
+`AEGIS_JOURNAL_KIND=in-memory`). Loopback binds always pass. On a
+network-reachable bind, the default mode (`AEGIS_SECURITY_PREFLIGHT=warn`)
+prints one unmissable banner listing each finding; production deployments
+should set `AEGIS_SECURITY_PREFLIGHT=enforce`, which refuses to boot instead
+(#99) — a crashed pod is cheaper than an open KMS.
+
 ### TLS termination
 
 Aegis-KMS does not yet ship its own TLS listener. Production deployments

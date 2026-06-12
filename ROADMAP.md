@@ -99,18 +99,30 @@ Non-goals: cryptographic operations, multi-cloud RoT, KMIP, MCP, OIDC. All defer
 
 ---
 
-### v0.2.1 — LLM advisor
+### v0.2.1 — LLM advisor ✅ *shipped*
 
 **Theme:** read-only AI assistant that explains the audit log to operators.
 
 | # | Capability | Area | Status |
 |---|---|---|---|
-| 2.1.a | `aegis advisor scan` — finds unused keys, scope-creep, anomalies; deterministic (LLM narration via 2.1.c later) | Wedge | 🚧 |
-| 2.1.b | `aegis advisor explain <agent-id>` — human-readable timeline of why a recommendation fired | Wedge | 🚧 |
-| 2.1.c | Pluggable LLM provider — `LlmClient` SPI + Anthropic + OpenAI + Ollama shipped (Bedrock fast-follow) | Wedge | 🚧 |
-| 2.1.d | Prompt safety: read-only system prompt, bounded structured input, graceful LLM-failure fallback | Wedge | 🚧 |
+| 2.1.a | `aegis advisor scan` — finds unused keys, scope-creep, anomalies; deterministic (LLM narration via 2.1.c later) | Wedge | ✅ |
+| 2.1.b | `aegis advisor explain <agent-id>` — human-readable timeline of why a recommendation fired | Wedge | ✅ |
+| 2.1.c | Pluggable LLM provider — `LlmClient` SPI + Anthropic + OpenAI + Ollama shipped (Bedrock fast-follow) | Wedge | ✅ |
+| 2.1.d | Prompt safety: read-only system prompt, bounded structured input, graceful LLM-failure fallback | Wedge | ✅ |
 
 **Demo target:** "`aegis advisor scan` returns 'these 3 keys haven't been used in 60 days, these 2 agents have unusually broad scopes, there are no active anomalies.'"
+
+---
+
+### v0.2.2 — Hardening fix pass
+
+**Theme:** remove the things a first-time evaluator hits in their first ten minutes.
+
+| # | Capability | Area | Status |
+|---|---|---|---|
+| 2.2.a | Real SDKs — `aegis-sdk-scala` full REST coverage + working Java facade, replacing the `NotImplementedError` stubs (#98) | Platform | 🚧 |
+| 2.2.b | Production preflight — warn/enforce when dev-grade settings bind a non-loopback address (#99) | Platform | 🚧 |
+| 2.2.c | Issue hygiene — tracking issues for journal snapshotting (#100), agent registry (#101), kill-switch (#102), v1.0.0 rows (#103–#107) | Platform | 🚧 |
 
 ---
 
@@ -279,8 +291,8 @@ The release tables above slice the work by milestone. The tables below slice by 
 
 | Capability | Status | Tracking |
 |---|---|---|
-| Agent registry (list all live agents, parents, scopes, last activity) | 🔜 v0.3.0 | `area/ai-governance` |
-| Agent kill-switch ("revoke all agents under alice@org issued in 24h") | 🔜 v0.3.0 | `area/ai-governance area/auto-response` |
+| Agent registry (list all live agents, parents, scopes, last activity) | 🔜 v0.3.0 | #101 |
+| Agent kill-switch ("revoke all agents under alice@org issued in 24h") | 🔜 v0.3.0 | #102 |
 | Per-prompt accountability (record originating LLM prompt) | 💡 v0.4.0 | `area/ai-governance area/wire/mcp` |
 | Model identifier in audit (`actor.model = "..."`) | 💡 v0.4.0 | `area/ai-governance area/audit` |
 | Token cost / op-rate tracking per agent | 💡 v0.4.0+ | `area/ai-governance` |
@@ -323,8 +335,8 @@ The release tables above slice the work by milestone. The tables below slice by 
 
 | SDK | Status | Tracking |
 |---|---|---|
-| Scala SDK (`aegis-sdk-scala`) — full REST coverage | ⚠️ skeleton | v0.3.0 |
-| Java SDK (`aegis-sdk-java`) — full REST coverage | ⚠️ skeleton | v0.3.0 |
+| Scala SDK (`aegis-sdk-scala`) — full REST coverage | 🚧 v0.2.2 (#98) | — |
+| Java SDK (`aegis-sdk-java`) — key ops + agent issuance facade | 🚧 v0.2.2 (#98) | full audit/advisor coverage later |
 | Kotlin coroutines wrapper | 💡 | community welcome |
 | TypeScript / Node SDK | 💡 | community welcome |
 | Python SDK | 💡 | community welcome |

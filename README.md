@@ -24,13 +24,15 @@
 
 ---
 
-> **v0.2.0 — pre-alpha.** The crypto surface is real and end-to-end (sign / verify / encrypt /
-> decrypt / wrap / unwrap / rotate / compromise) on REST + CLI, with JWT + OIDC auth, Postgres /
-> MySQL / SQLite event journals, Prometheus metrics, OpenTelemetry tracing, OpenAPI on `/docs/`,
-> and the full wedge: a baseline anomaly engine + honey-key trip wire feeding a risk scorer,
-> decision adapter, and auto-responder, plus agent-token issuance, Redis-backed JWT revocation,
-> and SIEM / Kafka / NATS audit fan-out. Multi-cloud root-of-trust (GCP / Azure / Vault), KMIP,
-> and the MCP-native server land in v0.3.0+. See [the status table](https://sharma-bhaskar.github.io/aegis-kms/about/status/)
+> **v0.2.1 — pre-alpha.** The crypto surface is real and end-to-end (sign / verify / encrypt /
+> decrypt / wrap / unwrap / rotate / compromise) on REST + CLI + SDK, with JWT + OIDC auth,
+> Postgres / MySQL / SQLite event journals, Prometheus metrics, OpenTelemetry tracing, OpenAPI on
+> `/docs/`, and the full wedge: a baseline anomaly engine + honey-key trip wire feeding a risk
+> scorer, decision adapter, and auto-responder, plus agent-token issuance, Redis-backed JWT
+> revocation, SIEM / Kafka / NATS audit fan-out, and a read-only LLM advisor (`advisor scan` /
+> `advisor explain`, with pluggable Anthropic / OpenAI / Ollama narration). Multi-cloud
+> root-of-trust (GCP / Azure / Vault), KMIP, and the MCP-native server land in v0.3.0+. See
+> [the status table](https://sharma-bhaskar.github.io/aegis-kms/about/status/)
 > for the per-capability split.
 
 ## 🤔 Why Aegis exists
@@ -154,7 +156,7 @@ embed in any JVM app; server-tier modules add the actor system, HTTP, and proces
 | `aegis-audit` | Library | `AuditSink` SPI + auditing decorator |
 | `aegis-crypto` | Library | `RootOfTrust` SPI + AWS KMS adapter |
 | `aegis-persistence` | Library | Doobie event journal (Postgres / MySQL / SQLite / in-memory) |
-| `aegis-sdk-scala` / `aegis-sdk-java` | Library | Client SDKs *(skeleton — full REST coverage in v0.3.0)* |
+| `aegis-sdk-scala` / `aegis-sdk-java` | Library | Client SDKs — full REST coverage (Scala) + pure-Java facade |
 | `aegis-http` | Server | Tapir REST + OpenAPI 3.1 |
 | `aegis-agent-ai` | Server | Anomaly engine + risk scorer + auto-responder |
 | `aegis-server` | Server | Boot wiring, Prometheus, OTel, Pekko actor |
@@ -165,7 +167,7 @@ embed in any JVM app; server-tier modules add the actor system, HTTP, and proces
 
 ## 🗺️ Status
 
-**v0.2.0 (latest, pre-alpha)** — the agent-aware wedge, end-to-end.
+**v0.2.1 (latest, pre-alpha)** — the agent-aware wedge, end-to-end, plus the LLM advisor.
 
 <details>
 <summary>Per-release breakdown</summary>
@@ -173,9 +175,11 @@ embed in any JVM app; server-tier modules add the actor system, HTTP, and proces
 <br>
 
 - **v0.1.1** — full crypto surface, observability (Prometheus + OTel), 5-detector anomaly engine.
-- **v0.2.0** *(latest)* — risk scorer, decision adapter, auto-responder, honey keys; agent-token
+- **v0.2.0** — risk scorer, decision adapter, auto-responder, honey keys; agent-token
   issuance + OIDC / JWKS; Redis JWT revocation; role-based policy engine; Postgres audit table +
   `GET /v1/audit`; SIEM / Kafka / NATS audit fan-out; MySQL + SQLite journals.
+- **v0.2.1** *(latest)* — read-only LLM advisor: deterministic `advisor scan` triage,
+  `advisor explain` agent timeline, pluggable Anthropic / OpenAI / Ollama narration.
 - **v0.3.0+** — multi-cloud root-of-trust (GCP / Azure / Vault), Helm chart, time-windowed access;
   then KMIP wire plane + MCP-native server (v0.4.0).
 
@@ -198,6 +202,10 @@ the library tier must remain Pekko-free; CHANGELOG updates land in the same PR a
 
 Please do **not** open a public issue for a security report. See [SECURITY.md](SECURITY.md) for the
 disclosure process and the deploy-time configuration matrix.
+
+Deploying for real? Set `AEGIS_SECURITY_PREFLIGHT=enforce` — the boot preflight then refuses to
+bind a network-reachable address while dev-grade settings (dev auth / dev policy, in-memory
+crypto / journal) are active, instead of just printing a warning banner.
 
 ## 📄 License
 

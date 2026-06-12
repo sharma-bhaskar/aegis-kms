@@ -1,6 +1,7 @@
 package dev.aegiskms.cli
 
-import dev.aegiskms.cli.WireFormats.*
+import dev.aegiskms.sdk.WireFormats.*
+import dev.aegiskms.sdk.{AegisHttpClient, HttpPort}
 import io.circe.syntax.*
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatest.matchers.should.Matchers
