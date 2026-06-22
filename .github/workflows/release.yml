@@ -40,7 +40,7 @@ jobs:
       SONATYPE_PASSWORD: ${{ secrets.SONATYPE_PASSWORD }}
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           # sbt-ci-release derives the version from `git describe`; full history is required.
           fetch-depth: 0
