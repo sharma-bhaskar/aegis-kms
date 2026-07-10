@@ -34,7 +34,7 @@ jobs:
     timeout-minutes: 25
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           # sbt-dynver derives the version from `git describe`; full history avoids the
           # "fatal: no names found" warning that otherwise spams the build log.
