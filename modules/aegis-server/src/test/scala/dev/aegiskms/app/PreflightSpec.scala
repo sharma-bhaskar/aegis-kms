@@ -48,6 +48,24 @@ final class PreflightSpec extends AnyFunSuite with Matchers:
     Preflight.findings(cfg(hardened)) shouldBe empty
   }
 
+  test("the software root-of-trust is still a finding — real crypto, but keys in the server's heap") {
+    val found  = Preflight.findings(cfg("""aegis.crypto.kind = "software" """))
+    val crypto = found.find(_.path == "aegis.crypto.kind")
+    crypto.map(_.value) shouldBe Some("software")
+    crypto.map(_.risk).getOrElse("") should include("heap")
+  }
+
+  test("swapping in-memory crypto for software does not clear the other findings") {
+    val hocon = """
+      aegis.auth.kind                = "hmac"
+      aegis.auth.hmac.secret         = "0123456789abcdef0123456789abcdef"
+      aegis.policy.kind              = "role-based"
+      aegis.crypto.kind              = "software"
+      aegis.persistence.journal.kind = "postgres"
+    """
+    Preflight.findings(cfg(hocon)).map(_.path) shouldBe List("aegis.crypto.kind")
+  }
+
   test("warn mode (the default) lets the dev defaults boot on 0.0.0.0") {
     noException should be thrownBy Preflight.run(cfg("")).unsafeRunSync()
   }

@@ -5,8 +5,11 @@ import cats.effect.unsafe.IORuntime
 import com.typesafe.config.ConfigFactory
 import dev.aegiskms.crypto.RootOfTrust
 import dev.aegiskms.crypto.aws.AwsKmsRootOfTrust
+import dev.aegiskms.crypto.software.SoftwareRootOfTrust
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatest.matchers.should.Matchers
+
+import java.nio.file.{Files, Path}
 
 /** Unit tests for `Server.rootOfTrustResource`. Verifies the config-driven RoT selection that closes the "AWS
   * KMS shipped but not wired" gap surfaced in the v0.2.0 readiness audit.
@@ -96,11 +99,72 @@ final class RootOfTrustResourceSpec extends AnyFunSuite with Matchers:
     ex.getMessage should include("aegis.crypto.aws-kms.kek-arn")
   }
 
+  test("kind=software with no keystore path yields an ephemeral SoftwareRootOfTrust") {
+    val rot = invoke(cfg("""aegis.crypto.kind = "software" """)).use(IO.pure).unsafeRunSync()
+    rot shouldBe a[SoftwareRootOfTrust]
+  }
+
+  test("kind=software with a path + password creates the keystore file at boot") {
+    withTempDir { dir =>
+      val path = dir.resolve("keystore.p12")
+      val hocon = s"""
+        aegis.crypto {
+          kind = "software"
+          software {
+            keystore-path     = "$path"
+            keystore-password = "boot-password"
+          }
+        }
+      """
+      val rot = invoke(cfg(hocon)).use(IO.pure).unsafeRunSync()
+
+      rot shouldBe a[SoftwareRootOfTrust]
+      Files.exists(path) shouldBe true
+    }
+  }
+
+  test("kind=software with a path but no password fails at boot (no unprotected keystore)") {
+    withTempDir { dir =>
+      val hocon = s"""
+        aegis.crypto {
+          kind = "software"
+          software {
+            keystore-path     = "${dir.resolve("keystore.p12")}"
+            keystore-password = ""
+          }
+        }
+      """
+      val ex = intercept[IllegalArgumentException] {
+        invoke(cfg(hocon)).use(IO.pure).unsafeRunSync()
+      }
+      ex.getMessage should include("keystore-password")
+    }
+  }
+
+  test("a whitespace-only keystore path is treated as unset, not as a filename") {
+    val hocon = """
+      aegis.crypto {
+        kind = "software"
+        software.keystore-path = "   "
+      }
+    """
+    invoke(cfg(hocon)).use(IO.pure).unsafeRunSync() shouldBe a[SoftwareRootOfTrust]
+  }
+
   test("unknown kind fails fast with a clear error message") {
     val ex = intercept[IllegalArgumentException] {
       invoke(cfg("""aegis.crypto.kind = "softhsm" """)).use(IO.pure).unsafeRunSync()
     }
     ex.getMessage should include("Unknown aegis.crypto.kind=softhsm")
     ex.getMessage should include("'in-memory'")
+    ex.getMessage should include("'software'")
     ex.getMessage should include("'aws-kms'")
   }
+
+  private def withTempDir(f: Path => Any): Unit =
+    val dir = Files.createTempDirectory("aegis-rot-resource")
+    try
+      f(dir)
+      ()
+    finally
+      Files.walk(dir).sorted(java.util.Comparator.reverseOrder()).forEach(Files.deleteIfExists(_))

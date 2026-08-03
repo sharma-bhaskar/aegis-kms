@@ -715,10 +715,48 @@ configuration matrix.
 
 ---
 
-## Step 19 — Configure AWS KMS as the Root of Trust (production)
+## Step 19 — Choose a Root of Trust
 
-The InMemory RoT is fine for the walkthrough. In production, swap in `AwsKmsRootOfTrust` so
-key material lives in AWS KMS hardware-backed CMKs and never touches Aegis's process memory.
+`AEGIS_CRYPTO_KIND` selects which backend actually performs the cryptography. Three ship today:
+
+| `AEGIS_CRYPTO_KIND` | What it does | Use it for |
+| --- | --- | --- |
+| `in-memory` (default) | Deterministic MAC. `sign` is `HMAC(KeyId, msg)`; `encrypt` is XOR-with-keystream. **Not cryptography** — it exists so the wire surfaces round-trip. | The quickstart above; nothing else |
+| `software` | Real AES-256-GCM, RSA-PSS-SHA-256 and ECDSA-P-256 from the JDK's own JCE providers, keyed from a PKCS#12 keystore. No cloud account, no network call. | CI, integration tests, and evaluating Aegis without AWS credentials |
+| `aws-kms` | Every operation executes inside AWS KMS against a CMK. Key material never enters Aegis's process. | Production |
+
+### The software backend
+
+This is the one to reach for when you want the real crypto paths without an AWS account —
+signatures that actually verify against a public key, ciphertext that is actually ciphertext:
+
+```bash
+export AEGIS_CRYPTO_KIND=software
+# Optional: persist key material across restarts. Omit both to get an ephemeral keystore
+# whose keys vanish when the JVM exits (the right choice in CI).
+export AEGIS_CRYPTO_SOFTWARE_KEYSTORE_PATH=/var/lib/aegis/keystore.p12
+export AEGIS_CRYPTO_SOFTWARE_KEYSTORE_PASSWORD='<a real password>'
+```
+
+The keystore file is created with owner-only permissions and holds raw key material protected
+only by that password — back it up and guard it exactly as you would a TLS private key. Losing
+it makes every key wrapped against it unrecoverable.
+
+`aegis key rotate` mints a new KEK generation inside the keystore and leaves earlier generations
+in place, so material wrapped before a rotation still unwraps afterwards. The generation number
+travels in the ciphertext header.
+
+**It is not a production backend.** The KEK and the signing private keys live in the server's
+JVM heap, so a heap dump, a `/proc/<pid>/mem` read, or an RCE in the server exposes every key it
+ever wrapped — none of which is true of AWS KMS or a PKCS#11 HSM. Aegis will not let you forget:
+selecting it logs a warning banner at boot, and the boot preflight reports it as a dev-grade
+setting, so `AEGIS_SECURITY_PREFLIGHT=enforce` refuses to bind a network-reachable address with
+it configured.
+
+### AWS KMS (production)
+
+In production, swap in `AwsKmsRootOfTrust` so key material lives in AWS KMS hardware-backed CMKs
+and never touches Aegis's process memory.
 
 Required AWS IAM permissions:
 

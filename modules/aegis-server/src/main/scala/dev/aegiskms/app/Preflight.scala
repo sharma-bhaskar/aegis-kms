@@ -55,6 +55,16 @@ object Preflight:
           "deterministic-MAC dev backend — not real cryptography; never protects production data"
         )
       ),
+      // `software` does real AES-GCM / RSA-PSS / ECDSA, so it is a much smaller finding than `in-memory` —
+      // but the KEK and signing keys sit in this JVM's heap rather than behind a KMS or HSM boundary, which
+      // is exactly the property a network-reachable key-management service must not have.
+      Option.when(config.getString("aegis.crypto.kind") == "software")(
+        Finding(
+          "aegis.crypto.kind",
+          "software",
+          "key material lives in the server's heap — a heap dump or RCE exposes every key it ever wrapped"
+        )
+      ),
       Option.when(config.getString("aegis.persistence.journal.kind") == "in-memory")(
         Finding(
           "aegis.persistence.journal.kind",
