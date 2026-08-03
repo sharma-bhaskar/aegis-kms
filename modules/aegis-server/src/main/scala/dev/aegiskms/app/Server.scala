@@ -27,6 +27,7 @@ import dev.aegiskms.audit.{
 }
 import dev.aegiskms.crypto.RootOfTrust
 import dev.aegiskms.crypto.aws.AwsKmsRootOfTrust
+import dev.aegiskms.crypto.software.SoftwareRootOfTrust
 import dev.aegiskms.http.HttpRoutes
 import dev.aegiskms.iam.{
   AgentTokenIssuer,
@@ -57,6 +58,7 @@ import org.apache.pekko.http.scaladsl.server.Directives.concat
 import org.apache.pekko.util.Timeout
 import org.slf4j.LoggerFactory
 
+import java.nio.file.Paths
 import scala.concurrent.duration.*
 
 /** Standalone entry point for Aegis-KMS.
@@ -343,14 +345,18 @@ object Server extends IOApp.Simple:
     *   - `aegis.crypto.kind=in-memory` (default) — deterministic-MAC dev backend. **Not a real KMS** —
     *     signatures are HMAC(KeyId, msg), encryption is XOR-with-stream. Suitable for local development, the
     *     wedge demo, and integration tests; never for production data.
+    *   - `aegis.crypto.kind=software` — `SoftwareRootOfTrust`: real AES-256-GCM / RSA-PSS / ECDSA from the
+    *     JDK's own JCE providers, keyed from a PKCS#12 keystore. Real cryptography with no cloud account, so
+    *     it is the right choice for CI and for evaluating Aegis without AWS credentials. **Still not
+    *     production** — key material lives in this JVM's heap; `Preflight` flags it accordingly.
     *   - `aegis.crypto.kind=aws-kms` — `AwsKmsRootOfTrust` against the configured AWS region with a
     *     Resource-managed `KmsClient` (closed on SIGTERM). Requires `aegis.crypto.aws-kms.region` and
     *     `aegis.crypto.aws-kms.kek-arn` to be set; the AWS SDK's default credential provider chain handles
     *     authentication (env vars, instance metadata, SSO, etc. — see the AWS SDK docs).
     *
     * GCP / Azure / Vault / PKCS#11 adapters are roadmapped for v0.3.0 / v0.4.0; until they ship, this method
-    * only knows about `in-memory` and `aws-kms`. Misconfiguration fails fast at boot — silent fallback to the
-    * dev backend would be a security hole.
+    * only knows about `in-memory`, `software`, and `aws-kms`. Misconfiguration fails fast at boot — silent
+    * fallback to a dev backend would be a security hole.
     */
   private def rootOfTrustResource(config: Config): Resource[IO, RootOfTrust[IO]] =
     config.getString("aegis.crypto.kind") match
@@ -362,6 +368,22 @@ object Server extends IOApp.Simple:
           )
           RootOfTrust.inMemory
         })
+      case "software" =>
+        val path     = config.getString("aegis.crypto.software.keystore-path").trim
+        val password = config.getString("aegis.crypto.software.keystore-password")
+        if path.nonEmpty && password.isEmpty then
+          Resource.eval(IO.raiseError(new IllegalArgumentException(
+            "aegis.crypto.software.keystore-path is set but keystore-password is empty " +
+              "(set AEGIS_CRYPTO_SOFTWARE_KEYSTORE_PASSWORD)"
+          )))
+        else
+          val cfg = SoftwareRootOfTrust.Config(
+            keystorePath = Option.when(path.nonEmpty)(Paths.get(path)),
+            keystorePassword = password
+          )
+          Resource.eval(IO(logger.info(
+            s"crypto: software (keystore=${if path.isEmpty then "ephemeral" else path})"
+          ))) *> SoftwareRootOfTrust.resource(cfg).widen
       case "aws-kms" =>
         val region = config.getString("aegis.crypto.aws-kms.region")
         val kekArn = config.getString("aegis.crypto.aws-kms.kek-arn")
@@ -379,7 +401,7 @@ object Server extends IOApp.Simple:
           ))) *> AwsKmsRootOfTrust.resource(AwsKmsRootOfTrust.Config(region, kekArn)).widen
       case other =>
         Resource.eval(IO.raiseError(new IllegalArgumentException(
-          s"Unknown aegis.crypto.kind=$other (expected 'in-memory' or 'aws-kms')"
+          s"Unknown aegis.crypto.kind=$other (expected 'in-memory', 'software', or 'aws-kms')"
         )))
 
   /** Actor system as a Resource. `terminate()` returns `Future[Terminated]`; we bridge to `IO` so the

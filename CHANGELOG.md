@@ -8,6 +8,27 @@ All notable changes to Aegis will be documented here. This project follows
 
 ### Added
 
+- **Software root-of-trust — real crypto with no cloud account (closes #34, ROADMAP 3.0.d).**
+  `AEGIS_CRYPTO_KIND=software` selects `dev.aegiskms.crypto.software.SoftwareRootOfTrust`, the second
+  `RootOfTrust` implementation and the first that needs no external service. It performs genuine
+  AES-256-GCM, RSA-PSS-SHA-256 and ECDSA-P-256 through the JDK's own JCE providers — no new dependency,
+  no network call — so signatures actually verify and ciphertext is actually ciphertext, unlike the
+  deterministic-MAC `in-memory` backend. Key material lives in a PKCS#12 keystore
+  (`AEGIS_CRYPTO_SOFTWARE_KEYSTORE_PATH` + `_PASSWORD`, or an ephemeral in-heap keystore when the path is
+  unset). Each operation family derives its own AES key from the KEK via HKDF-SHA-256 keyed by purpose and
+  `KeyId`, so ciphertext for one key cannot be opened as another and the wrap / encrypt / data-key families
+  are cryptographically separated; the encryption context is bound as GCM AAD. `rotate` mints a new KEK
+  generation and retains earlier ones — the generation travels in the ciphertext header, so material
+  wrapped before a rotation still unwraps after it.
+  - **Not a production backend, and Aegis says so.** The KEK and signing keys sit in the server's heap, so
+    selecting it logs a warning banner at boot and `Preflight` reports it as a dev-grade setting —
+    `AEGIS_SECURITY_PREFLIGHT=enforce` refuses to bind a network-reachable address with it configured.
+    It is meant for CI, integration tests, and evaluating Aegis without AWS credentials.
+  - **Known limitation:** signing is not separated per key. One keypair per `SigAlgorithm` serves the whole
+    keystore, so a signature produced for key A verifies under key B. `AwsKmsRootOfTrust` behaves the same
+    way (it signs with the single configured CMK regardless of `KeyId`); per-key backing keys are ROADMAP
+    3.0.e (per-key RoT routing) across every adapter. The behaviour is pinned by an explicit test.
+
 - **Real SDKs — `aegis-sdk-scala` + `aegis-sdk-java` now work (closes #98, ROADMAP 2.2.a).** Both published
   SDK artifacts previously threw on their only entry point (`NotImplementedError` /
   `UnsupportedOperationException`). The CLI's tested blocking client (`AegisHttpClient` + `WireFormats` +

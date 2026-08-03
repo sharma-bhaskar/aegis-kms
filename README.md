@@ -154,7 +154,7 @@ embed in any JVM app; server-tier modules add the actor system, HTTP, and proces
 | `aegis-core` | Library | `KeyService[F[_]]` algebra, ADTs, no I/O |
 | `aegis-iam` | Library | Principal + JWT / OIDC verification + authorization decorator |
 | `aegis-audit` | Library | `AuditSink` SPI + auditing decorator |
-| `aegis-crypto` | Library | `RootOfTrust` SPI + AWS KMS adapter |
+| `aegis-crypto` | Library | `RootOfTrust` SPI + AWS KMS and JCE-backed software adapters |
 | `aegis-persistence` | Library | Doobie event journal (Postgres / MySQL / SQLite / in-memory) |
 | `aegis-sdk-scala` / `aegis-sdk-java` | Library | Client SDKs — full REST coverage (Scala) + pure-Java facade |
 | `aegis-http` | Server | Tapir REST + OpenAPI 3.1 |
