@@ -62,6 +62,11 @@ services:
       # Same external value as POSTGRES_PASSWORD above — compose substitutes it
       # into both env blocks at start time.
       AEGIS_JDBC_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in the shell environment}
+      # Indexed audit storage, reusing the journal's Postgres credentials. This is what backs the
+      # read side: GET /v1/audit, the advisor, and the agent registry (GET /v1/agents) all ride on
+      # the AuditQuery SPI, which only the Postgres sink implements. Left at the "stdout" default
+      # those endpoints return 501, so the compose demo would silently omit half the product.
+      AEGIS_AUDIT_KIND:   "postgres"
       AEGIS_AUTH_KIND:    "dev"
       # AEGIS_AUTH_KIND:        "hmac"
       # AEGIS_AUTH_HMAC_SECRET: "set-me-to-32-or-more-bytes-please"
