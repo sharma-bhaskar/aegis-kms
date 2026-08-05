@@ -8,6 +8,57 @@ All notable changes to Aegis will be documented here. This project follows
 
 ### Added
 
+- **Agent kill-switch — revoke a parent's whole agent fleet in one call (closes #102, ROADMAP 3.0.n).**
+  `POST /v1/agents/revoke` and `aegis agent revoke --parent alice@org [--issued-after <ISO>]` blacklist the
+  `jti` of every currently-active agent under an operator. Revocation goes through the `RevocationList` SPI,
+  so it works unchanged against the Redis-backed list — a kill lands fleet-wide, not on whichever replica
+  served the request. Idempotent, and a store failure on one agent does not abort the sweep. The response
+  reports killed / already-revoked / expired separately: mid-incident, "I stopped 12" and "I stopped 1 and
+  11 were already dead" are different answers. Audit gets one record per revoked agent plus one summary row
+  for the sweep.
+
+- **Step-up authentication (ROADMAP 3.0.n).** `ErrorCode.StepUpRequired` has existed since the risk engine
+  landed, but nothing could ever *demand* step-up — it was only produced as advice by the risk scorer. Now
+  `Principal.Human` and `JwtClaims.Human` carry the OIDC-standard `amr` and `auth_time` claims, and
+  `StepUpPolicy` gates the kill-switch on both: a strong authentication method **and** a recent one. Failing
+  callers get a real RFC 7235 challenge — `WWW-Authenticate: aegis-stepup realm="aegis", reason=…, acr=…,
+  max_age=…` — naming what they need. Configurable via `aegis.security.step-up.{methods,max-age-seconds}`.
+  Everything fails closed: a missing `amr`, a missing `auth_time`, a future `auth_time`, or a non-human
+  principal is refused, because a token minted before Aegis understood step-up must not pass as having done
+  it. `pwd` is deliberately not an accepted method — it is what the user already presented to get the
+  session.
+  - Freshness is the condition doing the real work. A long-lived token minted after a legitimate MFA login
+    is exactly what an attacker steals; without a time bound it would satisfy an `amr`-only check forever.
+
+- **Auto-responder can pull the kill-switch (`AutoResponseAction.KillAgentFleet`).** Off by default and
+  absent from `DefaultRules`: it requires both `aegis.auto-response.kill-fleet.enabled=true` and an operator
+  writing the rule. One false positive revokes an operator's entire fleet rather than one credential, so
+  enabling it is a deliberate decision about blast radius — never something inherited by upgrading. With the
+  flag off the action degrades to an audited no-op rather than failing silently.
+
+- **Agent registry — one answer to "which agents exist right now?" (closes #101, ROADMAP 3.0.m).**
+  `GET /v1/agents` and `aegis agent list` return every agent credential minted in the last 7 days with its
+  issuing operator, scopes, validity window, last-seen activity, and lifecycle status
+  (`Active` / `Expired` / `Revoked`). Filterable by `parent` and `status`, paginated, and human-principal
+  only — letting an agent enumerate its peers would hand a compromised credential a map of every other
+  credential to target. A new `aegis_agents_active` Prometheus gauge tracks the live count.
+  - **Derived from the audit log, not a new table.** Agent issuance is already recorded by
+    `HttpRoutes.writeAgentIssueAudit` (agent id, jti, scopes, ttl, label, issuing human), so
+    `AgentRegistry.auditBacked` reads that back and joins it against the revocation list rather than adding a
+    second write path that could disagree with it. Agents issued *before* this release still appear — there
+    is no backfill. Retention cannot lose a live agent: tokens are capped at 24 h while audit retention
+    defaults to 365 days.
+  - Requires a queryable audit sink. On the default `stdout` sink, `GET /v1/agents` returns
+    `501 FeatureNotSupported` — the same behaviour `/v1/audit` and `/v1/advisor/scan` already have.
+  - **`AuditQuery` SPI additions (source-breaking for external implementors):** `Filter.resourcePrefix` for
+    left-anchored `resource` matching (keeps the existing btree index usable; LIKE metacharacters are
+    escaped), and `lastActivityBy(actors, since)` — a `GROUP BY` that answers "when was each of these actors
+    last seen" in one round-trip. The latter is abstract rather than defaulted on purpose: a default
+    returning empty would make external implementations silently under-report last-seen.
+  - `InMemoryAuditSink` now implements `AuditQuery` with the same filter semantics as `PostgresAuditSink`, so
+    read-side consumers can be unit-tested against a real implementation. It remains deliberately
+    unselectable via `aegis.audit.kind`.
+
 - **Software root-of-trust — real crypto with no cloud account (closes #34, ROADMAP 3.0.d).**
   `AEGIS_CRYPTO_KIND=software` selects `dev.aegiskms.crypto.software.SoftwareRootOfTrust`, the second
   `RootOfTrust` implementation and the first that needs no external service. It performs genuine

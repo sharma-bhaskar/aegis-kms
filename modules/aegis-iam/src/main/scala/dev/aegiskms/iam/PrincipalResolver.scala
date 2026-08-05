@@ -58,7 +58,7 @@ object PrincipalResolver:
     */
   def toPrincipal(claims: JwtClaims): Principal = claims match
     case h: JwtClaims.Human =>
-      Principal.Human(h.subject, h.groups)
+      Principal.Human(h.subject, h.groups, h.amr, h.authTime)
     case a: JwtClaims.Agent =>
       // The parent's groups aren't carried in the agent JWT (the IDP issues two distinct tokens with
       // separate claim sets). Synthesize the parent with empty groups; the policy engine looks the parent's

@@ -155,6 +155,41 @@ final class AegisHttpClient(
       case 200    => decodeBody[AuditQueryResponseDto](res.body)
       case status => Left(toError(status, res.body))
 
+  /** GET /v1/agents — the agent registry (#101): every agent minted in the recent window with its issuing
+    * operator, scopes, validity window, last-seen activity, and lifecycle status.
+    */
+  def listAgents(
+      parent: Option[String] = None,
+      status: Option[String] = None,
+      limit: Option[Int] = None,
+      offset: Option[Int] = None
+  ): Either[ClientError, ListAgentsResponseDto] =
+    val params = List(
+      parent.map(v => "parent" -> v),
+      status.map(v => "status" -> v),
+      limit.map(v => "limit" -> v.toString),
+      offset.map(v => "offset" -> v.toString)
+    ).flatten
+    val res =
+      http.execute(HttpPort.Request("GET", url(s"/v1/agents${queryString(params)}"), baseHeaders, None))
+    res.status match
+      case 200    => decodeBody[ListAgentsResponseDto](res.body)
+      case status => Left(toError(status, res.body))
+
+  /** POST /v1/agents/revoke — the agent kill-switch (#102).
+    *
+    * A `401` here usually means step-up is required rather than that the token is bad; the server's
+    * `WWW-Authenticate: aegis-stepup …` header names what the caller must do. The error body carries the same
+    * reason, which is what this client surfaces.
+    */
+  def revokeAgents(req: RevokeAgentsRequestDto): Either[ClientError, RevokeAgentsResponseDto] =
+    val body    = req.asJson.noSpaces
+    val headers = baseHeaders + ("Content-Type" -> "application/json")
+    val res     = http.execute(HttpPort.Request("POST", url("/v1/agents/revoke"), headers, Some(body)))
+    res.status match
+      case 200    => decodeBody[RevokeAgentsResponseDto](res.body)
+      case status => Left(toError(status, res.body))
+
   /** GET /v1/advisor/scan — deterministic read-only triage over the recent audit window (#28). Each tuning
     * knob is sent only when the caller overrides the default, so the server's defaults apply otherwise.
     */

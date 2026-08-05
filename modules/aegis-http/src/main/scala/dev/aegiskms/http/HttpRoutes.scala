@@ -2,11 +2,24 @@ package dev.aegiskms.http
 
 import cats.effect.IO
 import cats.effect.unsafe.IORuntime
-import dev.aegiskms.agent.{AdvisorExplain, AdvisorScan, AdvisorService}
+import dev.aegiskms.agent.{
+  AdvisorExplain,
+  AdvisorScan,
+  AdvisorService,
+  AgentKillSwitch,
+  AgentRegistry,
+  AgentStatus,
+  KillSwitchRequest
+}
 import dev.aegiskms.audit.{AuditQuery, AuditRecord, AuditSink, RequestContext}
 import dev.aegiskms.core.*
 import dev.aegiskms.http.JsonCodecs.*
-import dev.aegiskms.iam.{AgentTokenIssuer, IssueAgentRequest as IamIssueAgentRequest, PrincipalResolver}
+import dev.aegiskms.iam.{
+  AgentTokenIssuer,
+  IssueAgentRequest as IamIssueAgentRequest,
+  PrincipalResolver,
+  StepUpPolicy
+}
 import org.apache.pekko.http.scaladsl.server.Route
 import sttp.apispec.openapi.circe.yaml.*
 import sttp.model.StatusCode
@@ -59,7 +72,20 @@ final class HttpRoutes(
       * `AuditQuery` that backs the audit-read endpoint — so it's present exactly when `auditReader` is. When
       * `None`, `GET /v1/advisor/scan` returns `501 FeatureNotSupported`.
       */
-    advisor: Option[AdvisorService[IO]] = None
+    advisor: Option[AdvisorService[IO]] = None,
+    /** Optional agent registry backing `GET /v1/agents` (#101). Like [[advisor]], it rides on the same
+      * `AuditQuery` that backs the audit-read endpoint, so it is present exactly when `auditReader` is. When
+      * `None`, `GET /v1/agents` returns `501 FeatureNotSupported`.
+      */
+    agentRegistry: Option[AgentRegistry[IO]] = None,
+    /** Optional kill-switch backing `POST /v1/agents/revoke` (#102). Wired by `Server.boot` alongside
+      * [[agentRegistry]] — the kill-switch enumerates through the registry, so the two arrive together.
+      */
+    agentKillSwitch: Option[AgentKillSwitch] = None,
+    /** How strong and how fresh a credential must be to pull the kill-switch. Defaults to the standard policy
+      * (a strong `amr` method, authenticated within 5 minutes).
+      */
+    stepUpPolicy: StepUpPolicy = StepUpPolicy()
 )(using runtime: IORuntime):
 
   private given ExecutionContext = runtime.compute
@@ -363,6 +389,127 @@ final class HttpRoutes(
               runIO(clientIp)(issueAndAudit).map(_.left.map(errorOut))
     }
 
+  /** `POST /v1/agents/revoke` — the agent kill-switch (#102).
+    *
+    * The most destructive endpoint Aegis exposes: one call can invalidate every credential an operator has
+    * issued. It is therefore gated twice — human principals only, and then [[StepUpPolicy]], which requires
+    * the caller's token to prove a strong authentication method (`amr`) performed recently (`auth_time`). A
+    * caller who fails the second gate gets a real `WWW-Authenticate: aegis-stepup …` challenge naming what
+    * they need, not just a 401.
+    */
+  private val revokeAgentsSE: ServerEndpoint[Any, Future] =
+    Endpoints.revokeAgents.serverLogic { case (auth, devHdr, clientIp, body) =>
+      principalOf(auth, devHdr) match
+        case Left((sc, dto)) => Future.successful(Left((sc, None, dto)))
+        case Right(principal) =>
+          agentKillSwitch match
+            case None =>
+              Future.successful(Left((
+                StatusCode.NotImplemented,
+                None,
+                KmsErrorDto.of(
+                  ErrorCode.FeatureNotSupported,
+                  "agent kill-switch is not enabled on this server (set aegis.audit.kind=postgres)"
+                )
+              )))
+            case Some(killSwitch) =>
+              principal match
+                case _: Principal.Human =>
+                  val decision =
+                    for
+                      now <- IO.realTimeInstant
+                      res <- stepUpPolicy.check(principal, now) match
+                        case Left(challenge) =>
+                          // 401 + the challenge. The body carries the same reason so SDK callers that
+                          // don't inspect headers still learn why.
+                          IO.pure(Left((
+                            StatusCode.Unauthorized,
+                            Some(challenge.headerValue),
+                            KmsErrorDto.fromCore(challenge.asError)
+                          )))
+                        case Right(_) =>
+                          killSwitch
+                            .revokeAll(principal, KillSwitchRequest(body.parent, body.issuedAfter))
+                            .map {
+                              case Right(result) => Right(RevokeAgentsResponseDto.fromCore(result))
+                              case Left(err) =>
+                                val (sc, dto) = errorOut(err)
+                                Left((sc, None, dto))
+                            }
+                    yield res
+                  runIO(clientIp)(decision)
+                case _ =>
+                  Future.successful(Left((
+                    StatusCode.Forbidden,
+                    None,
+                    KmsErrorDto.of(
+                      ErrorCode.PermissionDenied,
+                      "the agent kill-switch is restricted to human principals"
+                    )
+                  )))
+    }
+
+  /** `GET /v1/agents` — the agent registry (#101). Human principals only: letting an agent enumerate its
+    * peers would hand a compromised credential a map of every other credential to target. Returns 501 when no
+    * registry is wired, matching `/v1/audit`, since both rest on the same `AuditQuery` capability.
+    */
+  private val listAgentsSE: ServerEndpoint[Any, Future] =
+    Endpoints.listAgents.serverLogic {
+      case (auth, devHdr, clientIp, parent, status, limit, offset) =>
+        principalOf(auth, devHdr) match
+          case Left(e) => Future.successful(Left(e))
+          case Right(_: Principal.Human) =>
+            agentRegistry match
+              case None =>
+                Future.successful(Left(
+                  StatusCode.NotImplemented -> KmsErrorDto.of(
+                    ErrorCode.FeatureNotSupported,
+                    "agent registry is not enabled on this server (set aegis.audit.kind=postgres)"
+                  )
+                ))
+              case Some(registry) =>
+                // An unknown status is user error → 400. Returning an empty list instead would let a
+                // typo ("active" vs "Active") read as "no agents", which is the worst possible lie for
+                // an incident-response surface.
+                val parsedStatus: Either[(StatusCode, KmsErrorDto), Option[AgentStatus]] = status match
+                  case None => Right(None)
+                  case Some(name) =>
+                    AgentStatus.values
+                      .find(_.toString.equalsIgnoreCase(name))
+                      .toRight(StatusCode.BadRequest -> KmsErrorDto.of(
+                        ErrorCode.InvalidField,
+                        s"unknown status '$name'; expected one of: ${AgentStatus.values.map(_.toString).mkString(", ")}"
+                      ))
+                      .map(Some(_))
+                parsedStatus match
+                  case Left(e) => Future.successful(Left(e))
+                  case Right(statusVal) =>
+                    val filter = AgentRegistry.Filter(
+                      parent = parent,
+                      status = statusVal,
+                      limit = limit.getOrElse(AgentRegistry.DefaultLimit),
+                      offset = offset.getOrElse(0)
+                    )
+                    val work =
+                      for
+                        agents <- registry.list(filter)
+                        active <- registry.activeCount
+                      yield ListAgentsResponseDto(
+                        agents = agents.map(AgentSummaryDto.fromCore),
+                        limit = filter.limit,
+                        offset = filter.offset,
+                        activeCount = active
+                      )
+                    runIO(clientIp)(work).map(Right(_))
+          case Right(_) =>
+            Future.successful(Left(
+              StatusCode.Forbidden -> KmsErrorDto.of(
+                ErrorCode.PermissionDenied,
+                "listing agents is restricted to human principals"
+              )
+            ))
+    }
+
   /** `GET /v1/audit` — paginated read of `aegis_audit_events`. Caller must be a `Principal.Human` (Service +
     * Agent return 403). When the server isn't wired with an `AuditQuery` (i.e. audit kind ≠ postgres), this
     * returns 501 NotImplemented.
@@ -616,6 +763,8 @@ final class HttpRoutes(
       rotateSE,
       issueAgentSE,
       queryAuditSE,
+      listAgentsSE,
+      revokeAgentsSE,
       advisorScanSE,
       advisorExplainSE
     )

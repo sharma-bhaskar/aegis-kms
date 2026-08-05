@@ -1,5 +1,6 @@
 package dev.aegiskms.audit
 
+import cats.data.NonEmptyList
 import cats.effect.{IO, Resource}
 import cats.syntax.all.*
 import dev.aegiskms.core.{Operation, Principal, TenantId}
@@ -183,6 +184,12 @@ final class PostgresAuditSink private[audit] (xa: Transactor[IO])
       filter.until.map(u => fr"occurred_at < $u"),
       filter.actor.map(a => fr"actor_subject = $a"),
       filter.resource.map(r => fr"resource = $r"),
+      // `LIKE 'prefix%'` with an explicit ESCAPE so a literal % or _ in the prefix can't act as a
+      // wildcard. A left-anchored pattern still uses the `resource` btree index (on C collation, or
+      // via a text_pattern_ops index) — which is exactly why only prefix matching is exposed.
+      filter.resourcePrefix.map(p =>
+        fr"resource LIKE ${AuditQuery.escapeLikePrefix(p) + "%"} ESCAPE '\'"
+      ),
       filter.operation.map(o => fr"operation = ${o.toString}")
     ).flatten
 
@@ -218,6 +225,21 @@ final class PostgresAuditSink private[audit] (xa: Transactor[IO])
         }
         AuditQuery.Page(records, safeLimit, safeOffset, hasMore)
       }
+
+  /** One `GROUP BY` over the `actor_subject` index. Empty `actors` short-circuits without a round-trip — `IN
+    * ()` is a syntax error in Postgres, and the answer is knowable without asking.
+    */
+  def lastActivityBy(actors: Set[String], since: Instant): IO[Map[String, Instant]] =
+    NonEmptyList.fromList(actors.toList) match
+      case None => IO.pure(Map.empty)
+      case Some(nel) =>
+        val q =
+          fr"""
+          SELECT actor_subject, MAX(occurred_at)
+          FROM aegis_audit_events
+          WHERE occurred_at >= $since AND
+        """ ++ Fragments.in(fr"actor_subject", nel) ++ fr" GROUP BY actor_subject"
+        q.query[(String, Instant)].to[List].transact(xa).map(_.toMap)
 
   /** Reconstruct a `Principal` from the denormalised `(actor_kind, actor_subject)` columns. We lose fidelity
     * here — the original `Principal.Agent` carries parent/purpose/allowedOps/jti which we don't round-trip

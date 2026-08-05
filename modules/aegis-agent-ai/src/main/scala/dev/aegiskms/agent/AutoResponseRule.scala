@@ -30,9 +30,16 @@ final case class AutoResponseRule(
   *   - `Freeze` — temporarily block the agent's credential from issuing further ops. Full enforcement
   *     requires #24 (Redis-backed JTI blacklist); for v0.2.0 the action records an audit row + log line
   *     documenting the freeze intent, so operators see the call.
+  *   - `KillAgentFleet` — revoke **every live agent under the offending agent's parent operator** via the
+  *     kill-switch (#102). By far the widest-blast-radius action available: one false positive takes out an
+  *     operator's entire fleet, not one credential. It therefore fires only when the auto-responder is
+  *     constructed with a kill-switch AND `aegis.auto-response.kill-fleet.enabled=true`; with either absent
+  *     the action degrades to an audited no-op rather than silently doing nothing. It is deliberately not in
+  *     [[AutoResponder.defaultRules]] — an operator must write the rule themselves.
   */
 enum AutoResponseAction:
   case Alert
   case Revoke
   case Deactivate
   case Freeze
+  case KillAgentFleet

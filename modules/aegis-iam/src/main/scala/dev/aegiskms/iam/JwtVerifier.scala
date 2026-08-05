@@ -77,7 +77,12 @@ object JwtVerifier:
       Option(claims.get(JwtClaims.Claim.Kind, classOf[String])) match
         case Some(JwtClaims.Claim.KindHuman) =>
           val groups = stringList(claims, JwtClaims.Claim.Groups).toSet
-          Right(JwtClaims.Human(subject, issuer, issuedAt, expires, groups, jti))
+          val amr    = stringList(claims, JwtClaims.Claim.Amr).toSet
+          // `auth_time` is a NumericDate. Read it as a Number so an issuer emitting Integer vs Long
+          // both work; anything non-numeric is treated as absent, which fails step-up closed.
+          val authTime = Option(claims.get(JwtClaims.Claim.AuthTime, classOf[Number]))
+            .map(n => Instant.ofEpochSecond(n.longValue()))
+          Right(JwtClaims.Human(subject, issuer, issuedAt, expires, groups, jti, amr, authTime))
         case Some(JwtClaims.Claim.KindAgent) =>
           for
             parent  <- requiredString(claims, JwtClaims.Claim.ParentSubject)

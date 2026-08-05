@@ -144,6 +144,9 @@ final class AdvisorServiceSpec extends AnyFunSuite with Matchers:
       def query(filter: AuditQuery.Filter): IO[AuditQuery.Page] =
         IO.pure(if filter.offset == 0 then page1 else page2)
 
+      def lastActivityBy(actors: Set[String], since: Instant): IO[Map[String, Instant]] =
+        IO.pure(Map.empty)
+
     val report = AdvisorService.deterministic(reader).scan(req).unsafeRunSync()
     report.scannedRecords shouldBe 2
     report.truncated shouldBe false

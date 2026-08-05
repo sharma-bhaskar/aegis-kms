@@ -6,6 +6,8 @@ import cats.syntax.all.*
 import com.typesafe.config.{Config, ConfigFactory}
 import dev.aegiskms.agent.{
   AdvisorService,
+  AgentKillSwitch,
+  AgentRegistry,
   AutoResponder,
   BaselineDetector,
   BaselineRiskScorer,
@@ -39,7 +41,8 @@ import dev.aegiskms.iam.{
   PrincipalResolver,
   RevocationAwareJwtVerifier,
   RevocationList,
-  RoleBasedPolicyEngine
+  RoleBasedPolicyEngine,
+  StepUpPolicy
 }
 import dev.aegiskms.persistence.{
   EventJournal,
@@ -185,6 +188,38 @@ object Server extends IOApp.Simple:
       kafkaSinks   <- kafkaAuditSinkResource(rootConfig)
       natsSinks    <- natsAuditSinkResource(rootConfig)
       stdoutSink = FanOutAuditSink.of(primarySink, webhookSinks ++ kafkaSinks ++ natsSinks)
+      // JWT revocation list (#24). Selected by `aegis.iam.revocation.kind`:
+      //   - `none`      → no-op; tokens revoke only when they expire naturally.
+      //   - `in-memory` → process-local Ref-backed list; suits dev/single-node, lost on restart.
+      //   - `redis`     → durable, multi-node. Closes the auto-responder's kill-switch story.
+      // Acquired here (rather than next to the resolver) because the agent registry, the kill-switch,
+      // and the auto-responder all need it, and the auto-responder is constructed just below.
+      revocation <- revocationListResource(rootConfig)
+
+      // Audit-read capability (#20) + advisor (#28) + agent registry (#101) all ride on the `AuditQuery`
+      // SPI, which only the *primary* postgres sink satisfies. Match on `primarySink`, not `stdoutSink`,
+      // because the latter may be wrapped in a `FanOutAuditSink` that doesn't carry the capability.
+      auditReader = primarySink match
+        case q: AuditQuery[IO @unchecked] => Some(q)
+        case _                            => None
+
+      // Agent registry (#101): derived from the audit log, so it exists exactly when `auditReader` does.
+      // Pairs the issuance trail with the revocation list to classify each agent Active/Expired/Revoked.
+      agentRegistry = auditReader.map(r => AgentRegistry.auditBacked(r, revocation))
+
+      // Kill-switch (#102): enumerates via the registry, revokes through the same RevocationList the
+      // verifier consults — so a kill lands fleet-wide on Redis-backed multi-node deployments.
+      agentKillSwitch = agentRegistry.map(r => AgentKillSwitch.auditBacked(r, revocation, stdoutSink))
+
+      // Fleet-wide auto-revocation is off unless the operator explicitly turned it on. Handing the
+      // auto-responder a kill-switch means one false positive can revoke every credential an operator
+      // owns, so it must never be inherited by upgrading — see AutoResponseAction.KillAgentFleet.
+      killFleetEnabled = rootConfig.getBoolean("aegis.auto-response.kill-fleet.enabled")
+      _ <- Resource.eval(IO.whenA(killFleetEnabled)(IO(logger.warn(
+        "auto-response: kill-fleet ENABLED — a High-severity anomaly may revoke every agent under the " +
+          "offending agent's parent operator, with no human in the loop"
+      ))))
+
       // Auto-responder (#17 / W3): decorates the recommendation sink. Every recommendation is first
       // persisted to `recStore` (full alert history retained), then matched against `DefaultRules`
       // (High → Revoke, Medium → Alert), then executed with a per-(actor,action) 60 s cooldown. The
@@ -196,7 +231,8 @@ object Server extends IOApp.Simple:
           rules = AutoResponder.DefaultRules,
           inner = recStore,
           keyService = traced,
-          auditSink = stdoutSink
+          auditSink = stdoutSink,
+          killSwitch = if killFleetEnabled then agentKillSwitch else None
         )
       )
       sink = TappedAuditSink(stdoutSink, detector, autoResponder)
@@ -228,8 +264,7 @@ object Server extends IOApp.Simple:
       //   - `redis`     → durable, multi-node. Closes the auto-responder's kill-switch story.
       // The list is wrapped around whatever inner verifier `buildResolver` constructs (HMAC /
       // OIDC) via `RevocationAwareJwtVerifier`. Dev resolver (no JWT) bypasses the list.
-      revocation <- revocationListResource(rootConfig)
-      resolver   <- Resource.eval(buildResolver(rootConfig, revocation))
+      resolver <- Resource.eval(buildResolver(rootConfig, revocation))
       // Agent-token issuer (#18). Needs a JwtIssuer with the HMAC secret. We share the same secret
       // the verifier uses when `aegis.auth.kind=hmac`; in dev mode we mint a stable per-boot secret
       // (logged below) so the demo can issue + verify agent tokens within a single server lifetime.
@@ -238,16 +273,16 @@ object Server extends IOApp.Simple:
       // with proper OIDC + JWKS rotation.
       agentIssuer <- Resource.eval(buildAgentIssuer(rootConfig))
 
-      // Audit-read capability (#20) + advisor scan (#28) both ride on the `AuditQuery` SPI, which only the
-      // *primary* postgres sink satisfies. Match on `primarySink`, not `stdoutSink`, because the latter may
-      // be wrapped in a `FanOutAuditSink` for the webhook fan-out (#21) that doesn't carry the capability.
-      auditReader = primarySink match
-        case q: AuditQuery[IO @unchecked] => Some(q)
-        case _                            => None
-
       // Advisor LLM provider (#30): selected from `aegis.advisor.llm.*` (provider=none disables narration).
       // `advisor explain` (#29) uses it; `advisor scan` is deterministic and ignores it.
       llmClient = buildLlmClient(rootConfig)
+
+      // `aegis_agents_active` gauge. Skipped entirely when there's no registry — publishing a hardcoded
+      // zero would be indistinguishable from "no agents are active", which is a dangerous thing to
+      // assert when the truth is "we can't tell".
+      _ <- agentRegistry.fold(Resource.unit[IO])(
+        AgentRegistryMetrics.resource(_, metricsRegistry)
+      )
 
       // 5. HTTP binding. Acquire = bind; release = unbind with the configured grace period (5s) so
       //    in-flight requests finish before the socket closes.
@@ -268,7 +303,10 @@ object Server extends IOApp.Simple:
             Some(stdoutSink),
             auditReader,
             reqContext,
-            auditReader.map(r => AdvisorService.deterministic(r, llmClient))
+            auditReader.map(r => AdvisorService.deterministic(r, llmClient)),
+            agentRegistry,
+            agentKillSwitch,
+            stepUpPolicyFrom(rootConfig)
           ).routes,
           MetricsRoutes.route(metricsRegistry)
         )
@@ -672,6 +710,27 @@ object Server extends IOApp.Simple:
         (IO.sleep(scala.concurrent.duration.FiniteDuration(24L, scala.concurrent.duration.HOURS))
           *> tick).foreverM
       Resource.make(loop.start)(fiber => fiber.cancel).void
+
+  /** Step-up policy for `POST /v1/agents/revoke` (#102), from `aegis.security.step-up.*`.
+    *
+    * Both knobs exist because "what counts as strong auth" is an IDP question, not an Aegis one — a shop
+    * whose IDP emits `amr: ["mfa"]` and one that emits `["hwk"]` are both doing the right thing. The default
+    * method set deliberately excludes `pwd`: a password is what the user already presented to get the
+    * session, so accepting it would make step-up ceremonial.
+    */
+  private def stepUpPolicyFrom(config: Config): StepUpPolicy =
+    import scala.jdk.CollectionConverters.*
+    val methods = config.getStringList("aegis.security.step-up.methods").asScala.toSet
+    val maxAge  = java.time.Duration.ofSeconds(config.getLong("aegis.security.step-up.max-age-seconds"))
+    val policy = StepUpPolicy(
+      requiredMethods = if methods.isEmpty then StepUpPolicy.DefaultMethods else methods,
+      maxAge = maxAge
+    )
+    logger.info(
+      s"step-up: methods=${policy.requiredMethods.toList.sorted.mkString(",")} " +
+        s"max-age=${policy.maxAge.toSeconds}s (gates POST /v1/agents/revoke)"
+    )
+    policy
 
   /** Build the `AgentTokenIssuer` that backs `POST /v1/agents/issue`.
     *

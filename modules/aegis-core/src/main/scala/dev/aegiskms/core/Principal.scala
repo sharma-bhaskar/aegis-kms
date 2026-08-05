@@ -13,8 +13,27 @@ sealed trait Principal:
 
 object Principal:
 
-  /** A human operator, typically authenticated via OIDC. */
-  final case class Human(subject: String, groups: Set[String]) extends Principal
+  /** A human operator, typically authenticated via OIDC.
+    *
+    * `amr` and `authTime` carry *how* and *when* this human proved their identity, mirroring the OIDC claims
+    * of the same names. They exist so high-blast-radius operations can demand a stronger, fresher credential
+    * than "you hold a valid token" — see `dev.aegiskms.iam.StepUpPolicy`. Both default to "unknown", which
+    * every step-up check treats as not-satisfied: a token minted before Aegis understood step-up must not be
+    * silently accepted as having passed it.
+    *
+    * @param amr
+    *   Authentication Methods References — e.g. `Set("pwd", "mfa", "otp", "hwk")`. Empty means the issuer
+    *   told us nothing about how this human authenticated.
+    * @param authTime
+    *   When the human actually authenticated, which is not the same as when the token was issued: a refresh
+    *   can mint a new token hours after the last real login.
+    */
+  final case class Human(
+      subject: String,
+      groups: Set[String],
+      amr: Set[String] = Set.empty,
+      authTime: Option[Instant] = None
+  ) extends Principal
 
   /** A long-lived service account, typically authenticated via mTLS or an API key.
     */

@@ -20,7 +20,9 @@ import java.time.Instant
   *     "aegis_groups":   ["admins"],    // human only
   *     "aegis_parent":   "alice@org",   // agent only — subject of the parent human
   *     "aegis_purpose":  "claude-...",  // agent only
-  *     "aegis_ops":      ["Sign","Get"] // agent only — Operation enum names
+  *     "aegis_ops":      ["Sign","Get"],// agent only — Operation enum names
+  *     "amr":       ["pwd","mfa"],      // human only — OIDC standard, drives step-up
+  *     "auth_time": 1714399000          // human only — OIDC standard, seconds since epoch
   *   }
   * }}}
   *
@@ -40,13 +42,19 @@ sealed trait JwtClaims:
 
 object JwtClaims:
 
+  /** `amr` and `authTime` mirror the OIDC claims of the same names and drive [[StepUpPolicy]]. Both default
+    * to "unknown" so tokens minted before step-up existed still parse — and, by design, fail every step-up
+    * check rather than silently passing one.
+    */
   final case class Human(
       subject: String,
       issuer: Option[String],
       issuedAt: Instant,
       expiresAt: Instant,
       groups: Set[String],
-      jti: String
+      jti: String,
+      amr: Set[String] = Set.empty,
+      authTime: Option[Instant] = None
   ) extends JwtClaims
 
   final case class Agent(
@@ -67,6 +75,14 @@ object JwtClaims:
     val ParentSubject = "aegis_parent"
     val Purpose       = "aegis_purpose"
     val AllowedOps    = "aegis_ops"
+
+    /** Authentication Methods References. Standard OIDC claim name (not `aegis_`-prefixed) so a corporate IDP
+      * fronting Aegis populates it natively.
+      */
+    val Amr = "amr"
+
+    /** When the human actually authenticated, seconds since epoch. Standard OIDC claim name. */
+    val AuthTime = "auth_time"
 
     val KindHuman = "human"
     val KindAgent = "agent"

@@ -426,6 +426,9 @@ What's implemented today vs. what the design above describes. This is the only p
 | GCP / Azure / Vault / PKCS#11 Root of Trust adapters | 🔜 Designed (SPI in place) |
 | OIDC discovery + JWKS verification + RS256/ES256 verifier | ✅ Shipped v0.2.0 |
 | Agent-token issuance HTTP endpoint (`POST /v1/agents/issue`) | ✅ Shipped v0.2.0 |
+| Agent registry (`GET /v1/agents`, `aegis agent list`) — derived from the audit log, no second write path | ✅ Shipped v0.3.0 |
+| Agent kill-switch (`POST /v1/agents/revoke`) — revoke a parent's whole fleet in one call | ✅ Shipped v0.3.0 |
+| Step-up authentication (`amr` + `auth_time`, `WWW-Authenticate: aegis-stepup` challenge) | ✅ Shipped v0.3.0 |
 | Postgres audit table + GET /v1/audit read API | ✅ Shipped v0.2.0 |
 | SIEM webhook audit sink (HMAC-signed, async batched + retry + DLQ) | ✅ Shipped v0.2.0 |
 | Kafka audit fan-out sink (idempotent producer, Pekko-Connectors-Kafka) | ✅ Shipped v0.2.0 |

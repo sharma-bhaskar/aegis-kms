@@ -83,6 +83,54 @@ object WireFormats:
     given Encoder[AuditQueryResponseDto] = deriveEncoder
     given Decoder[AuditQueryResponseDto] = deriveDecoder
 
+  // ── Agent-registry DTOs (mirrors aegis-http/JsonCodecs.AgentSummaryDto, #101) ──
+
+  final case class AgentSummaryDto(
+      agentId: String,
+      label: String,
+      parent: String,
+      scopes: List[String],
+      issuedAt: Instant,
+      expiresAt: Instant,
+      lastSeenAt: Option[Instant],
+      status: String
+  )
+  object AgentSummaryDto:
+    given Encoder[AgentSummaryDto] = deriveEncoder
+    given Decoder[AgentSummaryDto] = deriveDecoder
+
+  final case class ListAgentsResponseDto(
+      agents: List[AgentSummaryDto],
+      limit: Int,
+      offset: Int,
+      activeCount: Int
+  )
+  object ListAgentsResponseDto:
+    given Encoder[ListAgentsResponseDto] = deriveEncoder
+    given Decoder[ListAgentsResponseDto] = deriveDecoder
+
+  // ── Agent kill-switch DTOs (mirrors aegis-http/JsonCodecs, #102) ──
+
+  final case class RevokeAgentsRequestDto(parent: String, issuedAfter: Option[Instant] = None)
+  object RevokeAgentsRequestDto:
+    given Encoder[RevokeAgentsRequestDto] = deriveEncoder
+    given Decoder[RevokeAgentsRequestDto] = deriveDecoder
+
+  final case class KilledAgentDto(agentId: String, label: String, expiresAt: Instant)
+  object KilledAgentDto:
+    given Encoder[KilledAgentDto] = deriveEncoder
+    given Decoder[KilledAgentDto] = deriveDecoder
+
+  final case class RevokeAgentsResponseDto(
+      parent: String,
+      killed: List[KilledAgentDto],
+      alreadyRevoked: Int,
+      expired: Int
+  )
+  object RevokeAgentsResponseDto:
+    given Encoder[RevokeAgentsResponseDto] = deriveEncoder
+    given Decoder[RevokeAgentsResponseDto] = deriveDecoder
+
   // ── Advisor-scan DTOs (mirrors aegis-http/JsonCodecs.AdvisorScanResponseDto, #28) ──
 
   final case class UnusedKeyDto(keyId: String, lastSeen: Instant, idleDays: Long)
