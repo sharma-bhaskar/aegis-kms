@@ -36,6 +36,10 @@ final class HttpRoutesAuditQuerySpec extends AnyFunSuite with Matchers with Scal
         nextPage
       }
 
+    // Not on the audit-read path; the agent registry is what exercises this (AgentRegistrySpec).
+    def lastActivityBy(actors: Set[String], since: Instant): IO[Map[String, Instant]] =
+      IO.pure(Map.empty)
+
   private val secret   = "test-secret-test-secret-test-secret-12345"
   private val verifier = JwtVerifier.hmac(secret)
   private val issuer   = JwtIssuer.hmac(secret)

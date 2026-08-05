@@ -30,11 +30,11 @@ import io.circe.{Encoder, Json}
 object AuditRecordJson:
 
   given Encoder[Principal] = Encoder.instance {
-    case Principal.Human(subject, groups) =>
+    case h: Principal.Human =>
       Json.obj(
         "kind"    -> Json.fromString("Human"),
-        "subject" -> Json.fromString(subject),
-        "groups"  -> Json.fromValues(groups.toList.sorted.map(Json.fromString))
+        "subject" -> Json.fromString(h.subject),
+        "groups"  -> Json.fromValues(h.groups.toList.sorted.map(Json.fromString))
       )
     case Principal.Service(subject, tenant) =>
       import dev.aegiskms.core.TenantId.value

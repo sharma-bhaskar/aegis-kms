@@ -46,6 +46,14 @@ object JwtIssuer:
           builder.claim(JwtClaims.Claim.Kind, JwtClaims.Claim.KindHuman)
           if h.groups.nonEmpty then
             builder.claim(JwtClaims.Claim.Groups, h.groups.toList.asJava)
+          // Omitted entirely when unknown, rather than written as empty. An absent claim and an empty
+          // one mean the same thing to StepUpPolicy (not satisfied), but omitting keeps the token small
+          // and matches what an IDP that doesn't track amr would emit.
+          if h.amr.nonEmpty then
+            builder.claim(JwtClaims.Claim.Amr, h.amr.toList.sorted.asJava)
+          h.authTime.foreach(t =>
+            builder.claim(JwtClaims.Claim.AuthTime, java.lang.Long.valueOf(t.getEpochSecond))
+          )
         case a: JwtClaims.Agent =>
           builder.claim(JwtClaims.Claim.Kind, JwtClaims.Claim.KindAgent)
           builder.claim(JwtClaims.Claim.ParentSubject, a.parentSubject)

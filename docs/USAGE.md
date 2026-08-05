@@ -563,6 +563,133 @@ addition to) stdout. The `AuditSink` SPI is in place; the adapters are next.
 
 ---
 
+## Step 14b — See which agents exist right now
+
+When an agent credential misbehaves, the first question is "what else is out there?". `GET
+/v1/agents` answers it in one call — every agent minted in the last 7 days, who issued it, what
+it can touch, and whether it's still live:
+
+```bash
+aegis agent list
+```
+
+```
+AGENT ID                               STATUS   PARENT               EXPIRES                LAST SEEN              SCOPES
+agent-7a3f1e25-...                     Active   alice@org            2026-08-04T12:50:00Z   2026-08-04T11:58:00Z   Get,Sign
+agent-91bc0d42-...                     Active   alice@org            2026-08-04T13:10:00Z   never                  Decrypt,Encrypt
+agent-4e77a1b9-...                     Revoked  bob@org              2026-08-04T12:30:00Z   2026-08-04T11:20:00Z   Sign
+
+3 shown (offset 0), 2 active overall.
+```
+
+`never` in the last-seen column means the credential was minted but has not been used — worth
+noticing on its own, since an unused agent token is pure standing risk.
+
+Narrow it down during an incident:
+
+```bash
+aegis agent list --parent alice@org          # everything alice spawned
+aegis agent list --status Revoked            # confirm a kill actually landed
+aegis agent list --status Active --limit 20
+```
+
+The same data is on the REST surface, and the active count is exported as a Prometheus gauge:
+
+```bash
+curl -s "$AEGIS/v1/agents?status=Active" -H "X-Aegis-User: alice" | jq
+curl -s http://localhost:8080/metrics | grep aegis_agents_active
+```
+
+Two things to know. Listing agents is **restricted to human principals** — an agent cannot
+enumerate its peers, because a compromised credential should not come with a map of every other
+credential to attack. And the registry is **assembled from the audit log** rather than a separate
+table, so it needs a queryable audit sink; on the default `stdout` sink this endpoint returns
+`501`. Set `AEGIS_AUDIT_KIND=postgres` to enable it.
+
+---
+
+## Step 14c — Pull the kill-switch
+
+When an operator's account is compromised, revoking agents one `jti` at a time is not a plan. One call
+kills every live agent under a parent:
+
+```bash
+aegis agent revoke --parent alice@org
+```
+
+```
+Kill-switch: parent=alice@org — revoked 3, already revoked 1, expired 2
+  agent-7a3f1e25-...                     claude-invoice-batch         expired 2026-08-04T12:50:00Z
+  agent-91bc0d42-...                     claude-reconcile             expired 2026-08-04T13:10:00Z
+  agent-0f2e7c81-...                     claude-report                expired 2026-08-04T12:35:00Z
+```
+
+The three counts are separate on purpose. "Revoked 3" and "revoked 1, 11 already revoked" call for very
+different next steps.
+
+Usually you want a time bound rather than everything alice has ever spawned — otherwise you take out
+legitimate long-running work along with the compromised credentials:
+
+```bash
+aegis agent revoke --parent alice@org --issued-after 2026-08-04T11:00:00Z
+```
+
+It is **idempotent** — re-running it reports the agents as already revoked rather than erroring — and it
+revokes through the same `RevocationList` every node consults on each verify, so on a Redis-backed
+multi-node deployment the kill lands fleet-wide, not just on the replica that served your request.
+
+### Step-up authentication
+
+This is the most destructive endpoint Aegis exposes, so a valid token is not enough. Your credential must
+prove you authenticated *strongly* and *recently*:
+
+```bash
+curl -s -X POST "$AEGIS/v1/agents/revoke" -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' -d '{"parent":"alice@org"}' -i
+```
+
+```
+HTTP/1.1 401 Unauthorized
+WWW-Authenticate: aegis-stepup realm="aegis", reason="this operation requires re-authentication with
+                  one of: face, fpt, hwk, mfa, otp, swk", acr="face fpt hwk mfa otp swk", max_age=300
+
+{"code":"StepUpRequired","message":"this operation requires re-authentication with one of: ..."}
+```
+
+Re-authenticate the human — genuinely, not by refreshing the token you already hold — and retry. Aegis
+reads the OIDC-standard `amr` and `auth_time` claims: `amr` must include one of the accepted methods, and
+`auth_time` must fall inside `max_age`. Both conditions are required, and everything fails closed:
+
+| Credential | Result |
+| --- | --- |
+| `amr: ["mfa"]`, authenticated 1 minute ago | ✅ allowed |
+| `amr: ["mfa"]`, authenticated 1 hour ago | ❌ stale — re-authenticate |
+| `amr: ["pwd"]` | ❌ a password is what you already presented to get the session |
+| no `amr` or no `auth_time` | ❌ the issuer told us nothing; that is not evidence |
+| a service account or an agent | ❌ step-up means *a person* re-proved who they are |
+
+Tune it to whatever your IDP actually emits:
+
+```bash
+export AEGIS_SECURITY_STEP_UP_METHODS='["hwk"]'      # hardware keys only
+export AEGIS_SECURITY_STEP_UP_MAX_AGE_SECONDS=120    # tighter freshness window
+```
+
+### Automatic fleet revocation (off by default)
+
+The auto-responder can pull the kill-switch itself on a high-severity anomaly:
+
+```bash
+export AEGIS_AUTO_RESPONSE_KILL_FLEET_ENABLED=true
+```
+
+Understand the blast radius before you do. With this on, a single false positive revokes **every** agent
+belonging to the offending agent's parent operator, with no human in the loop — not one credential. That
+is why it is off by default and absent from the default rule set: you must both enable the flag and write
+the `KillAgentFleet` rule yourself.
+
+---
+
 ## Step 15 — Inspect Prometheus metrics
 
 ```bash

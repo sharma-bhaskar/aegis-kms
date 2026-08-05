@@ -142,6 +142,8 @@ Non-goals: cryptographic operations, multi-cloud RoT, KMIP, MCP, OIDC. All defer
 | 3.0.h | OpenTelemetry log export (Loki / Datadog / Honeycomb) | Platform | 💡 |
 | 3.0.i | Multi-tenancy: per-tenant key/agent/audit isolation | Platform | 💡 |
 | 3.0.j | Time-windowed access policies (e.g. business-hours-only keys) | Wedge | 🔜 |
+| 3.0.m | Agent registry — `GET /v1/agents` + `aegis agent list` + active-agents gauge (#101) | Wedge | ✅ |
+| 3.0.n | Agent kill-switch — `POST /v1/agents/revoke` + step-up authentication (#102) | Wedge | ✅ |
 | 3.0.k | Just-In-Time (JIT) access — agent requests scoped permission on-demand | Wedge | 💡 |
 | 3.0.l | Approval workflows — Slack / PagerDuty / OpsGenie integration for step-up | Wedge | 💡 |
 
@@ -291,8 +293,8 @@ The release tables above slice the work by milestone. The tables below slice by 
 
 | Capability | Status | Tracking |
 |---|---|---|
-| Agent registry (list all live agents, parents, scopes, last activity) | 🔜 v0.3.0 | #101 |
-| Agent kill-switch ("revoke all agents under alice@org issued in 24h") | 🔜 v0.3.0 | #102 |
+| Agent registry (list all live agents, parents, scopes, last activity) | ✅ v0.3.0 | #101 |
+| Agent kill-switch ("revoke all agents under alice@org issued in 24h") | ✅ v0.3.0 | #102 |
 | Per-prompt accountability (record originating LLM prompt) | 💡 v0.4.0 | `area/ai-governance area/wire/mcp` |
 | Model identifier in audit (`actor.model = "..."`) | 💡 v0.4.0 | `area/ai-governance area/audit` |
 | Token cost / op-rate tracking per agent | 💡 v0.4.0+ | `area/ai-governance` |

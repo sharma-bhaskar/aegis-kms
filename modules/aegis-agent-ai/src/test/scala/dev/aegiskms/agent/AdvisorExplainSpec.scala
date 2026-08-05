@@ -48,6 +48,11 @@ final class AdvisorExplainSpec extends AnyFunSuite with Matchers:
         false
       ))
 
+    // Unused by the advisor — it reads whole records, not per-actor aggregates. Present only to
+    // satisfy the SPI; the agent registry is what exercises this method (see AgentRegistrySpec).
+    def lastActivityBy(actors: Set[String], since: Instant): IO[Map[String, Instant]] =
+      IO.pure(Map.empty)
+
   test("timeline builds chronological events, flags anomalies, and rolls up a summary") {
     val report = AdvisorExplain.timeline(
       req,

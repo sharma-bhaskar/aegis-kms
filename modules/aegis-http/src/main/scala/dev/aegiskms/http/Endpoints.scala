@@ -295,6 +295,83 @@ object Endpoints:
   /** Common base for the audit-read surface — `/v1/audit`, same auth headers, same error contract, distinct
     * OpenAPI tag so Swagger groups the endpoint with future audit-read additions.
     */
+  /** Base for endpoints that can demand step-up authentication.
+    *
+    * Identical to `agentsBase` except the error output carries an optional `WWW-Authenticate` header, so a
+    * `401 StepUpRequired` can ship a real RFC 7235 challenge rather than only a JSON body. Kept separate
+    * rather than folded into every base because widening the shared error type would touch the server logic
+    * of all sixteen existing endpoints for no benefit — none of them can currently demand step-up. Extending
+    * it to the rest is mechanical once another endpoint needs it.
+    */
+  private val agentsStepUpBase =
+    endpoint
+      .in("v1" / "agents")
+      .in(authHeader)
+      .in(devUserHeader)
+      .in(sourceIpInput)
+      .errorOut(
+        statusCode and
+          header[Option[String]]("WWW-Authenticate")
+            .description("RFC 7235 challenge; `aegis-stepup …` when the caller must re-authenticate") and
+          jsonBody[KmsErrorDto].description("Failure detail")
+      )
+      .tag("agents")
+
+  /** `POST /v1/agents/revoke` — the agent kill-switch (#102). */
+  val revokeAgents: PublicEndpoint[
+    (Option[String], Option[String], Option[String], RevokeAgentsRequestDto),
+    (StatusCode, Option[String], KmsErrorDto),
+    RevokeAgentsResponseDto,
+    Any
+  ] =
+    agentsStepUpBase.post
+      .in("revoke")
+      .in(jsonBody[RevokeAgentsRequestDto])
+      .out(jsonBody[RevokeAgentsResponseDto])
+      .summary("Revoke every live agent under a parent principal")
+      .description(
+        "The kill-switch: blacklists the `jti` of every currently-active agent issued by `parent`, " +
+          "optionally bounded to those minted at or after `issuedAfter`. Human principals only, and " +
+          "**step-up gated** — the caller's credential must carry an `amr` proving a strong " +
+          "authentication method and an `auth_time` inside the freshness window, or the response is " +
+          "`401` with a `WWW-Authenticate: aegis-stepup …` challenge. Idempotent: re-running it over " +
+          "already-revoked agents is a no-op."
+      )
+
+  /** `GET /v1/agents` — the operator's answer to "which agents exist right now?" (#101). */
+  val listAgents: PublicEndpoint[
+    (
+        Option[String],
+        Option[String],
+        Option[String],
+        Option[String],
+        Option[String],
+        Option[Int],
+        Option[Int]
+    ),
+    (StatusCode, KmsErrorDto),
+    ListAgentsResponseDto,
+    Any
+  ] =
+    agentsBase.get
+      .in(query[Option[String]]("parent").description(
+        "Exact match on the issuing operator's subject (e.g. 'alice@org')"
+      ))
+      .in(query[Option[String]]("status").description(
+        "Filter by lifecycle state: Active / Expired / Revoked"
+      ))
+      .in(query[Option[Int]]("limit").description("Page size; defaults to 100, capped at 500"))
+      .in(query[Option[Int]]("offset").description("Starting offset for paging; defaults to 0"))
+      .out(jsonBody[ListAgentsResponseDto])
+      .summary("List agents")
+      .description(
+        "Every agent credential minted in the last 7 days, with its issuing operator, scopes, " +
+          "validity window, last-seen activity, and whether it is Active / Expired / Revoked. " +
+          "Caller must be a human principal — agents cannot enumerate their peers. " +
+          "Assembled from the audit log, so it requires a queryable audit sink " +
+          "(`aegis.audit.kind=postgres`); otherwise this returns 501."
+      )
+
   private val auditBase =
     endpoint
       .in("v1" / "audit")
@@ -440,6 +517,8 @@ object Endpoints:
       rotateKey,
       issueAgent,
       queryAudit,
+      listAgents,
+      revokeAgents,
       advisorScan,
       advisorExplain
     )

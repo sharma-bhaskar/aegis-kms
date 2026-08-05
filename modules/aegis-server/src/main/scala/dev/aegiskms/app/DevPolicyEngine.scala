@@ -26,7 +26,7 @@ final class DevPolicyEngine extends PolicyEngine[IO]:
 
   private def decide(principal: Principal, op: Operation): Decision =
     principal match
-      case Principal.Human(_, _)   => Decision.Allow
+      case _: Principal.Human      => Decision.Allow
       case Principal.Service(_, _) => Decision.Allow
       case Principal.Agent(subject, parent, _, _, _, allowedOps, _) =>
         if !allowedOps.contains(op) then

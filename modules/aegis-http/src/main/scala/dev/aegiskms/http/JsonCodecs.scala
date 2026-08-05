@@ -270,6 +270,91 @@ object JsonCodecs:
     given Encoder[AuditQueryResponseDto] = deriveEncoder
     given Decoder[AuditQueryResponseDto] = deriveDecoder
 
+  // ── Agent-registry DTOs (#101) ────────────────────────────────────────────
+
+  /** Wire mirror of `AgentRecord`. `lastSeenAt` is absent (rather than equal to `issuedAt`) for an agent that
+    * was minted but never used — the distinction matters when triaging "what has this credential actually
+    * done".
+    */
+  final case class AgentSummaryDto(
+      agentId: String,
+      label: String,
+      parent: String,
+      scopes: List[String],
+      issuedAt: Instant,
+      expiresAt: Instant,
+      lastSeenAt: Option[Instant],
+      status: String
+  )
+  object AgentSummaryDto:
+    def fromCore(a: dev.aegiskms.agent.AgentRecord): AgentSummaryDto =
+      AgentSummaryDto(
+        agentId = a.agentId,
+        label = a.label,
+        parent = a.parent,
+        // Sorted so the wire output is stable across runs — `Set` iteration order is not.
+        scopes = a.scopes.map(_.toString).toList.sorted,
+        issuedAt = a.issuedAt,
+        expiresAt = a.expiresAt,
+        lastSeenAt = a.lastSeenAt,
+        status = a.status.toString
+      )
+
+    given Encoder[AgentSummaryDto] = deriveEncoder
+    given Decoder[AgentSummaryDto] = deriveDecoder
+
+  /** Wire response for `GET /v1/agents`. `activeCount` is the number of currently-active agents across the
+    * whole registry, not just this page — it answers "how exposed am I right now" without paging.
+    */
+  final case class ListAgentsResponseDto(
+      agents: List[AgentSummaryDto],
+      limit: Int,
+      offset: Int,
+      activeCount: Int
+  )
+  object ListAgentsResponseDto:
+    given Encoder[ListAgentsResponseDto] = deriveEncoder
+    given Decoder[ListAgentsResponseDto] = deriveDecoder
+
+  // ── Agent kill-switch DTOs (#102) ─────────────────────────────────────────
+
+  /** Request body for `POST /v1/agents/revoke`.
+    *
+    * `issuedAfter` bounds the sweep to agents minted at or after that instant. Omitting it kills every live
+    * agent under the parent — correct for "this operator's account is compromised", too broad for "something
+    * went wrong in the last hour".
+    */
+  final case class RevokeAgentsRequestDto(parent: String, issuedAfter: Option[Instant] = None)
+  object RevokeAgentsRequestDto:
+    given Encoder[RevokeAgentsRequestDto] = deriveEncoder
+    given Decoder[RevokeAgentsRequestDto] = deriveDecoder
+
+  final case class KilledAgentDto(agentId: String, label: String, expiresAt: Instant)
+  object KilledAgentDto:
+    given Encoder[KilledAgentDto] = deriveEncoder
+    given Decoder[KilledAgentDto] = deriveDecoder
+
+  /** Result of a kill-switch sweep. The three counts are reported separately on purpose: "killed 12" and
+    * "killed 1, 11 were already dead" are very different answers mid-incident.
+    */
+  final case class RevokeAgentsResponseDto(
+      parent: String,
+      killed: List[KilledAgentDto],
+      alreadyRevoked: Int,
+      expired: Int
+  )
+  object RevokeAgentsResponseDto:
+    def fromCore(r: dev.aegiskms.agent.KillSwitchResult): RevokeAgentsResponseDto =
+      RevokeAgentsResponseDto(
+        parent = r.parent,
+        killed = r.killed.map(k => KilledAgentDto(k.agentId, k.label, k.expiresAt)),
+        alreadyRevoked = r.alreadyRevoked,
+        expired = r.expired
+      )
+
+    given Encoder[RevokeAgentsResponseDto] = deriveEncoder
+    given Decoder[RevokeAgentsResponseDto] = deriveDecoder
+
   // ── Advisor-scan DTOs (#28) ───────────────────────────────────────────────
 
   /** Wire mirror of `AdvisorScan.UnusedKey`. */

@@ -14,6 +14,7 @@ import dev.aegiskms.sdk.WireFormats.{
   IssueAgentRequestDto,
   KeySpecDto,
   ManagedKeyDto,
+  RevokeAgentsRequestDto,
   RotateRequest,
   SignRequest,
   SignResponse,
@@ -26,6 +27,7 @@ import dev.aegiskms.sdk.WireFormats.{
 }
 
 import java.nio.file.{Files, Path}
+import java.time.Instant
 import java.util.Base64
 
 /** Pure command handlers. Each one returns a [[CommandResult]] with stdout/stderr text and an exit code so
@@ -253,6 +255,65 @@ object Commands:
              |jwt:       ${resp.jwt}""".stripMargin
         )
       case Left(err) => CommandResult.err(renderError(err), exitCodeFor(err))
+
+  // ── Agent registry (#101) ─────────────────────────────────────────────────
+
+  /** `aegis agent list [--parent …] [--status Active|Expired|Revoked] [--limit n] [--offset n]`
+    *
+    * The incident-response view: who spawned what, what it can touch, and whether it's still live. Columns
+    * are fixed-width so the output greps and eyeballs cleanly; `last seen` shows `never` rather than a blank
+    * for an agent that was minted but never used, because "unused credential" is a finding in its own right.
+    */
+  def agentList(
+      client: AegisHttpClient,
+      parent: Option[String],
+      status: Option[String],
+      limit: Option[Int],
+      offset: Option[Int]
+  ): CommandResult =
+    client.listAgents(parent, status, limit, offset) match
+      case Left(err) => CommandResult.err(renderError(err), exitCodeFor(err))
+      case Right(resp) if resp.agents.isEmpty =>
+        CommandResult.out(s"No agents matched. (${resp.activeCount} active overall.)")
+      case Right(resp) =>
+        val header =
+          f"${"AGENT ID"}%-38s ${"STATUS"}%-8s ${"PARENT"}%-20s ${"EXPIRES"}%-22s ${"LAST SEEN"}%-22s SCOPES"
+        val rows = resp.agents.map { a =>
+          f"${a.agentId}%-38s ${a.status}%-8s ${a.parent}%-20s ${a.expiresAt.toString}%-22s " +
+            f"${a.lastSeenAt.map(_.toString).getOrElse("never")}%-22s ${a.scopes.mkString(",")}"
+        }
+        val footer =
+          s"\n${resp.agents.size} shown (offset ${resp.offset}), ${resp.activeCount} active overall."
+        CommandResult.out((header :: rows).mkString("\n") + footer)
+
+  /** `aegis agent revoke --parent alice@org [--issued-after <ISO>]` — the kill-switch (#102).
+    *
+    * Prints what was actually killed versus what was already dead. That distinction is the whole point of the
+    * output: "revoked 12" and "revoked 1, 11 already gone" mean very different things mid-incident.
+    */
+  def agentRevoke(
+      client: AegisHttpClient,
+      parent: String,
+      issuedAfter: Option[String]
+  ): CommandResult =
+    val parsed = issuedAfter.map(s =>
+      try Right(Instant.parse(s))
+      catch case _: Exception => Left(s"agent revoke: --issued-after must be an ISO-8601 instant (was '$s')")
+    )
+    parsed match
+      case Some(Left(msg)) => CommandResult.err(msg)
+      case other =>
+        val req = RevokeAgentsRequestDto(parent, other.map(_.toOption.get))
+        client.revokeAgents(req) match
+          case Left(err) => CommandResult.err(renderError(err), exitCodeFor(err))
+          case Right(r) =>
+            val header =
+              s"Kill-switch: parent=${r.parent} — revoked ${r.killed.size}, " +
+                s"already revoked ${r.alreadyRevoked}, expired ${r.expired}"
+            val rows =
+              if r.killed.isEmpty then List("  (nothing live to revoke)")
+              else r.killed.map(k => f"  ${k.agentId}%-38s ${k.label}%-28s expired ${k.expiresAt}")
+            CommandResult.out((header :: rows).mkString("\n"))
 
   // ── Audit-read (#20 backend, #79 CLI) ─────────────────────────────────────
 

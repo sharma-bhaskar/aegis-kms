@@ -31,12 +31,12 @@ final class RoleBasedPolicyEngine(
 
   private def decide(principal: Principal, op: Operation): Decision =
     principal match
-      case Principal.Human(subject, groups) =>
-        val bySubject = subjectBindings.getOrElse(subject, Set.empty).contains(op)
-        val byRole    = groups.exists(g => roleBindings.getOrElse(g, Set.empty).contains(op))
+      case h: Principal.Human =>
+        val bySubject = subjectBindings.getOrElse(h.subject, Set.empty).contains(op)
+        val byRole    = h.groups.exists(g => roleBindings.getOrElse(g, Set.empty).contains(op))
         if bySubject || byRole then Decision.Allow
         else
-          Decision.Deny(s"$subject is not bound to $op via any role or direct binding")
+          Decision.Deny(s"${h.subject} is not bound to $op via any role or direct binding")
 
       case Principal.Service(subject, _) =>
         if subjectBindings.getOrElse(subject, Set.empty).contains(op) then Decision.Allow

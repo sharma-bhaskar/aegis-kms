@@ -42,7 +42,11 @@ final class AutoResponder private (
     auditSink: AuditSink[IO],
     cooldown: FiniteDuration,
     recentlyFired: Ref[IO, Map[(String, AutoResponseAction), Instant]],
-    now: IO[Instant]
+    now: IO[Instant],
+    /** Present only when the operator has explicitly enabled fleet-wide auto-revocation. `None` makes
+      * `KillAgentFleet` an audited no-op — see [[AutoResponseAction.KillAgentFleet]].
+      */
+    killSwitch: Option[AgentKillSwitch]
 ) extends RecommendationSink:
 
   import AutoResponder.*
@@ -78,10 +82,11 @@ final class AutoResponder private (
 
   private def executeRule(rule: AutoResponseRule, rec: AgentRecommendation): IO[Unit] =
     val attempt: IO[Either[String, String]] = rule.action match
-      case AutoResponseAction.Alert      => IO.pure(Right("alert recorded"))
-      case AutoResponseAction.Revoke     => doRevoke(rec)
-      case AutoResponseAction.Deactivate => doRevoke(rec) // mapped — see AutoResponseAction docs
-      case AutoResponseAction.Freeze     => doFreeze(rec)
+      case AutoResponseAction.Alert          => IO.pure(Right("alert recorded"))
+      case AutoResponseAction.Revoke         => doRevoke(rec)
+      case AutoResponseAction.Deactivate     => doRevoke(rec) // mapped — see AutoResponseAction docs
+      case AutoResponseAction.Freeze         => doFreeze(rec)
+      case AutoResponseAction.KillAgentFleet => doKillFleet(rec)
 
     for
       outcome <- attempt
@@ -97,6 +102,31 @@ final class AutoResponder private (
           case Right(_) => Right(s"revoked key=${kid.value}")
           case Left(e)  => Left(s"revoke failed code=${e.code} msg=${e.message}")
         }
+
+  /** Revoke every live agent under the offending agent's parent operator.
+    *
+    * Only meaningful for an `Agent` actor — that is the only principal kind with a parent to sweep. A
+    * recommendation about a human or service has no fleet, and guessing one would be the worst kind of wrong:
+    * revoking agents belonging to whoever happens to share a subject string.
+    */
+  private def doKillFleet(rec: AgentRecommendation): IO[Either[String, String]] =
+    killSwitch match
+      case None =>
+        IO.pure(Left(
+          "kill-fleet not enabled (set aegis.auto-response.kill-fleet.enabled=true and wire a kill-switch)"
+        ))
+      case Some(ks) =>
+        rec.actor match
+          case a: Principal.Agent =>
+            ks.revokeAll(SystemPrincipal, KillSwitchRequest(parent = a.operator.subject)).map {
+              case Right(r) =>
+                Right(s"kill-switch swept parent=${r.parent} killed=${r.killed.size}")
+              case Left(e) => Left(s"kill-switch failed code=${e.code} msg=${e.message}")
+            }
+          case other =>
+            IO.pure(Left(
+              s"kill-fleet only applies to agent actors; actor '${other.subject}' has no parent fleet"
+            ))
 
   private def doFreeze(rec: AgentRecommendation): IO[Either[String, String]] =
     // v0.2.0: no enforcement. Real freeze requires the JTI blacklist (#24).
@@ -151,6 +181,7 @@ final class AutoResponder private (
     case AutoResponseAction.Revoke     => Operation.Revoke
     case AutoResponseAction.Deactivate => Operation.Revoke       // mapped, see action docs
     case AutoResponseAction.Freeze     => Operation.Revoke
+    case AutoResponseAction.KillAgentFleet => Operation.Revoke
 
   private def logResult(
       rule: AutoResponseRule,
@@ -213,8 +244,12 @@ object AutoResponder:
       keyService: KeyService[IO],
       auditSink: AuditSink[IO],
       cooldown: FiniteDuration = 60.seconds,
-      now: IO[Instant] = IO.realTimeInstant
+      now: IO[Instant] = IO.realTimeInstant,
+      /** Defaults to `None`: fleet-wide auto-revocation must be switched on deliberately, never inherited by
+        * upgrading. See [[AutoResponseAction.KillAgentFleet]].
+        */
+      killSwitch: Option[AgentKillSwitch] = None
   ): IO[AutoResponder] =
     Ref.of[IO, Map[(String, AutoResponseAction), Instant]](Map.empty).map { ref =>
-      new AutoResponder(rules, inner, keyService, auditSink, cooldown, ref, now)
+      new AutoResponder(rules, inner, keyService, auditSink, cooldown, ref, now, killSwitch)
     }

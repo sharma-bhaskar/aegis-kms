@@ -114,6 +114,8 @@ final class FanOutAuditSinkSpec extends AnyFunSuite with Matchers:
       def write(record: AuditRecord): IO[Unit] = IO.unit
       def query(filter: AuditQuery.Filter): IO[AuditQuery.Page] =
         IO.pure(AuditQuery.Page(Nil, filter.limit, filter.offset, hasMore = false))
+      def lastActivityBy(actors: Set[String], since: java.time.Instant): IO[Map[String, java.time.Instant]] =
+        IO.pure(Map.empty)
 
     val primary: AuditSink[IO]   = new QueryableInMemorySink
     val secondary: AuditSink[IO] = InMemoryAuditSink.make.unsafeRunSync()

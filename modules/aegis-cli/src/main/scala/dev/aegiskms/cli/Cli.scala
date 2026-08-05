@@ -35,6 +35,18 @@ object Cli:
             Commands.agentIssue(makeClient(cfg), label, scopes, ttl, parent)
           case Left(msg) => CommandResult.err(s"$msg\n\n${agentIssueHelp}")
 
+      case "agent" :: "list" :: rest =>
+        parseAgentList(rest) match
+          case Right((parent, status, limit, offset)) =>
+            Commands.agentList(makeClient(cfg), parent, status, limit, offset)
+          case Left(msg) => CommandResult.err(s"$msg\n\n${agentListHelp}")
+
+      case "agent" :: "revoke" :: rest =>
+        parseAgentRevoke(rest) match
+          case Right((parent, issuedAfter)) =>
+            Commands.agentRevoke(makeClient(cfg), parent, issuedAfter)
+          case Left(msg) => CommandResult.err(s"$msg\n\n${agentRevokeHelp}")
+
       case "audit" :: "tail" :: rest =>
         parseAuditTail(rest) match
           case Right(filter) =>
@@ -322,6 +334,52 @@ object Cli:
       val parent = flags.get("--parent").filter(_.nonEmpty)
       (label, scopes, ttl, parent)
 
+  /** Parse `aegis agent list [--parent alice@org] [--status Active] [--limit n] [--offset n]`.
+    *
+    * Every flag is optional — a bare `aegis agent list` is the common case. `--status` is validated here
+    * rather than deferred to the server so a typo costs a round-trip instead of reading as "no such agents",
+    * which on an incident-response surface is the most dangerous possible false negative.
+    */
+  private[cli] def parseAgentList(
+      args: List[String]
+  ): Either[String, (Option[String], Option[String], Option[Int], Option[Int])] =
+    val flags       = parseFlags(args)
+    val validStatus = List("Active", "Expired", "Revoked")
+    for
+      status <- flags.get("--status").filter(_.nonEmpty) match
+        case None => Right(None)
+        case Some(s) =>
+          validStatus.find(_.equalsIgnoreCase(s))
+            .toRight(s"agent list: --status must be one of ${validStatus.mkString(", ")} (was '$s')")
+            .map(Some(_))
+      limit <- flags.get("--limit") match
+        case None => Right(None)
+        case Some(raw) =>
+          raw.toIntOption.filter(_ > 0)
+            .toRight(s"agent list: --limit must be a positive integer (was '$raw')")
+            .map(Some(_))
+      offset <- flags.get("--offset") match
+        case None => Right(None)
+        case Some(raw) =>
+          raw.toIntOption.filter(_ >= 0)
+            .toRight(s"agent list: --offset must be a non-negative integer (was '$raw')")
+            .map(Some(_))
+    yield (flags.get("--parent").filter(_.nonEmpty), status, limit, offset)
+
+  /** Parse `aegis agent revoke --parent alice@org [--issued-after <ISO-8601>]`.
+    *
+    * `--parent` is mandatory and has no default. Defaulting it to the calling principal would make a mistyped
+    * command revoke the operator's own fleet, which is exactly the accident this flag should prevent.
+    */
+  private[cli] def parseAgentRevoke(
+      args: List[String]
+  ): Either[String, (String, Option[String])] =
+    val flags = parseFlags(args)
+    for
+      parent <- flags.get("--parent").filter(_.nonEmpty)
+        .toRight("agent revoke: --parent <subject> is required (non-empty)")
+    yield (parent, flags.get("--issued-after").filter(_.nonEmpty))
+
   /** Filter type for the `audit tail` parser. Kept as a small case class instead of a 7-tuple so the
     * `Cli.run` dispatch site reads cleanly.
     */
@@ -484,6 +542,9 @@ object Cli:
       |  aegis keys compromise --id <id> --reason "<text>"
       |  aegis keys rotate --id <id> [--policy Manual|TimeBased:7days|OpCountBased:N]
       |  aegis agent issue --label <text> --scopes Op,Op,… --ttl <seconds> [--parent <subject>]
+      |  aegis agent list [--parent <subject>] [--status Active|Expired|Revoked]
+      |                   [--limit <n>] [--offset <n>]
+      |  aegis agent revoke --parent <subject> [--issued-after <ISO-8601>]
       |  aegis audit tail [--since <ISO>] [--until <ISO>] [--actor <subject>] [--key <id>]
       |                   [--op <name>] [--limit <n>] [--offset <n>] [--watch]
       |  aegis advisor scan [--lookback-days <n>] [--unused-days <n>] [--broad-scope <n>] [--top <n>]
@@ -494,6 +555,35 @@ object Cli:
   )
 
   private val loginHelp: String = "Usage: aegis login --server <url> [--principal <subject>]"
+  private val agentRevokeHelp: String =
+    """Usage: aegis agent revoke --parent <subject> [--issued-after <ISO-8601>]
+      |
+      |The kill-switch: revokes EVERY live agent credential issued by <subject>.
+      |
+      |  --parent <sub>        Operator whose agents to revoke (required, no default)
+      |  --issued-after <ISO>  Only revoke agents minted at or after this instant, e.g.
+      |                        2026-08-04T11:00:00Z. Without it, every live agent under the
+      |                        parent is revoked — correct for a compromised account, too
+      |                        broad for "something went wrong in the last hour".
+      |
+      |Requires a human credential with step-up authentication: your token must carry an `amr`
+      |proving a strong auth method and an `auth_time` inside the server's freshness window.
+      |A 401 response names what is missing in its WWW-Authenticate header.""".stripMargin
+
+  private val agentListHelp: String =
+    """Usage: aegis agent list [--parent <subject>] [--status Active|Expired|Revoked]
+      |                        [--limit <n>] [--offset <n>]
+      |
+      |Lists every agent credential minted in the recent window, with its issuing operator,
+      |scopes, validity window, last-seen activity, and lifecycle status.
+      |
+      |  --parent <sub>  Only agents issued by this operator (e.g. alice@org)
+      |  --status <s>    Active, Expired, or Revoked
+      |  --limit <n>     Page size (default 100, capped at 500)
+      |  --offset <n>    Starting offset for paging (default 0)
+      |
+      |Requires a server with a queryable audit sink (aegis.audit.kind=postgres).""".stripMargin
+
   private val agentIssueHelp: String =
     """Usage: aegis agent issue --label <text> --scopes Op,Op,… --ttl <seconds> [--parent <subject>]
       |
