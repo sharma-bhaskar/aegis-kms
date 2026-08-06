@@ -60,7 +60,19 @@ object AgentRegistryMetrics:
           ))
         }
 
-    // Refresh once at boot so the first scrape isn't a misleading zero, then on the interval.
-    val loop: IO[Unit] = refresh *> (IO.sleep(refreshInterval) *> refresh).foreverM
+    // Only the *periodic* part runs in the background; the priming refresh below is not in here.
+    val loop: IO[Unit] = (IO.sleep(refreshInterval) *> refresh).foreverM
 
-    Resource.eval(register) *> Resource.make(loop.start)(_.cancel).void
+    // Order matters, and it is load-bearing:
+    //
+    //   1. register  — create the gauge.
+    //   2. refresh   — prime it, as part of acquisition, so the Resource is not "ready" until the
+    //                  first real value is in place.
+    //   3. loop.start — only then begin polling in the background.
+    //
+    // Step 2 was originally the head of `loop`, which meant acquisition merely *started* a fiber that
+    // would refresh at some point. A Prometheus scrape landing between boot and that fiber's first tick
+    // read 0 — indistinguishable from "no agents are active", which is the exact misleading answer this
+    // class exists to avoid. It also made the tests racy: they passed on JDK 17 and failed on JDK 21
+    // purely on scheduling.
+    Resource.eval(register) *> Resource.eval(refresh) *> Resource.make(loop.start)(_.cancel).void
