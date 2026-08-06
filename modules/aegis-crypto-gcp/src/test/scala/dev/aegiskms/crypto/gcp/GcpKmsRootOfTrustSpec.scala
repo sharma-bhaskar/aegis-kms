@@ -45,6 +45,12 @@ final class GcpKmsRootOfTrustSpec extends AnyFunSuite with Matchers:
     g.initialize(new ECGenParameterSpec("secp256r1"), new SecureRandom())
     g.generateKeyPair()
 
+  /** A real RSA keypair for the RSA-PSS verification path. */
+  private lazy val rsaPair =
+    val g = KeyPairGenerator.getInstance("RSA")
+    g.initialize(2048, new SecureRandom())
+    g.generateKeyPair()
+
   private def pemOf(pub: java.security.PublicKey): String =
     val b64 = Base64.getMimeEncoder(64, "\n".getBytes).encodeToString(pub.getEncoded)
     s"-----BEGIN PUBLIC KEY-----\n$b64\n-----END PUBLIC KEY-----\n"
@@ -59,6 +65,9 @@ final class GcpKmsRootOfTrustSpec extends AnyFunSuite with Matchers:
     var versionsCreated: List[String]                          = Nil
     var publicKeyRequests: List[String]                        = Nil
     var failWith: Option[Throwable]                            = None
+
+    /** Serve a different PEM — used to drive the RSA verification path. */
+    var publicKeyOverride: Option[String] = None
 
     private def raiseIfScripted(): Unit = failWith.foreach(throw _)
 
@@ -95,7 +104,7 @@ final class GcpKmsRootOfTrustSpec extends AnyFunSuite with Matchers:
     def publicKeyPem(version: CryptoKeyVersionName): String =
       raiseIfScripted()
       publicKeyRequests = publicKeyRequests :+ version.toString
-      pemOf(ecPair.getPublic)
+      publicKeyOverride.getOrElse(pemOf(ecPair.getPublic))
 
     def createKeyVersion(keyName: CryptoKeyName): String =
       raiseIfScripted()
@@ -280,6 +289,62 @@ final class GcpKmsRootOfTrustSpec extends AnyFunSuite with Matchers:
   test("the PEM returned by GetPublicKey parses into a usable JCA key") {
     val parsed = GcpKmsRootOfTrust.publicKeyFrom(pemOf(ecPair.getPublic), SigAlgorithm.EcdsaSha256)
     parsed.getEncoded shouldBe ecPair.getPublic.getEncoded
+  }
+
+  test("an RSA PEM parses under the RSA-PSS algorithm") {
+    val parsed = GcpKmsRootOfTrust.publicKeyFrom(pemOf(rsaPair.getPublic), SigAlgorithm.RsaPssSha256)
+    parsed.getAlgorithm shouldBe "RSA"
+    parsed.getEncoded shouldBe rsaPair.getPublic.getEncoded
+  }
+
+  test("PEM parsing tolerates the line wrapping and trailing newline Cloud KMS emits") {
+    // Cloud KMS returns 64-column-wrapped base64 with a trailing newline; a parser that assumed a
+    // single line would work in a unit test built from unwrapped input and fail against the service.
+    val wrapped = pemOf(ecPair.getPublic)
+    wrapped should include("\n")
+    GcpKmsRootOfTrust.publicKeyFrom(wrapped, SigAlgorithm.EcdsaSha256).getEncoded shouldBe
+      ecPair.getPublic.getEncoded
+  }
+
+  test("RSA-PSS verification accepts a genuine signature — exercising the PSS parameters") {
+    // Independently produced with the same PSS parameters Cloud KMS uses for
+    // RSA_SIGN_PSS_2048_SHA256. If jcaVerifier's salt length or MGF were wrong, this fails.
+    val msg    = "invoice-4711".getBytes
+    val signer = java.security.Signature.getInstance("RSASSA-PSS")
+    signer.setParameter(new java.security.spec.PSSParameterSpec(
+      "SHA-256",
+      "MGF1",
+      java.security.spec.MGF1ParameterSpec.SHA256,
+      32,
+      1
+    ))
+    signer.initSign(rsaPair.getPrivate)
+    signer.update(msg)
+    val sig = Signature(signer.sign(), SigAlgorithm.RsaPssSha256)
+
+    val port = new StubPort
+    port.publicKeyOverride = Some(pemOf(rsaPair.getPublic))
+
+    rotWith(port).verify(keyA, msg, sig).unsafeRunSync().toOption.get shouldBe true
+  }
+
+  test("RSA-PSS verification rejects a signature over a different message") {
+    val signer = java.security.Signature.getInstance("RSASSA-PSS")
+    signer.setParameter(new java.security.spec.PSSParameterSpec(
+      "SHA-256",
+      "MGF1",
+      java.security.spec.MGF1ParameterSpec.SHA256,
+      32,
+      1
+    ))
+    signer.initSign(rsaPair.getPrivate)
+    signer.update("original".getBytes)
+    val sig = Signature(signer.sign(), SigAlgorithm.RsaPssSha256)
+
+    val port = new StubPort
+    port.publicKeyOverride = Some(pemOf(rsaPair.getPublic))
+
+    rotWith(port).verify(keyA, "tampered".getBytes, sig).unsafeRunSync().toOption.get shouldBe false
   }
 
   // ── Rotation ──────────────────────────────────────────────────────────────

@@ -27,7 +27,7 @@ flowchart TD
 
     subgraph LibraryTier["Library-safe tier (no Pekko · embeddable in any JVM app)"]
         persistence["<b>aegis-persistence</b><br/>Doobie event journal<br/>Postgres / MySQL / SQLite"]:::library
-        crypto["<b>aegis-crypto</b><br/>Root-of-Trust SPI<br/>+ AWS KMS adapter"]:::library
+        crypto["<b>aegis-crypto</b><br/>Root-of-Trust SPI<br/>+ AWS KMS · software<br/>(GCP in aegis-crypto-gcp)"]:::library
         iam["<b>aegis-iam</b><br/>JWT issue/verify<br/>policy engine"]:::library
         audit["<b>aegis-audit</b><br/>append-only sink<br/>(stdout · Postgres 🚧)"]:::library
         sdks["<b>aegis-sdk-scala</b><br/><b>aegis-sdk-java</b><br/>thin REST clients"]:::library
@@ -52,7 +52,8 @@ flowchart TD
 | --- | --- | --- |
 | `aegis-core` | library | `KeyService[F[_]]` algebra, `ManagedKey`, `KmsError`, `Principal`. The contract every plane terminates at. |
 | `aegis-persistence` | library | Doobie event journal — Postgres / MySQL / SQLite implementations + an in-memory variant for tests. |
-| `aegis-crypto` | library | Pluggable Root-of-Trust: AWS KMS, GCP KMS, Azure Key Vault, HashiCorp Vault, PKCS#11, local file (dev). |
+| `aegis-crypto` | library | `RootOfTrust` SPI + the dependency-light adapters: AWS KMS and a JCE software backend. |
+| `aegis-crypto-gcp` | library | GCP Cloud KMS adapter. A separate artifact because `google-cloud-kms` pulls ~52 jars (~45 MB); Azure / Vault / PKCS#11 will follow the same shape rather than growing `aegis-crypto`. |
 | `aegis-iam` | library | OIDC verifier, JWT signer, agent-identity issuer, policy evaluator. |
 | `aegis-audit` | library | Append-only audit event sink, decoupled from the journal. |
 | `aegis-sdk-scala` / `aegis-sdk-java` | library | Thin clients over the REST surface, no Pekko. |

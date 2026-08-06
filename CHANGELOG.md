@@ -31,6 +31,13 @@ All notable changes to Aegis will be documented here. This project follows
     any JVM app. Vendor adapters therefore get their own artifacts from here on; the SPI stays in
     `aegis-crypto` and consumers depend only on the backends they use. Azure, Vault, and PKCS#11 will
     follow this shape. Moving the existing AWS adapter out is a breaking change and deserves its own issue.
+  - **Env-gated integration suite.** `GcpKmsIntegrationSpec` runs against a real Cloud KMS project when
+    `AEGIS_IT_GCP_*` is set and skips cleanly otherwise, the same way the Testcontainers suites skip without
+    Docker. It pins the things a stub cannot: that AAD binding is enforced by the service, that
+    `GenerateRandomBytes` accepts the location format we build, and that a signature Cloud KMS produces
+    verifies against the public key it returns. It also pins the fact that Cloud KMS ciphertext is **not**
+    scoped by `KeyId` — every Aegis key maps to the same CryptoKey, unlike the software backend's per-key
+    derivation — so ROADMAP 3.0.e (per-key RoT routing) changes that visibly rather than silently.
 
 - **Agent kill-switch — revoke a parent's whole agent fleet in one call (closes #102, ROADMAP 3.0.n).**
   `POST /v1/agents/revoke` and `aegis agent revoke --parent alice@org [--issued-after <ISO>]` blacklist the

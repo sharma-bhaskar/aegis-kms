@@ -208,6 +208,7 @@ embed in any JVM app; server-tier modules add the actor system, HTTP, and proces
 | `aegis-iam` | Library | Principal + JWT / OIDC verification, authorization decorator, step-up policy |
 | `aegis-audit` | Library | `AuditSink` SPI + auditing decorator |
 | `aegis-crypto` | Library | `RootOfTrust` SPI + AWS KMS and JCE-backed software adapters |
+| `aegis-crypto-gcp` | Library | GCP Cloud KMS adapter — separate artifact so the SPI stays dependency-light |
 | `aegis-persistence` | Library | Doobie event journal (Postgres / MySQL / SQLite / in-memory) |
 | `aegis-sdk-scala` / `aegis-sdk-java` | Library | Client SDKs — full REST coverage (Scala) + pure-Java facade |
 | `aegis-http` | Server | Tapir REST + OpenAPI 3.1 |

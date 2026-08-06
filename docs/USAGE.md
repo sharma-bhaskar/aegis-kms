@@ -844,13 +844,14 @@ configuration matrix.
 
 ## Step 19 — Choose a Root of Trust
 
-`AEGIS_CRYPTO_KIND` selects which backend actually performs the cryptography. Three ship today:
+`AEGIS_CRYPTO_KIND` selects which backend actually performs the cryptography. Four ship today:
 
 | `AEGIS_CRYPTO_KIND` | What it does | Use it for |
 | --- | --- | --- |
 | `in-memory` (default) | Deterministic MAC. `sign` is `HMAC(KeyId, msg)`; `encrypt` is XOR-with-keystream. **Not cryptography** — it exists so the wire surfaces round-trip. | The quickstart above; nothing else |
 | `software` | Real AES-256-GCM, RSA-PSS-SHA-256 and ECDSA-P-256 from the JDK's own JCE providers, keyed from a PKCS#12 keystore. No cloud account, no network call. | CI, integration tests, and evaluating Aegis without AWS credentials |
 | `aws-kms` | Every operation executes inside AWS KMS against a CMK. Key material never enters Aegis's process. | Production |
+| `gcp-kms` | Google Cloud KMS against a CryptoKey. Requires `AEGIS_CRYPTO_GCP_KMS_{PROJECT_ID,LOCATION,KEY_RING,CRYPTO_KEY}`; credentials via Application Default Credentials. Cloud KMS has no `GenerateDataKey`, so DEKs come from `GenerateRandomBytes` (HSM) and are wrapped with a second call — the plaintext DEK briefly transits the client. Keys are single-purpose, so signing needs a separate `SIGNING_KEY`. | Production |
 
 ### The software backend
 
