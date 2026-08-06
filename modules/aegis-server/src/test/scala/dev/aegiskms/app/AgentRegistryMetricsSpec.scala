@@ -39,12 +39,25 @@ final class AgentRegistryMetricsSpec extends AnyFunSuite with Matchers:
   private def gaugeValue(reg: SimpleMeterRegistry): Option[Double] =
     Option(reg.find("aegis_agents_active").gauge()).map(_.value())
 
-  test("the gauge is registered and populated on boot, before any scrape") {
-    val meters   = new SimpleMeterRegistry()
-    val registry = new ScriptedRegistry(IO.pure(7))
+  test("the gauge is primed during acquisition, not by the background fiber") {
+    val meters = new SimpleMeterRegistry()
+    // A deliberately slow first read. If priming were left to the polling fiber, `use` would observe
+    // 0.0 here; only a refresh that completes *as part of acquisition* can satisfy this. The original
+    // implementation started a fiber instead, which passed on JDK 17 and failed on JDK 21 by luck.
+    val registry = new ScriptedRegistry(IO.sleep(150.millis) *> IO.pure(7))
 
     AgentRegistryMetrics.resource(registry, meters, 1.hour).use { _ =>
       IO(gaugeValue(meters) shouldBe Some(7.0))
+    }.unsafeRunSync()
+  }
+
+  test("a long refresh interval does not delay the first value") {
+    val meters   = new SimpleMeterRegistry()
+    val registry = new ScriptedRegistry(IO.pure(3))
+
+    // With a 1-hour interval, any value at all proves it did not come from the periodic tick.
+    AgentRegistryMetrics.resource(registry, meters, 1.hour).use { _ =>
+      IO(gaugeValue(meters) shouldBe Some(3.0))
     }.unsafeRunSync()
   }
 
