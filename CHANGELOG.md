@@ -8,6 +8,37 @@ All notable changes to Aegis will be documented here. This project follows
 
 ### Added
 
+- **GCP Cloud KMS root-of-trust (closes #31, ROADMAP 3.0.a).** `AEGIS_CRYPTO_KIND=gcp-kms` selects
+  `dev.aegiskms.crypto.gcp.GcpKmsRootOfTrust`, the second cloud backend and the one that proves the
+  `RootOfTrust` SPI is not AWS-shaped. Configured with project / location / key-ring / crypto-key;
+  credentials come from Application Default Credentials. Cloud KMS is missing two primitives the AWS
+  adapter leans on, so this is a genuine adapter rather than a rename:
+  - **No `GenerateDataKey`.** AWS returns a plaintext + wrapped DEK pair from one HSM-side call. Cloud KMS
+    has no equivalent, so `generateDataKey` composes `GenerateRandomBytes` (HSM protection level) with
+    `Encrypt` under the KEK. The randomness still comes from Google's HSMs rather than this process, but it
+    costs an extra round-trip and the plaintext DEK transits the client — inherent to Cloud KMS, and now
+    documented in the ARCHITECTURE root-of-trust table.
+  - **No `Verify`.** Cloud KMS only signs. `verify` fetches the CryptoKeyVersion's public key and checks
+    locally with JCE — the documented Google pattern, and not a weakening, since verification needs only
+    public material.
+  - Signing sends a locally computed SHA-256 `Digest`, not the message. The encryption-context map is
+    serialised to Cloud KMS's single opaque AAD string using the same canonical, length-prefixed encoding
+    the software backend uses, so map ordering cannot change the bytes and `{"ab":"c"}` cannot collide with
+    `{"a":"bc"}`. Oversized plaintexts are rejected locally against Cloud KMS's 64 KiB symmetric-encrypt
+    limit rather than deferred to a remote `INVALID_ARGUMENT`.
+  - **New artifact `aegis-crypto-gcp`.** `google-cloud-kms` pulls ~52 transitive jars (~45 MB of gRPC,
+    protobuf, Guava, GAX) — roughly doubling `aegis-crypto`, which is library-tier and meant to embed in
+    any JVM app. Vendor adapters therefore get their own artifacts from here on; the SPI stays in
+    `aegis-crypto` and consumers depend only on the backends they use. Azure, Vault, and PKCS#11 will
+    follow this shape. Moving the existing AWS adapter out is a breaking change and deserves its own issue.
+  - **Env-gated integration suite.** `GcpKmsIntegrationSpec` runs against a real Cloud KMS project when
+    `AEGIS_IT_GCP_*` is set and skips cleanly otherwise, the same way the Testcontainers suites skip without
+    Docker. It pins the things a stub cannot: that AAD binding is enforced by the service, that
+    `GenerateRandomBytes` accepts the location format we build, and that a signature Cloud KMS produces
+    verifies against the public key it returns. It also pins the fact that Cloud KMS ciphertext is **not**
+    scoped by `KeyId` — every Aegis key maps to the same CryptoKey, unlike the software backend's per-key
+    derivation — so ROADMAP 3.0.e (per-key RoT routing) changes that visibly rather than silently.
+
 - **Agent kill-switch — revoke a parent's whole agent fleet in one call (closes #102, ROADMAP 3.0.n).**
   `POST /v1/agents/revoke` and `aegis agent revoke --parent alice@org [--issued-after <ISO>]` blacklist the
   `jti` of every currently-active agent under an operator. Revocation goes through the `RevocationList` SPI,

@@ -151,6 +151,51 @@ final class RootOfTrustResourceSpec extends AnyFunSuite with Matchers:
     invoke(cfg(hocon)).use(IO.pure).unsafeRunSync() shouldBe a[SoftwareRootOfTrust]
   }
 
+  // ── GCP (#31) ─────────────────────────────────────────────────────────────
+  //
+  // The happy path is asserted only at "we built the right adapter" level. Constructing a real
+  // GcpKmsRootOfTrust would call KeyManagementServiceClient.create(), which reaches for Application
+  // Default Credentials and fails on a machine without them — so only the fail-fast branches are
+  // exercised here. The adapter itself is covered by GcpKmsRootOfTrustSpec.
+
+  test("kind=gcp-kms with no project-id fails at boot (no silent fallback to dev)") {
+    val hocon = """
+      aegis.crypto {
+        kind = "gcp-kms"
+        gcp-kms { project-id = "", location = "eu", key-ring = "r", crypto-key = "k" }
+      }
+    """
+    val ex = intercept[IllegalArgumentException] {
+      invoke(cfg(hocon)).use(IO.pure).unsafeRunSync()
+    }
+    ex.getMessage should include("project-id")
+    ex.getMessage should include("AEGIS_CRYPTO_GCP_KMS_PROJECT_ID")
+  }
+
+  test("every required gcp-kms field is checked, not just the first") {
+    val fields = List("project-id", "location", "key-ring", "crypto-key")
+    fields.foreach { missing =>
+      val values = fields.map(f => s"""$f = "${if f == missing then "" else "x"}"""").mkString(", ")
+      val ex = intercept[IllegalArgumentException] {
+        invoke(cfg(s"""aegis.crypto { kind = "gcp-kms", gcp-kms { $values } }"""))
+          .use(IO.pure).unsafeRunSync()
+      }
+      withClue(s"missing $missing: ")(ex.getMessage should include(missing))
+    }
+  }
+
+  test("a whitespace-only gcp-kms field counts as missing") {
+    val hocon = """
+      aegis.crypto {
+        kind = "gcp-kms"
+        gcp-kms { project-id = "p", location = "   ", key-ring = "r", crypto-key = "k" }
+      }
+    """
+    intercept[IllegalArgumentException] {
+      invoke(cfg(hocon)).use(IO.pure).unsafeRunSync()
+    }.getMessage should include("location")
+  }
+
   test("unknown kind fails fast with a clear error message") {
     val ex = intercept[IllegalArgumentException] {
       invoke(cfg("""aegis.crypto.kind = "softhsm" """)).use(IO.pure).unsafeRunSync()
@@ -159,6 +204,7 @@ final class RootOfTrustResourceSpec extends AnyFunSuite with Matchers:
     ex.getMessage should include("'in-memory'")
     ex.getMessage should include("'software'")
     ex.getMessage should include("'aws-kms'")
+    ex.getMessage should include("'gcp-kms'")
   }
 
   private def withTempDir(f: Path => Any): Unit =
