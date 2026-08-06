@@ -29,6 +29,7 @@ import dev.aegiskms.audit.{
 }
 import dev.aegiskms.crypto.RootOfTrust
 import dev.aegiskms.crypto.aws.AwsKmsRootOfTrust
+import dev.aegiskms.crypto.gcp.GcpKmsRootOfTrust
 import dev.aegiskms.crypto.software.SoftwareRootOfTrust
 import dev.aegiskms.http.HttpRoutes
 import dev.aegiskms.iam.{
@@ -422,6 +423,36 @@ object Server extends IOApp.Simple:
           Resource.eval(IO(logger.info(
             s"crypto: software (keystore=${if path.isEmpty then "ephemeral" else path})"
           ))) *> SoftwareRootOfTrust.resource(cfg).widen
+      case "gcp-kms" =>
+        val gcp = config.getConfig("aegis.crypto.gcp-kms")
+        val required = List(
+          "project-id" -> gcp.getString("project-id"),
+          "location"   -> gcp.getString("location"),
+          "key-ring"   -> gcp.getString("key-ring"),
+          "crypto-key" -> gcp.getString("crypto-key")
+        )
+        required.find(_._2.trim.isEmpty) match
+          case Some((name, _)) =>
+            Resource.eval(IO.raiseError(new IllegalArgumentException(
+              s"aegis.crypto.kind=gcp-kms requires aegis.crypto.gcp-kms.$name " +
+                s"(set AEGIS_CRYPTO_GCP_KMS_${name.toUpperCase.replace('-', '_')})"
+            )))
+          case None =>
+            val signingKey = gcp.getString("signing-key").trim
+            val cfg = GcpKmsRootOfTrust.Config(
+              projectId = gcp.getString("project-id"),
+              location = gcp.getString("location"),
+              keyRing = gcp.getString("key-ring"),
+              cryptoKey = gcp.getString("crypto-key"),
+              signingKey = Option.when(signingKey.nonEmpty)(signingKey),
+              signingKeyVersion = gcp.getString("signing-key-version")
+            )
+            Resource.eval(IO(logger.info(
+              s"crypto: gcp-kms (project=${cfg.projectId} location=${cfg.location} " +
+                s"keyRing=${cfg.keyRing} cryptoKey=${cfg.cryptoKey}" +
+                cfg.signingKey.fold("")(k => s" signingKey=$k v${cfg.signingKeyVersion}") + ")"
+            ))) *> GcpKmsRootOfTrust.resource(cfg).widen
+
       case "aws-kms" =>
         val region = config.getString("aegis.crypto.aws-kms.region")
         val kekArn = config.getString("aegis.crypto.aws-kms.kek-arn")
@@ -439,7 +470,7 @@ object Server extends IOApp.Simple:
           ))) *> AwsKmsRootOfTrust.resource(AwsKmsRootOfTrust.Config(region, kekArn)).widen
       case other =>
         Resource.eval(IO.raiseError(new IllegalArgumentException(
-          s"Unknown aegis.crypto.kind=$other (expected 'in-memory', 'software', or 'aws-kms')"
+          s"Unknown aegis.crypto.kind=$other (expected 'in-memory', 'software', 'aws-kms', or 'gcp-kms')"
         )))
 
   /** Actor system as a Resource. `terminate()` returns `Future[Terminated]`; we bridge to `IO` so the

@@ -90,6 +90,19 @@ lazy val crypto = (project in file("modules/aegis-crypto"))
     libraryDependencies ++= Dependencies.crypto
   )
 
+/** GCP Cloud KMS adapter. Separate from `aegis-crypto` so the SPI stays dependency-light — see
+  * `Dependencies.cryptoGcp` for the reasoning. Azure / Vault / PKCS#11 follow this same shape.
+  */
+lazy val cryptoGcp = (project in file("modules/aegis-crypto-gcp"))
+  .dependsOn(core, crypto)
+  .settings(
+    commonSettings,
+    name := "aegis-crypto-gcp",
+    description :=
+      "Google Cloud KMS root-of-trust adapter for Aegis-KMS (envelope, sign / verify, encrypt / decrypt, wrap / unwrap).",
+    libraryDependencies ++= Dependencies.cryptoGcp
+  )
+
 lazy val iam = (project in file("modules/aegis-iam"))
   .dependsOn(core, persistence)
   .settings(
@@ -172,7 +185,7 @@ lazy val mcpServer = (project in file("modules/aegis-mcp-server"))
   )
 
 lazy val server = (project in file("modules/aegis-server"))
-  .dependsOn(kmip, http, mcpServer, agentAi, iam, audit, persistence, crypto)
+  .dependsOn(kmip, http, mcpServer, agentAi, iam, audit, persistence, crypto, cryptoGcp)
   .enablePlugins(JavaAppPackaging, DockerPlugin)
   .settings(
     commonSettings,
@@ -219,6 +232,7 @@ lazy val root = (project in file("."))
     core,
     persistence,
     crypto,
+    cryptoGcp,
     iam,
     audit,
     sdkScala,

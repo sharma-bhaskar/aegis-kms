@@ -152,7 +152,7 @@ Aegis-KMS does **not** generate key material itself. It delegates to a pluggable
 | --- | --- | --- |
 | `software` (dev / test) | JCE `SecureRandom` (CSPRNG, `/dev/urandom` on Linux), wrapped under an AES-256 KEK held in a PKCS#12 keystore | In JVM heap — and so is the KEK, for the whole process lifetime |
 | `aws-kms` | `GenerateDataKey` against an AWS KMS CMK; AWS HSMs (CloudHSM-backed) generate it | Returned plaintext used in-process, immediately discarded |
-| `gcp-kms` | Cloud KMS `Encrypt`/`Decrypt` against a CryptoKey | Same |
+| `gcp-kms` | `GenerateRandomBytes` at HSM protection level, then `Encrypt` under the CryptoKey — Cloud KMS has no `GenerateDataKey` | Plaintext DEK transits the client between the two calls |
 | `azure-keyvault` | HSM-backed key operations | Same |
 | `vault-transit` | HashiCorp Vault generates and wraps | Same |
 | `pkcs11` | `C_GenerateKey` inside a real HSM (Thales Luna, Entrust nShield, YubiHSM, AWS CloudHSM, SoftHSM for dev) | **Never leaves the HSM** — every crypto op runs inside the device |

@@ -10,6 +10,7 @@ object Dependencies {
     val cats           = "3.5.4"
     val doobie         = "1.0.0-RC12"
     val aws            = "2.28.10"
+    val gcpKms         = "2.55.0"
     val jjwt           = "0.12.6"
     val logback        = "1.5.8"
     val slf4j          = "2.0.16"
@@ -117,6 +118,18 @@ object Dependencies {
 
   val crypto: Seq[ModuleID] = Seq(
     "software.amazon.awssdk" % "kms" % V.aws
+  )
+
+  /** Google Cloud KMS client, for the `aegis-crypto-gcp` adapter.
+    *
+    * Deliberately NOT in [[crypto]]. `google-cloud-kms` pulls ~52 transitive jars (~45 MB of gRPC, protobuf,
+    * Guava, and the GAX stack) — roughly doubling `aegis-crypto`, which is a library-tier module meant to
+    * embed in any JVM app. Someone embedding it for the software or AWS backend should not ship the entire
+    * Google Cloud client stack. Each vendor adapter therefore gets its own artifact; the SPI stays in
+    * `aegis-crypto` and consumers depend only on the backends they actually use.
+    */
+  val cryptoGcp: Seq[ModuleID] = Seq(
+    "com.google.cloud" % "google-cloud-kms" % V.gcpKms
   )
 
   /** Micrometer + Prometheus exposition. Server-tier only — wired into `aegis-server` by the metrics
