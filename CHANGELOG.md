@@ -8,6 +8,29 @@ All notable changes to Aegis will be documented here. This project follows
 
 ### Added
 
+- **Helm chart for Kubernetes (closes #35, ROADMAP 3.0.f).** `deploy/helm/aegis-kms` brings up
+  `aegis-server` with a Service, optional Ingress (cert-manager-ready), PodDisruptionBudget, HPA,
+  ServiceMonitor, and an optional in-chart Postgres StatefulSet. Values cover replicas, resources, the
+  root-of-trust backend (`aws-kms` / `gcp-kms` / `software`), audit retention, step-up methods, and the
+  kill-fleet switch.
+  - **Secure by default, which means `helm install` with no values deliberately fails.** The chart defaults
+    to production-shaped settings — HMAC auth, role-based policy, Postgres journal *and* audit, and
+    `AEGIS_SECURITY_PREFLIGHT=enforce` — because a Helm release is network-reachable by definition. It also
+    **never generates secrets**: a signing key that exists only in Helm release state is invisible to your
+    secret manager and rotates on re-install, invalidating every agent token already issued.
+  - **It refuses what the server would reject at boot**, so misconfiguration surfaces as a `helm install`
+    error with a fix in it rather than a `CrashLoopBackOff`: dev auth with `preflight=enforce`, the software
+    root of trust without persistence (a regenerated keystore makes previously wrapped keys permanently
+    unrecoverable), and `in-memory` crypto with `preflight=enforce`.
+  - **`AEGIS_AUDIT_KIND=postgres` is set, including in the dev profile.** The compose file shipped without
+    it, which made `GET /v1/audit`, the advisor, and the agent registry answer 501 while the deployment
+    looked healthy. Same mistake not repeated here.
+  - `helm test` asserts `/metrics` returns Prometheus exposition including JVM metrics, rather than only
+    checking that the port accepts a connection.
+  - **New CI job** lints the chart and validates every backend permutation against real Kubernetes schemas
+    with `kubeconform`, plus asserts each misconfiguration guard still fails. The chart is pure YAML, so
+    nothing in the Scala build would otherwise notice a broken template.
+
 - **GCP Cloud KMS root-of-trust (closes #31, ROADMAP 3.0.a).** `AEGIS_CRYPTO_KIND=gcp-kms` selects
   `dev.aegiskms.crypto.gcp.GcpKmsRootOfTrust`, the second cloud backend and the one that proves the
   `RootOfTrust` SPI is not AWS-shaped. Configured with project / location / key-ring / crypto-key;

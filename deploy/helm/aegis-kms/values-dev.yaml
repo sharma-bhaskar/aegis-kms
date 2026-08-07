@@ -1,0 +1,55 @@
+# Evaluation-cluster values. NOT for production.
+#
+#   helm install aegis deploy/helm/aegis-kms -f deploy/helm/aegis-kms/values-dev.yaml \
+#     --set postgres.auth.existingSecret=aegis-pg
+#
+# Differences from the defaults, and why each one is unsafe:
+#
+#   auth.kind=dev        any client can impersonate any principal via an X-Aegis-User header
+#   policy.kind=dev      every Human and Service gets full access to every key
+#   crypto.kind=software real cryptography, but the keys live in the pod's heap and on a PVC
+#   preflight=warn       required, because the settings above would abort an `enforce` boot
+#
+# The agent registry and audit-read API still work here: audit.kind stays postgres, which is the
+# whole point — a demo that silently 501s on GET /v1/agents is not demonstrating the product.
+
+replicaCount: 1
+
+podDisruptionBudget:
+  enabled: false
+
+resources:
+  requests:
+    cpu: 250m
+    memory: 512Mi
+  limits:
+    memory: 1Gi
+
+aegis:
+  preflight: warn
+  auth:
+    kind: dev
+  policy:
+    kind: dev
+  crypto:
+    kind: software
+    software:
+      keystorePath: /var/lib/aegis/keystore.p12
+      # Create with:
+      #   kubectl create secret generic aegis-keystore \
+      #     --from-literal=keystore-password="$(openssl rand -base64 24)"
+      existingSecret: aegis-keystore
+  audit:
+    kind: postgres
+    retentionDays: 7
+
+# The software root-of-trust needs somewhere durable to keep its keystore; without this the chart
+# refuses to render, because a regenerated keystore makes previously wrapped keys unrecoverable.
+persistence:
+  enabled: true
+  size: 1Gi
+
+postgres:
+  enabled: true
+  persistence:
+    size: 2Gi

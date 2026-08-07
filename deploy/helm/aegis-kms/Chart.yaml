@@ -1,0 +1,26 @@
+apiVersion: v2
+name: aegis-kms
+description: Agent-aware key management service — per-agent identity, behavioural anomaly detection, and real-time response in front of your existing root of trust.
+type: application
+
+# Chart version. Bumped independently of the app: a values-only fix ships a new chart version
+# without a new Aegis release.
+version: 0.1.0
+
+# Default app version. `image.tag` overrides it; this is what `helm install` uses unset.
+appVersion: "main"
+
+home: https://sharma-bhaskar.github.io/aegis-kms/
+sources:
+  - https://github.com/sharma-bhaskar/aegis-kms
+keywords:
+  - kms
+  - key-management
+  - security
+  - ai-agents
+  - kmip
+maintainers:
+  - name: Aegis-KMS contributors
+    url: https://github.com/sharma-bhaskar/aegis-kms
+annotations:
+  category: Security

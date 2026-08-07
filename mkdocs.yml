@@ -136,6 +136,7 @@ nav:
     - Positioning: POSITIONING.md
 
   - Operations:
+    - Kubernetes: operations/kubernetes.md
     - Observability: operations/observability.md
     - Security: operations/security.md
 
