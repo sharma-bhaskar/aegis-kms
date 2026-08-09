@@ -181,6 +181,23 @@ open http://localhost:8080/docs/
 For JWT auth, embedding-as-a-library, the CLI, and observability wiring — see the
 [docs site](https://sharma-bhaskar.github.io/aegis-kms/).
 
+## ☸️ Kubernetes
+
+```bash
+kubectl create secret generic aegis-jwt --from-literal=hmac-secret="$(openssl rand -base64 48)"
+kubectl create secret generic aegis-pg  --from-literal=postgres-password="$(openssl rand -base64 32)"
+
+helm install aegis deploy/helm/aegis-kms \
+  --set aegis.auth.hmac.existingSecret=aegis-jwt \
+  --set postgres.auth.existingSecret=aegis-pg \
+  --set aegis.crypto.awsKms.region=eu-west-2 \
+  --set aegis.crypto.awsKms.kekArn=<your-cmk-arn>
+```
+
+`helm install` with no values fails on purpose — the chart defaults to production-shaped settings
+and never generates secrets for you. Full guide, including an evaluation profile:
+[Kubernetes deployment](docs/operations/kubernetes.md).
+
 ## 📚 Documentation
 
 Full docs at **[sharma-bhaskar.github.io/aegis-kms](https://sharma-bhaskar.github.io/aegis-kms/)**:

@@ -1,0 +1,250 @@
+# Default values for aegis-kms.
+#
+# The defaults here are PRODUCTION-SHAPED, not demo-shaped. `helm install` with no values will
+# deliberately fail rather than bring up a key-management service with dev auth and an allow-all
+# policy — see `auth.hmac.existingSecret` below. That is the same posture as the server's own boot
+# preflight, which refuses to bind a public address with dev-grade settings.
+#
+# For a throwaway evaluation cluster, see `values-dev.yaml` alongside this file.
+
+# -- Number of aegis-server replicas. Key state is rebuilt from the shared event journal on boot,
+# so replicas are stateless with respect to each other; scale for availability and throughput.
+replicaCount: 2
+
+image:
+  repository: ghcr.io/sharma-bhaskar/aegis-server
+  pullPolicy: IfNotPresent
+  # -- Overrides Chart.appVersion. Pin a digest or an immutable tag in production; `main` moves.
+  tag: ""
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  annotations: {}
+  # -- Set to bind a GCP/AWS workload identity for the root of trust.
+  name: ""
+
+podAnnotations: {}
+podLabels: {}
+
+# -- Applied to the pod. Aegis writes nothing to disk except the optional software-RoT keystore,
+# so the root filesystem is read-only by default.
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1001
+  runAsGroup: 1001
+  fsGroup: 1001
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+
+service:
+  type: ClusterIP
+  port: 8080
+  annotations: {}
+
+ingress:
+  enabled: false
+  className: nginx
+  annotations: {}
+  #   cert-manager.io/cluster-issuer: letsencrypt-prod
+  hosts:
+    - host: aegis.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  # -- TLS via cert-manager. Set the cluster-issuer annotation above and cert-manager fills this
+  # secret in. Serving a KMS over plaintext HTTP is not a supported configuration.
+  tls:
+    - secretName: aegis-kms-tls
+      hosts:
+        - aegis.example.com
+
+resources:
+  requests:
+    cpu: 500m
+    memory: 1Gi
+  limits:
+    # -- No CPU limit by default: JVM throttling under a CPU limit causes latency cliffs that look
+    # like Aegis being slow. Set one only if your cluster policy requires it.
+    memory: 2Gi
+
+# -- JVM heap. Left to the container's own ergonomics (MaxRAMPercentage) rather than a fixed -Xmx,
+# so it tracks the memory limit above.
+javaOpts: "-XX:MaxRAMPercentage=75.0"
+
+autoscaling:
+  enabled: false
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+
+# -- Keeps at least one replica serving during a node drain. Ignored when replicaCount is 1.
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+nodeSelector: {}
+tolerations: []
+# -- Spread replicas across nodes so a single node loss cannot take out the whole service.
+affinity:
+  podAntiAffinity:
+    preferredDuringSchedulingIgnoredDuringExecution:
+      - weight: 100
+        podAffinityTerm:
+          topologyKey: kubernetes.io/hostname
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: aegis-kms
+
+# ── Aegis configuration ──────────────────────────────────────────────────────
+
+aegis:
+  # -- warn | enforce. `enforce` refuses to boot when dev-grade settings would bind a
+  # network-reachable address. Default here, unlike the server's own default, because a Helm
+  # release is by definition network-reachable.
+  preflight: enforce
+
+  auth:
+    # -- hmac | dev. `dev` accepts an X-Aegis-User header from anyone and is rejected by the
+    # preflight above; it exists for values-dev.yaml only.
+    kind: hmac
+    hmac:
+      # -- REQUIRED for auth.kind=hmac. Name of an existing Secret holding the signing key.
+      # The chart deliberately will NOT generate one: a key that lives only in Helm release
+      # state is invisible to your secret manager and silently rotates on re-install, which
+      # would invalidate every issued token.
+      #
+      #   kubectl create secret generic aegis-jwt \
+      #     --from-literal=hmac-secret="$(openssl rand -base64 48)"
+      existingSecret: ""
+      secretKey: hmac-secret
+
+  policy:
+    # -- role-based | dev
+    kind: role-based
+
+  crypto:
+    # -- in-memory | software | aws-kms | gcp-kms
+    kind: aws-kms
+    awsKms:
+      region: ""
+      kekArn: ""
+    gcpKms:
+      projectId: ""
+      location: ""
+      keyRing: ""
+      cryptoKey: ""
+      signingKey: ""
+      signingKeyVersion: "1"
+    software:
+      # -- Path inside the container. Requires persistence.enabled=true, otherwise key material
+      # is lost on every restart and everything wrapped by it becomes unrecoverable.
+      keystorePath: /var/lib/aegis/keystore.p12
+      existingSecret: ""
+      secretKey: keystore-password
+
+  audit:
+    # -- stdout | postgres. Postgres is the default because the read side — GET /v1/audit, the
+    # LLM advisor, and the agent registry (GET /v1/agents) — all ride on the AuditQuery SPI that
+    # only the Postgres sink implements. On `stdout` those endpoints return 501, which silently
+    # removes half the product.
+    kind: postgres
+    retentionDays: 365
+
+  stepUp:
+    # -- OIDC `amr` values that count as genuine step-up for the agent kill-switch. `pwd` is
+    # excluded on purpose: it is what the user already presented to get the session.
+    methods: ["mfa", "otp", "hwk", "swk", "face", "fpt"]
+    maxAgeSeconds: 300
+
+  autoResponse:
+    killFleet:
+      # -- When true, a High-severity anomaly may revoke EVERY agent under the offending agent's
+      # parent operator with no human in the loop. One false positive takes out an operator's
+      # entire fleet. Off by default, deliberately.
+      enabled: false
+
+  # -- Extra AEGIS_* environment variables, for settings this chart does not model yet.
+  extraEnv: []
+
+# ── Persistence (software root-of-trust keystore only) ───────────────────────
+
+persistence:
+  enabled: false
+  storageClass: ""
+  size: 1Gi
+  accessMode: ReadWriteOnce
+
+# ── Postgres ─────────────────────────────────────────────────────────────────
+
+postgres:
+  # -- Bring up an in-chart Postgres StatefulSet. Convenient for evaluation; for production use a
+  # managed database and point `external` at it. This StatefulSet is a single replica with no
+  # backups, no failover, and no PITR — it is not a production database.
+  enabled: true
+  image:
+    repository: postgres
+    tag: "16-alpine"
+    pullPolicy: IfNotPresent
+  auth:
+    database: aegis
+    username: aegis
+    # -- REQUIRED when postgres.enabled=true. Same reasoning as the JWT secret: the chart will not
+    # generate a database password that only Helm knows about.
+    existingSecret: ""
+    secretKey: postgres-password
+  persistence:
+    size: 10Gi
+    storageClass: ""
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      memory: 1Gi
+
+  # -- Used when postgres.enabled=false. The journal and the audit table share this database.
+  external:
+    jdbcUrl: ""
+    username: ""
+    existingSecret: ""
+    secretKey: postgres-password
+
+# ── Observability ────────────────────────────────────────────────────────────
+
+metrics:
+  serviceMonitor:
+    # -- Requires the Prometheus Operator CRDs.
+    enabled: false
+    interval: 30s
+    labels: {}
+
+# -- Liveness/readiness both hit /metrics. Aegis has no dedicated health endpoint yet
+# (tracked separately); /metrics is served by the same binding, so it is a true check that the
+# HTTP plane is up, just heavier than a purpose-built /healthz would be.
+probes:
+  liveness:
+    initialDelaySeconds: 45
+    periodSeconds: 20
+    timeoutSeconds: 5
+    failureThreshold: 3
+  readiness:
+    initialDelaySeconds: 15
+    periodSeconds: 10
+    timeoutSeconds: 5
+    failureThreshold: 3
+# -- Covers a slow first boot (journal replay) without a long liveness initialDelay.
+startupProbe:
+  enabled: true
+  periodSeconds: 10
+  failureThreshold: 30

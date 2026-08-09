@@ -46,3 +46,75 @@ jobs:
       - name: Coverage
         run: sbt coverage test coverageAggregate
         if: matrix.jdk == 21
+
+  # The Helm chart is pure YAML, so nothing in the Scala build touches it. Without this job a
+  # broken template or an invalid manifest ships silently and only surfaces at `helm install`.
+  helm:
+    name: helm chart
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.16.3
+
+      - name: Install kubeconform
+        run: |
+          curl -sSfL https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz \
+            | tar -xz -C /usr/local/bin kubeconform
+
+      - name: helm lint
+        run: |
+          helm lint deploy/helm/aegis-kms
+          helm lint deploy/helm/aegis-kms -f deploy/helm/aegis-kms/values-dev.yaml \
+            --set postgres.auth.existingSecret=ci
+
+      # Every backend and every optional resource, validated against real Kubernetes schemas.
+      # ServiceMonitor is a Prometheus-Operator CRD, skipped by name rather than with
+      # -ignore-missing-schemas, which would also hide a typo in a core resource.
+      - name: Render and validate manifests
+        run: |
+          set -euo pipefail
+          base=(--set aegis.auth.hmac.existingSecret=ci
+                --set postgres.auth.existingSecret=ci
+                --set aegis.crypto.awsKms.region=eu-west-2
+                --set aegis.crypto.awsKms.kekArn=arn:aws:kms:eu-west-2:1:key/ci)
+          validate () {
+            echo "--- $1"; shift
+            helm template ci deploy/helm/aegis-kms "${base[@]}" "$@" \
+              | kubeconform -strict -summary -skip ServiceMonitor -kubernetes-version 1.29.0
+          }
+          validate "aws-kms (defaults)"
+          validate "gcp-kms" --set aegis.crypto.kind=gcp-kms \
+            --set aegis.crypto.gcpKms.projectId=p --set aegis.crypto.gcpKms.location=l \
+            --set aegis.crypto.gcpKms.keyRing=k --set aegis.crypto.gcpKms.cryptoKey=c
+          validate "software" --set aegis.crypto.kind=software --set persistence.enabled=true \
+            --set aegis.crypto.software.existingSecret=ci
+          validate "ingress + hpa + monitor" --set ingress.enabled=true \
+            --set autoscaling.enabled=true --set metrics.serviceMonitor.enabled=true
+          validate "external postgres" --set postgres.enabled=false \
+            --set postgres.external.jdbcUrl=jdbc:postgresql://db:5432/aegis \
+            --set postgres.external.username=aegis --set postgres.external.existingSecret=ci
+
+      # The chart must refuse configurations the server's own boot preflight would reject, so the
+      # error arrives at install time rather than as a CrashLoopBackOff.
+      - name: Misconfiguration guards must fail
+        run: |
+          set -uo pipefail
+          base=(--set aegis.auth.hmac.existingSecret=ci
+                --set postgres.auth.existingSecret=ci
+                --set aegis.crypto.awsKms.region=r
+                --set aegis.crypto.awsKms.kekArn=a)
+          expect_fail () {
+            local name="$1"; shift
+            if helm template ci deploy/helm/aegis-kms "${base[@]}" "$@" >/dev/null 2>&1; then
+              echo "GUARD MISSING: $name rendered successfully but should have failed"; exit 1
+            fi
+            echo "ok: $name is rejected"
+          }
+          expect_fail "dev auth with preflight=enforce" --set aegis.auth.kind=dev
+          expect_fail "software RoT without persistence" --set aegis.crypto.kind=software
+          expect_fail "in-memory crypto with preflight=enforce" --set aegis.crypto.kind=in-memory
+          expect_fail "gcp-kms without project-id" --set aegis.crypto.kind=gcp-kms
+          expect_fail "external postgres without jdbcUrl" --set postgres.enabled=false

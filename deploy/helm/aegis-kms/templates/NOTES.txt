@@ -1,0 +1,68 @@
+Aegis-KMS {{ .Chart.AppVersion }} installed as release "{{ .Release.Name }}".
+
+  kubectl -n {{ .Release.Namespace }} rollout status deploy/{{ include "aegis-kms.fullname" . }}
+  helm test {{ .Release.Name }} -n {{ .Release.Namespace }}
+
+{{- if .Values.ingress.enabled }}
+
+Reachable at:
+{{- range .Values.ingress.hosts }}
+  https://{{ .host }}
+{{- end }}
+{{- else }}
+
+No Ingress is enabled. To reach it locally:
+
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "aegis-kms.fullname" . }} 8080:{{ .Values.service.port }}
+  open http://localhost:8080/docs/
+{{- end }}
+
+Configuration in effect:
+
+  auth      {{ .Values.aegis.auth.kind }}
+  policy    {{ .Values.aegis.policy.kind }}
+  crypto    {{ .Values.aegis.crypto.kind }}
+  audit     {{ .Values.aegis.audit.kind }}
+  preflight {{ .Values.aegis.preflight }}
+{{- if .Values.postgres.enabled }}
+  postgres  in-chart StatefulSet (single replica)
+{{- else }}
+  postgres  external
+{{- end }}
+
+{{- if ne .Values.aegis.audit.kind "postgres" }}
+
+WARNING: audit.kind is "{{ .Values.aegis.audit.kind }}", not "postgres".
+  GET /v1/audit, GET /v1/agents (the agent registry), and the LLM advisor all ride on the
+  AuditQuery SPI, which only the Postgres sink implements. They will answer 501 and the
+  deployment will otherwise look healthy.
+{{- end }}
+
+{{- if eq .Values.aegis.auth.kind "dev" }}
+
+WARNING: auth.kind is "dev". Any client can impersonate any principal via the X-Aegis-User
+  header. Never expose this beyond an evaluation cluster.
+{{- end }}
+
+{{- if .Values.postgres.enabled }}
+
+NOTE: the in-chart Postgres is a single replica with no backups, no failover, and no
+  point-in-time recovery. It is fine for evaluation. For production, set postgres.enabled=false
+  and point postgres.external.* at a managed database — the event journal is the source of truth
+  for every key Aegis manages.
+{{- end }}
+
+{{- if .Values.aegis.autoResponse.killFleet.enabled }}
+
+WARNING: auto-response kill-fleet is ENABLED. A single High-severity anomaly can revoke every
+  agent credential under the offending agent's parent operator, with no human in the loop.
+{{- end }}
+
+{{- if eq .Values.aegis.crypto.kind "software" }}
+
+NOTE: the software root of trust keeps its keystore on a PVC that is retained on `helm uninstall`
+  (resource-policy: keep). Deleting that PVC makes every key wrapped by it permanently
+  unrecoverable.
+{{- end }}
+
+Next steps: https://sharma-bhaskar.github.io/aegis-kms/

@@ -1,0 +1,189 @@
+{{- include "aegis-kms.validate" . -}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "aegis-kms.fullname" . }}
+  labels:
+    {{- include "aegis-kms.labels" . | nindent 4 }}
+spec:
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "aegis-kms.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "aegis-kms.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "aegis-kms.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: aegis-server
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          env:
+            - name: AEGIS_HTTP_HOST
+              value: "0.0.0.0"
+            - name: AEGIS_HTTP_PORT
+              value: "8080"
+            - name: JAVA_OPTS
+              value: {{ .Values.javaOpts | quote }}
+
+            # A Helm release is network-reachable by definition, so the preflight defaults to
+            # enforce here even though the server itself defaults to warn.
+            - name: AEGIS_SECURITY_PREFLIGHT
+              value: {{ .Values.aegis.preflight | quote }}
+
+            # ── Journal ──────────────────────────────────────────────────────
+            - name: AEGIS_JOURNAL_KIND
+              value: "postgres"
+            - name: AEGIS_JDBC_URL
+              value: {{ include "aegis-kms.jdbcUrl" . | quote }}
+            - name: AEGIS_JDBC_USERNAME
+              value: {{ include "aegis-kms.postgres.username" . | quote }}
+            - name: AEGIS_JDBC_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "aegis-kms.postgres.secretName" . }}
+                  key: {{ include "aegis-kms.postgres.secretKey" . }}
+
+            # ── Audit ────────────────────────────────────────────────────────
+            # The read side (GET /v1/audit, the advisor, and the agent registry at GET /v1/agents)
+            # rides on the AuditQuery SPI, which only the Postgres sink implements. Leaving this at
+            # the server's "stdout" default makes those endpoints answer 501 — the deployment comes
+            # up healthy and quietly serves half the product. The compose file shipped with exactly
+            # that bug; this is where it does not get repeated.
+            - name: AEGIS_AUDIT_KIND
+              value: {{ .Values.aegis.audit.kind | quote }}
+            - name: AEGIS_AUDIT_RETENTION_DAYS
+              value: {{ .Values.aegis.audit.retentionDays | quote }}
+
+            # ── Identity ─────────────────────────────────────────────────────
+            - name: AEGIS_AUTH_KIND
+              value: {{ .Values.aegis.auth.kind | quote }}
+            {{- if eq .Values.aegis.auth.kind "hmac" }}
+            - name: AEGIS_AUTH_HMAC_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ required "aegis.auth.hmac.existingSecret is required when auth.kind=hmac. Create it first:\n\n  kubectl create secret generic aegis-jwt --from-literal=hmac-secret=\"$(openssl rand -base64 48)\"\n\nThe chart will not generate this key: one that lives only in Helm release state is invisible to your secret manager and rotates on re-install, invalidating every issued token." .Values.aegis.auth.hmac.existingSecret }}
+                  key: {{ .Values.aegis.auth.hmac.secretKey }}
+            {{- end }}
+            - name: AEGIS_POLICY_KIND
+              value: {{ .Values.aegis.policy.kind | quote }}
+
+            # ── Step-up (gates the agent kill-switch) ────────────────────────
+            - name: AEGIS_SECURITY_STEP_UP_METHODS
+              value: {{ toJson .Values.aegis.stepUp.methods | quote }}
+            - name: AEGIS_SECURITY_STEP_UP_MAX_AGE_SECONDS
+              value: {{ .Values.aegis.stepUp.maxAgeSeconds | quote }}
+
+            - name: AEGIS_AUTO_RESPONSE_KILL_FLEET_ENABLED
+              value: {{ .Values.aegis.autoResponse.killFleet.enabled | quote }}
+
+            # ── Root of trust ────────────────────────────────────────────────
+            - name: AEGIS_CRYPTO_KIND
+              value: {{ .Values.aegis.crypto.kind | quote }}
+            {{- if eq .Values.aegis.crypto.kind "aws-kms" }}
+            - name: AEGIS_CRYPTO_AWS_KMS_REGION
+              value: {{ required "aegis.crypto.awsKms.region is required when crypto.kind=aws-kms" .Values.aegis.crypto.awsKms.region | quote }}
+            - name: AEGIS_CRYPTO_AWS_KMS_KEK_ARN
+              value: {{ required "aegis.crypto.awsKms.kekArn is required when crypto.kind=aws-kms" .Values.aegis.crypto.awsKms.kekArn | quote }}
+            {{- else if eq .Values.aegis.crypto.kind "gcp-kms" }}
+            - name: AEGIS_CRYPTO_GCP_KMS_PROJECT_ID
+              value: {{ required "aegis.crypto.gcpKms.projectId is required when crypto.kind=gcp-kms" .Values.aegis.crypto.gcpKms.projectId | quote }}
+            - name: AEGIS_CRYPTO_GCP_KMS_LOCATION
+              value: {{ required "aegis.crypto.gcpKms.location is required when crypto.kind=gcp-kms" .Values.aegis.crypto.gcpKms.location | quote }}
+            - name: AEGIS_CRYPTO_GCP_KMS_KEY_RING
+              value: {{ required "aegis.crypto.gcpKms.keyRing is required when crypto.kind=gcp-kms" .Values.aegis.crypto.gcpKms.keyRing | quote }}
+            - name: AEGIS_CRYPTO_GCP_KMS_CRYPTO_KEY
+              value: {{ required "aegis.crypto.gcpKms.cryptoKey is required when crypto.kind=gcp-kms" .Values.aegis.crypto.gcpKms.cryptoKey | quote }}
+            {{- with .Values.aegis.crypto.gcpKms.signingKey }}
+            - name: AEGIS_CRYPTO_GCP_KMS_SIGNING_KEY
+              value: {{ . | quote }}
+            - name: AEGIS_CRYPTO_GCP_KMS_SIGNING_KEY_VERSION
+              value: {{ $.Values.aegis.crypto.gcpKms.signingKeyVersion | quote }}
+            {{- end }}
+            {{- else if eq .Values.aegis.crypto.kind "software" }}
+            - name: AEGIS_CRYPTO_SOFTWARE_KEYSTORE_PATH
+              value: {{ .Values.aegis.crypto.software.keystorePath | quote }}
+            - name: AEGIS_CRYPTO_SOFTWARE_KEYSTORE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ required "aegis.crypto.software.existingSecret is required when crypto.kind=software" .Values.aegis.crypto.software.existingSecret }}
+                  key: {{ .Values.aegis.crypto.software.secretKey }}
+            {{- end }}
+
+            {{- with .Values.aegis.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+
+          {{- if .Values.startupProbe.enabled }}
+          # Boot replays the event journal, which grows with history. The startup probe absorbs a
+          # slow first boot so liveness can stay tight afterwards.
+          startupProbe:
+            httpGet:
+              path: /metrics
+              port: http
+            periodSeconds: {{ .Values.startupProbe.periodSeconds }}
+            failureThreshold: {{ .Values.startupProbe.failureThreshold }}
+          {{- end }}
+          livenessProbe:
+            httpGet:
+              path: /metrics
+              port: http
+            {{- toYaml .Values.probes.liveness | nindent 12 }}
+          readinessProbe:
+            httpGet:
+              path: /metrics
+              port: http
+            {{- toYaml .Values.probes.readiness | nindent 12 }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            # readOnlyRootFilesystem is on, and the JVM needs a writable temp dir.
+            - name: tmp
+              mountPath: /tmp
+            {{- if .Values.persistence.enabled }}
+            - name: keystore
+              mountPath: {{ dir .Values.aegis.crypto.software.keystorePath }}
+            {{- end }}
+      volumes:
+        - name: tmp
+          emptyDir: {}
+        {{- if .Values.persistence.enabled }}
+        - name: keystore
+          persistentVolumeClaim:
+            claimName: {{ include "aegis-kms.fullname" . }}-keystore
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

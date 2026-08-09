@@ -137,7 +137,7 @@ Non-goals: cryptographic operations, multi-cloud RoT, KMIP, MCP, OIDC. All defer
 | 3.0.c | HashiCorp Vault Transit root-of-trust adapter | Real KMS | 🔜 |
 | 3.0.d | Software root-of-trust (JCE-backed; dev/test only) (#34) | Real KMS | ✅ |
 | 3.0.e | Per-key RoT routing — different keys can live in different backends | Real KMS | 💡 |
-| 3.0.f | Helm chart (`deploy/helm/aegis-kms`) — production-ready with Postgres dependency | Platform | 🔜 |
+| 3.0.f | Helm chart (`deploy/helm/aegis-kms`) — production-ready with Postgres dependency (#35) | Platform | ✅ |
 | 3.0.g | Kubernetes operator (CRDs for `AegisKey`, `AegisAgent`) | Platform | 💡 |
 | 3.0.h | OpenTelemetry log export (Loki / Datadog / Honeycomb) | Platform | 💡 |
 | 3.0.i | Multi-tenancy: per-tenant key/agent/audit isolation | Platform | 💡 |
