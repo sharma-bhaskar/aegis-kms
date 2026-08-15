@@ -133,8 +133,8 @@ Non-goals: cryptographic operations, multi-cloud RoT, KMIP, MCP, OIDC. All defer
 | # | Capability | Area | Status |
 |---|---|---|---|
 | 3.0.a | GCP KMS root-of-trust adapter (`google-cloud-kms`) (#31) | Real KMS | ✅ |
-| 3.0.b | Azure Key Vault root-of-trust adapter (`azure-security-keyvault-keys`) | Real KMS | 🔜 |
-| 3.0.c | HashiCorp Vault Transit root-of-trust adapter | Real KMS | 🔜 |
+| 3.0.b | Azure Key Vault root-of-trust adapter (`azure-security-keyvault-keys`) (#32) | Real KMS | ✅ |
+| 3.0.c | HashiCorp Vault Transit root-of-trust adapter (#33) | Real KMS | ✅ |
 | 3.0.d | Software root-of-trust (JCE-backed; dev/test only) (#34) | Real KMS | ✅ |
 | 3.0.e | Per-key RoT routing — different keys can live in different backends | Real KMS | 💡 |
 | 3.0.f | Helm chart (`deploy/helm/aegis-kms`) — production-ready with Postgres dependency (#35) | Platform | ✅ |

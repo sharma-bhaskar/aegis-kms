@@ -8,6 +8,32 @@ All notable changes to Aegis will be documented here. This project follows
 
 ### Added
 
+- **Azure Key Vault and HashiCorp Vault Transit root-of-trust adapters (closes #32, closes #33, ROADMAP
+  3.0.b / 3.0.c).** With AWS, GCP, and the JCE software backend already in place, the multi-cloud
+  root-of-trust track is complete: `AEGIS_CRYPTO_KIND` now accepts `in-memory`, `software`, `aws-kms`,
+  `gcp-kms`, `azure-key-vault`, and `vault-transit`.
+  - **Azure (`aegis-crypto-azure`).** Native `wrapKey`/`unwrapKey`, so the DEK path uses real key wrapping
+    rather than impersonating it with `encrypt` the way the AWS adapter must. Server-side `verify`, unlike
+    Cloud KMS. But **no data-key generation**: like GCP and unlike AWS, DEK material is generated in-process
+    and wrapped, so the randomness originates in the Aegis process rather than an HSM — recorded in the
+    ARCHITECTURE root-of-trust table. Azure also chooses the AES-GCM IV server-side, so the adapter packs
+    `iv ‖ ciphertext ‖ tag` to keep `Ciphertext` a single opaque value. On an **RSA** key an encryption
+    context is **rejected**, not silently dropped: RSA-OAEP has no AAD input, and quietly ignoring the
+    context would let ciphertext decrypt under a different one, breaking a property every other backend
+    upholds.
+  - **Vault (`aegis-crypto-vault`).** The only non-AWS backend with a genuine data-key endpoint
+    (`transit/datakey/plaintext`), so DEK material originates in Vault. Native sign, verify, and rotation;
+    Transit ciphertext carries its key version in the `vault:v1:` prefix, so rotation is non-destructive
+    without the adapter tracking versions. An encryption context maps to Transit's derivation `context`,
+    which is stronger than AAD — a wrong context yields a different key rather than a failed tag check.
+  - **Vault adds no third-party dependencies at all.** Transit is plain HTTP/JSON, so the adapter is built
+    on the JDK's own `HttpClient` and the circe already present via `aegis-core` — the same approach
+    `aegis-agent-ai`'s `LlmHttp` takes. Azure follows the per-vendor artifact pattern established by
+    `aegis-crypto-gcp` (~55 jars / ~28 MB measured, comparable to GCP's ~52 / ~45 MB).
+  - All four cloud backends now serialise the encryption context with the **same canonical, length-prefixed
+    encoding**, so an identical context maps to identical bytes regardless of which root of trust is
+    configured.
+
 - **Helm chart for Kubernetes (closes #35, ROADMAP 3.0.f).** `deploy/helm/aegis-kms` brings up
   `aegis-server` with a Service, optional Ingress (cert-manager-ready), PodDisruptionBudget, HPA,
   ServiceMonitor, and an optional in-chart Postgres StatefulSet. Values cover replicas, resources, the

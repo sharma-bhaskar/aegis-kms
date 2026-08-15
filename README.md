@@ -49,7 +49,7 @@ when something goes wrong, the audit log says *"role `billing-signer` made 80 si
 can't tell you *which agent did it, on whose behalf, or whether the burst is anomalous*.
 
 Aegis is the agent-native control plane that sits **in front of** your existing root of trust
-(AWS KMS or a JCE software backend today; GCP / Azure / Vault next) and adds the four things
+(AWS KMS, GCP Cloud KMS, Azure Key Vault, Vault Transit, or a JCE software backend) and adds the four things
 role-centric KMSes don't:
 
 1. **Per-agent identity** — every request resolves to a `Principal.Agent` with a back-pointer to
@@ -226,6 +226,8 @@ embed in any JVM app; server-tier modules add the actor system, HTTP, and proces
 | `aegis-audit` | Library | `AuditSink` SPI + auditing decorator |
 | `aegis-crypto` | Library | `RootOfTrust` SPI + AWS KMS and JCE-backed software adapters |
 | `aegis-crypto-gcp` | Library | GCP Cloud KMS adapter — separate artifact so the SPI stays dependency-light |
+| `aegis-crypto-azure` | Library | Azure Key Vault / Managed HSM adapter |
+| `aegis-crypto-vault` | Library | HashiCorp Vault Transit adapter — no third-party dependencies |
 | `aegis-persistence` | Library | Doobie event journal (Postgres / MySQL / SQLite / in-memory) |
 | `aegis-sdk-scala` / `aegis-sdk-java` | Library | Client SDKs — full REST coverage (Scala) + pure-Java facade |
 | `aegis-http` | Server | Tapir REST + OpenAPI 3.1 |

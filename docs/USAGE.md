@@ -844,13 +844,15 @@ configuration matrix.
 
 ## Step 19 — Choose a Root of Trust
 
-`AEGIS_CRYPTO_KIND` selects which backend actually performs the cryptography. Four ship today:
+`AEGIS_CRYPTO_KIND` selects which backend actually performs the cryptography. Six ship today:
 
 | `AEGIS_CRYPTO_KIND` | What it does | Use it for |
 | --- | --- | --- |
 | `in-memory` (default) | Deterministic MAC. `sign` is `HMAC(KeyId, msg)`; `encrypt` is XOR-with-keystream. **Not cryptography** — it exists so the wire surfaces round-trip. | The quickstart above; nothing else |
 | `software` | Real AES-256-GCM, RSA-PSS-SHA-256 and ECDSA-P-256 from the JDK's own JCE providers, keyed from a PKCS#12 keystore. No cloud account, no network call. | CI, integration tests, and evaluating Aegis without AWS credentials |
 | `aws-kms` | Every operation executes inside AWS KMS against a CMK. Key material never enters Aegis's process. | Production |
+| `azure-key-vault` | Azure Key Vault or Managed HSM. Requires `AEGIS_CRYPTO_AZURE_KEY_IDENTIFIER` (the full key URL); credentials via `DefaultAzureCredential`. Native `wrapKey`/`unwrapKey` and server-side `verify`, but no data-key generation — DEK material is generated in-process and wrapped. Set `AEGIS_CRYPTO_AZURE_SYMMETRIC=true` only for a Managed HSM `oct-HSM` key; an RSA key **cannot** carry an encryption context and Aegis rejects requests that supply one. | Production |
+| `vault-transit` | HashiCorp Vault's Transit engine. Requires `AEGIS_CRYPTO_VAULT_{ADDRESS,TOKEN,KEY_NAME}`. The only non-AWS backend with a real data-key endpoint, so DEK material originates in Vault. Transit keys are type-specific — signing needs its own key via `_SIGNING_KEY_NAME`. Token renewal is the operator's job (Vault Agent / k8s auth). | Production |
 | `gcp-kms` | Google Cloud KMS against a CryptoKey. Requires `AEGIS_CRYPTO_GCP_KMS_{PROJECT_ID,LOCATION,KEY_RING,CRYPTO_KEY}`; credentials via Application Default Credentials. Cloud KMS has no `GenerateDataKey`, so DEKs come from `GenerateRandomBytes` (HSM) and are wrapped with a second call — the plaintext DEK briefly transits the client. Keys are single-purpose, so signing needs a separate `SIGNING_KEY`. | Production |
 
 ### The software backend

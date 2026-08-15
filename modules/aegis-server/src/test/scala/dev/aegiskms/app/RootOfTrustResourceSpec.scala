@@ -196,6 +196,40 @@ final class RootOfTrustResourceSpec extends AnyFunSuite with Matchers:
     }.getMessage should include("location")
   }
 
+  // ── Azure (#32) / Vault (#33) ─────────────────────────────────────────────
+  //
+  // Only the fail-fast branches run here. Building the real adapters would reach for Azure's
+  // credential chain or open a Vault connection, neither of which exists on a CI runner. The
+  // adapters themselves are covered by their own specs.
+
+  test("kind=azure-key-vault without a key identifier fails at boot") {
+    val ex = intercept[IllegalArgumentException] {
+      invoke(cfg("""aegis.crypto { kind = "azure-key-vault", azure-key-vault.key-identifier = "" }"""))
+        .use(IO.pure).unsafeRunSync()
+    }
+    ex.getMessage should include("key-identifier")
+    ex.getMessage should include("AEGIS_CRYPTO_AZURE_KEY_IDENTIFIER")
+  }
+
+  test("a whitespace-only azure key identifier counts as missing") {
+    intercept[IllegalArgumentException] {
+      invoke(cfg("""aegis.crypto { kind = "azure-key-vault", azure-key-vault.key-identifier = "   " }"""))
+        .use(IO.pure).unsafeRunSync()
+    }.getMessage should include("key-identifier")
+  }
+
+  test("every required vault-transit field is checked, not just the first") {
+    val fields = List("address", "token", "key-name")
+    fields.foreach { missing =>
+      val values = fields.map(f => s"""$f = "${if f == missing then "" else "x"}"""").mkString(", ")
+      val ex = intercept[IllegalArgumentException] {
+        invoke(cfg(s"""aegis.crypto { kind = "vault-transit", vault-transit { $values } }"""))
+          .use(IO.pure).unsafeRunSync()
+      }
+      withClue(s"missing $missing: ")(ex.getMessage should include(missing))
+    }
+  }
+
   test("unknown kind fails fast with a clear error message") {
     val ex = intercept[IllegalArgumentException] {
       invoke(cfg("""aegis.crypto.kind = "softhsm" """)).use(IO.pure).unsafeRunSync()
@@ -205,6 +239,8 @@ final class RootOfTrustResourceSpec extends AnyFunSuite with Matchers:
     ex.getMessage should include("'software'")
     ex.getMessage should include("'aws-kms'")
     ex.getMessage should include("'gcp-kms'")
+    ex.getMessage should include("'azure-key-vault'")
+    ex.getMessage should include("'vault-transit'")
   }
 
   private def withTempDir(f: Path => Any): Unit =
