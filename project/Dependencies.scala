@@ -11,6 +11,8 @@ object Dependencies {
     val doobie         = "1.0.0-RC12"
     val aws            = "2.28.10"
     val gcpKms         = "2.55.0"
+    val azureKeyVault  = "4.9.2"
+    val azureIdentity  = "1.14.2"
     val jjwt           = "0.12.6"
     val logback        = "1.5.8"
     val slf4j          = "2.0.16"
@@ -131,6 +133,21 @@ object Dependencies {
   val cryptoGcp: Seq[ModuleID] = Seq(
     "com.google.cloud" % "google-cloud-kms" % V.gcpKms
   )
+
+  /** Azure Key Vault client + credential chain, for the `aegis-crypto-azure` adapter. Same reasoning as
+    * [[cryptoGcp]]: ~55 transitive jars (~28 MB), so it stays out of `aegis-crypto`.
+    */
+  val cryptoAzure: Seq[ModuleID] = Seq(
+    "com.azure" % "azure-security-keyvault-keys" % V.azureKeyVault,
+    "com.azure" % "azure-identity"               % V.azureIdentity
+  )
+
+  /** Deliberately empty. Vault's Transit engine is plain HTTP + JSON, so `aegis-crypto-vault` is built on the
+    * JDK's own `HttpClient` and the circe already present via `aegis-core` — mirroring how `aegis-agent-ai`'s
+    * `LlmHttp` talks to LLM providers. Adding a Vault driver would cost transitive weight for an API surface
+    * of six endpoints that we would still have to wrap in a port seam for testing.
+    */
+  val cryptoVault: Seq[ModuleID] = Seq.empty
 
   /** Micrometer + Prometheus exposition. Server-tier only — wired into `aegis-server` by the metrics
     * decorator + `/metrics` route. The library-safe modules (`aegis-core`, `aegis-iam`, `aegis-audit`,

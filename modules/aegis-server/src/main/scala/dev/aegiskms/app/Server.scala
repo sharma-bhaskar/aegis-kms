@@ -29,8 +29,10 @@ import dev.aegiskms.audit.{
 }
 import dev.aegiskms.crypto.RootOfTrust
 import dev.aegiskms.crypto.aws.AwsKmsRootOfTrust
+import dev.aegiskms.crypto.azure.AzureKeyVaultRootOfTrust
 import dev.aegiskms.crypto.gcp.GcpKmsRootOfTrust
 import dev.aegiskms.crypto.software.SoftwareRootOfTrust
+import dev.aegiskms.crypto.vault.VaultTransitRootOfTrust
 import dev.aegiskms.http.HttpRoutes
 import dev.aegiskms.iam.{
   AgentTokenIssuer,
@@ -453,6 +455,49 @@ object Server extends IOApp.Simple:
                 cfg.signingKey.fold("")(k => s" signingKey=$k v${cfg.signingKeyVersion}") + ")"
             ))) *> GcpKmsRootOfTrust.resource(cfg).widen
 
+      case "azure-key-vault" =>
+        val az     = config.getConfig("aegis.crypto.azure-key-vault")
+        val keyUrl = az.getString("key-identifier").trim
+        if keyUrl.isEmpty then
+          Resource.eval(IO.raiseError(new IllegalArgumentException(
+            "aegis.crypto.kind=azure-key-vault requires aegis.crypto.azure-key-vault.key-identifier " +
+              "(set AEGIS_CRYPTO_AZURE_KEY_IDENTIFIER), e.g. " +
+              "https://my-vault.vault.azure.net/keys/invoice-kek/<version>"
+          )))
+        else
+          val cfg = AzureKeyVaultRootOfTrust.Config(keyUrl, symmetric = az.getBoolean("symmetric"))
+          Resource.eval(IO(logger.info(
+            s"crypto: azure-key-vault (key=$keyUrl, " +
+              s"${if cfg.symmetric then "AES-GCM" else "RSA-OAEP-256"})"
+          ))) *> AzureKeyVaultRootOfTrust.resource(cfg).widen
+
+      case "vault-transit" =>
+        val v       = config.getConfig("aegis.crypto.vault-transit")
+        val address = v.getString("address").trim
+        val token   = v.getString("token").trim
+        val keyName = v.getString("key-name").trim
+        val missing = List("address" -> address, "token" -> token, "key-name" -> keyName)
+          .collectFirst { case (n, value) if value.isEmpty => n }
+        missing match
+          case Some(name) =>
+            Resource.eval(IO.raiseError(new IllegalArgumentException(
+              s"aegis.crypto.kind=vault-transit requires aegis.crypto.vault-transit.$name " +
+                s"(set AEGIS_CRYPTO_VAULT_${name.toUpperCase.replace('-', '_')})"
+            )))
+          case None =>
+            val ns = v.getString("namespace").trim
+            val cfg = VaultTransitRootOfTrust.Config(
+              address = address,
+              token = token,
+              keyName = keyName,
+              mount = v.getString("mount"),
+              signingKeyName = v.getString("signing-key-name").trim,
+              namespace = Option.when(ns.nonEmpty)(ns)
+            )
+            Resource.eval(IO(logger.info(
+              s"crypto: vault-transit (address=$address mount=${cfg.mount} key=$keyName)"
+            ))) *> VaultTransitRootOfTrust.resource(cfg).widen
+
       case "aws-kms" =>
         val region = config.getString("aegis.crypto.aws-kms.region")
         val kekArn = config.getString("aegis.crypto.aws-kms.kek-arn")
@@ -470,7 +515,8 @@ object Server extends IOApp.Simple:
           ))) *> AwsKmsRootOfTrust.resource(AwsKmsRootOfTrust.Config(region, kekArn)).widen
       case other =>
         Resource.eval(IO.raiseError(new IllegalArgumentException(
-          s"Unknown aegis.crypto.kind=$other (expected 'in-memory', 'software', 'aws-kms', or 'gcp-kms')"
+          s"Unknown aegis.crypto.kind=$other " +
+            "(expected 'in-memory', 'software', 'aws-kms', 'gcp-kms', 'azure-key-vault', or 'vault-transit')"
         )))
 
   /** Actor system as a Resource. `terminate()` returns `Future[Terminated]`; we bridge to `IO` so the

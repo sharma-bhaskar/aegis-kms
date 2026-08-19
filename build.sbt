@@ -103,6 +103,30 @@ lazy val cryptoGcp = (project in file("modules/aegis-crypto-gcp"))
     libraryDependencies ++= Dependencies.cryptoGcp
   )
 
+/** Azure Key Vault adapter. Separate artifact for the same dependency-weight reason as `cryptoGcp`. */
+lazy val cryptoAzure = (project in file("modules/aegis-crypto-azure"))
+  .dependsOn(core, crypto)
+  .settings(
+    commonSettings,
+    name := "aegis-crypto-azure",
+    description :=
+      "Azure Key Vault root-of-trust adapter for Aegis-KMS (envelope, sign / verify, encrypt / decrypt, wrap / unwrap).",
+    libraryDependencies ++= Dependencies.cryptoAzure
+  )
+
+/** HashiCorp Vault Transit adapter. Its own artifact for symmetry with the other vendors, though it adds no
+  * third-party dependencies at all — Transit is plain HTTP/JSON over the JDK client.
+  */
+lazy val cryptoVault = (project in file("modules/aegis-crypto-vault"))
+  .dependsOn(core, crypto)
+  .settings(
+    commonSettings,
+    name := "aegis-crypto-vault",
+    description :=
+      "HashiCorp Vault Transit root-of-trust adapter for Aegis-KMS (envelope, sign / verify, encrypt / decrypt, wrap / unwrap).",
+    libraryDependencies ++= Dependencies.cryptoVault
+  )
+
 lazy val iam = (project in file("modules/aegis-iam"))
   .dependsOn(core, persistence)
   .settings(
@@ -185,7 +209,19 @@ lazy val mcpServer = (project in file("modules/aegis-mcp-server"))
   )
 
 lazy val server = (project in file("modules/aegis-server"))
-  .dependsOn(kmip, http, mcpServer, agentAi, iam, audit, persistence, crypto, cryptoGcp)
+  .dependsOn(
+    kmip,
+    http,
+    mcpServer,
+    agentAi,
+    iam,
+    audit,
+    persistence,
+    crypto,
+    cryptoGcp,
+    cryptoAzure,
+    cryptoVault
+  )
   .enablePlugins(JavaAppPackaging, DockerPlugin)
   .settings(
     commonSettings,
@@ -233,6 +269,8 @@ lazy val root = (project in file("."))
     persistence,
     crypto,
     cryptoGcp,
+    cryptoAzure,
+    cryptoVault,
     iam,
     audit,
     sdkScala,
