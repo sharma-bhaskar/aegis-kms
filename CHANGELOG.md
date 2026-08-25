@@ -6,6 +6,28 @@ All notable changes to Aegis will be documented here. This project follows
 
 ## Unreleased
 
+_Nothing yet._
+
+## 0.3.0 — 2026-08-25
+
+**Theme: multi-cloud, and the agent-governance loop closing.**
+
+Two things land together in this release. The root-of-trust track is complete — AWS, GCP Cloud KMS,
+Azure Key Vault, Vault Transit, and a JCE software backend that needs no cloud account at all — so
+"which cloud are you on" stops being a reason Aegis cannot be deployed. And the AI-governance wedge
+gains the half it was missing: you could already *detect* a misbehaving agent, but not enumerate
+what else that operator had spawned, or stop all of it. `GET /v1/agents` and
+`POST /v1/agents/revoke` answer both, with the second gated behind genuine re-authentication.
+
+The v0.2.2 hardening items (working SDK clients, the production boot preflight) never got their own
+tag and ship here.
+
+**Not yet exercised against live infrastructure:** the GCP, Azure, and Vault adapters are
+unit-tested against hand-rolled port stubs and compile-checked against the real vendor SDKs, but
+have not been run against live cloud accounts — the GCP integration suite is env-gated and unrun,
+and Azure/Vault have none yet. The Helm chart renders and validates against real Kubernetes schemas
+but has not been applied to a live cluster. Those are the three places help is most useful.
+
 ### Added
 
 - **Azure Key Vault and HashiCorp Vault Transit root-of-trust adapters (closes #32, closes #33, ROADMAP

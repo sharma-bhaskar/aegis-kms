@@ -114,15 +114,15 @@ Non-goals: cryptographic operations, multi-cloud RoT, KMIP, MCP, OIDC. All defer
 
 ---
 
-### v0.2.2 — Hardening fix pass
+### v0.2.2 — Hardening fix pass ✅ *shipped within v0.3.0*
 
 **Theme:** remove the things a first-time evaluator hits in their first ten minutes.
 
 | # | Capability | Area | Status |
 |---|---|---|---|
-| 2.2.a | Real SDKs — `aegis-sdk-scala` full REST coverage + working Java facade, replacing the `NotImplementedError` stubs (#98) | Platform | 🚧 |
-| 2.2.b | Production preflight — warn/enforce when dev-grade settings bind a non-loopback address (#99) | Platform | 🚧 |
-| 2.2.c | Issue hygiene — tracking issues for journal snapshotting (#100), agent registry (#101), kill-switch (#102), v1.0.0 rows (#103–#107) | Platform | 🚧 |
+| 2.2.a | Real SDKs — `aegis-sdk-scala` full REST coverage + working Java facade, replacing the `NotImplementedError` stubs (#98) | Platform | ✅ |
+| 2.2.b | Production preflight — warn/enforce when dev-grade settings bind a non-loopback address (#99) | Platform | ✅ |
+| 2.2.c | Issue hygiene — tracking issues for journal snapshotting (#100), agent registry (#101), kill-switch (#102), v1.0.0 rows (#103–#107) | Platform | ✅ |
 
 ---
 
